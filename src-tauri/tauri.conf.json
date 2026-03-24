@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "anyscp",
+  "version": "0.1.0",
+  "identifier": "com.macnev2013.anyscp",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "AnySCP",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 500
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": "v1Compatible"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDExMjY1REUyNkY0RDVDQjUKUldTMVhFMXY0bDBtRWM5d2Q1OHY3RWc1aHl4c0tYaFJjOGtGY1pSd2hrK0FRNkJzNkFzNi9GbEYK",
+      "endpoints": [
+        "https://github.com/macnev2013/anySCP/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

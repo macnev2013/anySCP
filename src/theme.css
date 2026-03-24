@@ -1,0 +1,186 @@
+/* ============================================================
+   AnySCP Design Tokens
+   Single source of truth for all visual design.
+   Consumed by Tailwind v4 via @theme and by components directly.
+   ============================================================ */
+
+/* --- Font Faces (self-hosted) --- */
+
+@font-face {
+  font-family: 'Geist';
+  src: url('/fonts/Geist-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist';
+  src: url('/fonts/Geist-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist';
+  src: url('/fonts/Geist-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* --- Design Tokens --- */
+
+@theme {
+  /* Background layers (darkest → lightest) */
+  --color-bg-base:      oklch(0.145 0.015 264);
+  --color-bg-surface:   oklch(0.165 0.015 264);
+  --color-bg-overlay:   oklch(0.185 0.015 264);
+  --color-bg-subtle:    oklch(0.210 0.015 264);
+  --color-bg-muted:     oklch(0.250 0.012 264);
+
+  /* Text hierarchy */
+  --color-text-primary:   oklch(0.930 0.010 264);
+  --color-text-secondary: oklch(0.650 0.015 264);
+  --color-text-muted:     oklch(0.450 0.015 264);
+  --color-text-inverse:   oklch(0.145 0.015 264);
+
+  /* Accent */
+  --color-accent:       oklch(0.700 0.150 250);
+  --color-accent-hover: oklch(0.650 0.150 250);
+  --color-accent-muted: oklch(0.700 0.150 250 / 0.15);
+
+  /* Status */
+  --color-status-connected:    oklch(0.720 0.180 155);
+  --color-status-connecting:   oklch(0.750 0.160 80);
+  --color-status-error:        oklch(0.650 0.200 25);
+  --color-status-disconnected: oklch(0.450 0.015 264);
+
+  /* Semantic */
+  --color-border:       oklch(0.250 0.012 264);
+  --color-border-focus: oklch(0.700 0.150 250);
+  --color-ring:         oklch(0.700 0.150 250 / 0.40);
+
+  /* Typography */
+  --font-sans: 'Geist', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+
+  /* Layout constants */
+  --sidebar-width:     240px;
+  --sidebar-collapsed: 0px;
+  --tabbar-height:     40px;
+  --statusbar-height:  24px;
+
+  /* Elevation */
+  --shadow-sm:  0 1px 2px oklch(0 0 0 / 0.3);
+  --shadow-md:  0 2px 8px oklch(0 0 0 / 0.3), 0 1px 2px oklch(0 0 0 / 0.2);
+  --shadow-lg:  0 8px 24px oklch(0 0 0 / 0.4), 0 2px 8px oklch(0 0 0 / 0.2);
+
+  /* Typography — size scale */
+  --text-2xs: 10px;
+  --text-xs:  11px;
+  --text-sm:  13px;
+  --text-base: 14px;
+
+  /* Motion */
+  --ease-expo-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-expo-in:  cubic-bezier(0.7, 0, 0.84, 0);
+  --duration-fast: 100ms;
+  --duration-base: 200ms;
+  --duration-slow: 350ms;
+}
+
+/* --- Base Resets --- */
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--color-bg-base);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Prevent text selection on UI chrome (not terminal) */
+.no-select {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Re-enable selection for inputs and terminal */
+input, textarea, [contenteditable="true"], .xterm {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Keyframe animations */
+
+@keyframes shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes pulseSubtle {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 1; }
+}
+
+@keyframes indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-bg-muted);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
