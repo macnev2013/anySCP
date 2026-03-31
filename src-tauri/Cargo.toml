@@ -1,11 +1,12 @@
 [package]
 name = "anyscp"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+version = "0.0.0-dev"
+description = "A modern desktop client for SSH, SFTP, and S3"
+authors = ["Nevil Macwan <macnev2013@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/macnev2013/anySCP"
+homepage = "https://github.com/macnev2013/anySCP"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary

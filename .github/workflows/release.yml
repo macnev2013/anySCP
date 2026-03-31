@@ -66,6 +66,17 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Setting version to $VERSION"
+          # Update package.json
+          jq --arg v "$VERSION" '.version = $v' package.json > tmp.json && mv tmp.json package.json
+          # Update tauri.conf.json
+          jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
+          # Update Cargo.toml
+          sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml && rm -f src-tauri/Cargo.toml.bak
+
       - name: Install frontend dependencies
         run: pnpm install
 
@@ -76,7 +87,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "AnySCP ${{ github.ref_name }}"
+          releaseName: "anySCP ${{ github.ref_name }}"
           releaseBody: ""
           releaseDraft: true
           prerelease: false
@@ -129,7 +140,7 @@ jobs:
 
           ## Auto-Updates
 
-          Already have AnySCP installed? Go to **Settings > Updates** and click **Check** to update in-app.
+          Already have anySCP installed? Go to **Settings > Updates** and click **Check** to update in-app.
           BODY
 
       - name: Update release body

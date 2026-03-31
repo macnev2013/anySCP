@@ -1,7 +1,11 @@
 {
   "name": "anyscp",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.0.0-dev",
+  "description": "A modern desktop client for SSH, SFTP, and S3",
+  "author": "Nevil Macwan <macnev2013@gmail.com>",
+  "license": "MIT",
+  "repository": "https://github.com/macnev2013/anySCP",
   "type": "module",
   "scripts": {
     "dev": "vite",
