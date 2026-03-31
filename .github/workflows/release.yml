@@ -10,11 +10,44 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
-    name: Build — macOS (Apple Silicon)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-14
+            args: --target aarch64-apple-darwin
+            rust_target: aarch64-apple-darwin
+            label: macOS (Apple Silicon)
+          - platform: macos-14
+            args: --target x86_64-apple-darwin
+            rust_target: x86_64-apple-darwin
+            label: macOS (Intel)
+          - platform: ubuntu-22.04
+            args: ""
+            rust_target: ""
+            label: Linux
+          - platform: windows-latest
+            args: ""
+            rust_target: ""
+            label: Windows
+
+    runs-on: ${{ matrix.platform }}
+    name: Build — ${{ matrix.label }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libsoup-3.0-dev \
+            javascriptcoregtk-4.1-dev
 
       - uses: pnpm/action-setup@v4
         with:
@@ -27,7 +60,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: ${{ matrix.rust_target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -65,7 +98,7 @@ jobs:
           releaseBody: ""
           releaseDraft: true
           prerelease: false
-          args: --target aarch64-apple-darwin
+          args: ${{ matrix.args }}
           updaterJsonKeepUniversal: true
 
   update-release-notes:
@@ -99,6 +132,9 @@ jobs:
           | Platform | File |
           |----------|------|
           | macOS (Apple Silicon) | \`.dmg\` (aarch64) |
+          | macOS (Intel) | \`.dmg\` (x64) |
+          | Windows | \`.msi\` / \`.exe\` |
+          | Linux | \`.deb\` / \`.AppImage\` |
 
           ## Installation
 
