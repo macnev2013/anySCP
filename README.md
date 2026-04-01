@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="public/logo.png" alt="AnySCP Logo" width="200"/>
+  <img src="screens/header.png" alt="AnySCP" width="100%"/>
 </p>
-
-<h1 align="center">AnySCP</h1>
 
 <p align="center">
   <strong>A modern desktop client for SSH, SFTP, and S3 with a clean, powerful interface</strong>
