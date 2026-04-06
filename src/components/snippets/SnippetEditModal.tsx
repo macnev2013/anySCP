@@ -169,7 +169,7 @@ export function SnippetEditModal({
   folders,
   onClose,
   onSave,
-  onSaveAndExecute,
+  onSaveAndExecute: _onSaveAndExecute,
 }: SnippetEditModalProps) {
   const [form, setForm] = useState<Snippet>(blankSnippet());
   const [variableMeta, setVariableMeta] = useState<SnippetVariable[]>([]);
@@ -260,21 +260,6 @@ export function SnippetEditModal({
     [form, variableMeta, onSave],
   );
 
-  const handleSaveAndExecute = useCallback(async () => {
-    if (!form.name.trim() || !form.command.trim()) {
-      setError("Name and command are required");
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    try {
-      await onSaveAndExecute(buildSnippet());
-    } catch (err: unknown) {
-      setError(extractError(err, "Failed to save snippet"));
-      setSaving(false);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form, variableMeta, onSaveAndExecute]);
 
   if (!open) return null;
 

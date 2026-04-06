@@ -1,10 +1,7 @@
 import { useRef, useCallback, useState } from "react";
-import { TerminalSquare, Monitor, Braces, FolderOpen, Settings, ArrowUpDown, Plug, History, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { Monitor, Braces, Settings, ArrowUpDown, Plug, History, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { useUiStore } from "../../stores/ui-store";
 import { useTabStore, type PageId } from "../../stores/tab-store";
-import { useSessionStore } from "../../stores/session-store";
-import { useSftpStore } from "../../stores/sftp-store";
-import { useS3Store } from "../../stores/s3-store";
 import { useTransferStore } from "../../stores/transfer-store";
 import { TransferPopover } from "../transfers/TransferPopover";
 import { getStatusString } from "../../utils/format";
@@ -21,8 +18,6 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { id: "hosts",            icon: Monitor,        label: "Hosts",     page: "hosts" },
-  { id: "terminal",         icon: TerminalSquare, label: "Terminal",  sessionType: "terminal" },
-  { id: "sftp",             icon: FolderOpen,     label: "Explorer",  sessionType: "sftp" },
   { id: "snippets",         icon: Braces,         label: "Snippets",  page: "snippets" },
   { id: "port-forwarding",  icon: Plug,           label: "Tunnels",   page: "port-forwarding" },
   { id: "history",          icon: History,        label: "History",   page: "history" },
@@ -131,10 +126,6 @@ export function Sidebar() {
   const openPageTab = useTabStore((s) => s.openPageTab);
   const activateRecent = useTabStore((s) => s.activateRecentTabOfType);
 
-  const terminalTabCount = useSessionStore((s) => s.tabs.size);
-  const sftpSessionCount = useSftpStore((s) => s.sessions.size);
-  const s3SessionCount = useS3Store((s) => s.sessions.size);
-
   const activeTransferCount = useTransferStore((s) => {
     let count = 0;
     for (const t of s.transfers.values()) {
@@ -167,17 +158,7 @@ export function Sidebar() {
   };
   const activeNavId = getActiveId();
 
-  const visibleNavItems = NAV_ITEMS.filter(({ id }) => {
-    if (id === "terminal" && terminalTabCount === 0) return false;
-    if (id === "sftp" && sftpSessionCount === 0 && s3SessionCount === 0) return false;
-    return true;
-  });
-
-  const getBadge = (id: string): number | undefined => {
-    if (id === "terminal" && terminalTabCount > 0) return terminalTabCount;
-    if (id === "sftp" && (sftpSessionCount + s3SessionCount) > 0) return sftpSessionCount + s3SessionCount;
-    return undefined;
-  };
+  const visibleNavItems = NAV_ITEMS;
 
   const handleNavClick = (item: NavItem) => {
     if (item.page) {
@@ -206,7 +187,7 @@ export function Sidebar() {
               icon={item.icon}
               label={item.label}
               isActive={activeNavId === item.id}
-              badge={getBadge(item.id)}
+              badge={undefined}
               expanded={expanded}
               onClick={() => handleNavClick(item)}
             />
