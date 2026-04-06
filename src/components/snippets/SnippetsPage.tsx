@@ -8,7 +8,7 @@ import {
 import { Search, Plus, FolderPlus, ArrowLeft, Code } from "lucide-react";
 import { useSnippetsStore } from "../../stores/snippets-store";
 import { useSessionStore } from "../../stores/session-store";
-import { useUiStore } from "../../stores/ui-store";
+import { useTabStore } from "../../stores/tab-store";
 import type { Snippet } from "../../types";
 import { extractVariables } from "../../utils/snippet-resolve";
 import { SnippetCard } from "./SnippetCard";
@@ -37,7 +37,7 @@ export function SnippetsPage() {
   } = useSnippetsStore();
 
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
-  const setActivePage = useUiStore((s) => s.setActivePage);
+  const activateTerminal = useTabStore((s) => s.activateRecentTabOfType);
 
   const [query, setQuery] = useState("");
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
@@ -117,7 +117,7 @@ export function SnippetsPage() {
 
   const runCommand = async (command: string, snippetId: string) => {
     if (!activeSessionId) {
-      setActivePage("terminal");
+      activateTerminal("terminal");
       return;
     }
     try {

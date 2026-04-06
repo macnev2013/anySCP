@@ -3,6 +3,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { useHostsStore } from "../../stores/hosts-store";
 import { useGroupsStore } from "../../stores/groups-store";
 import { useSessionStore } from "../../stores/session-store";
+import { useTabStore } from "../../stores/tab-store";
 import type { SavedHost, HostConfig, StoredCredential } from "../../types";
 import { HOST_COLORS } from "./HostCard";
 import { CustomSelect } from "../shared/CustomSelect";
@@ -398,7 +399,8 @@ export function HostEditModal() {
             : { type: "password", password: "" },
       };
       addSession(sessionId, hostConfig);
-      useUiStore.getState().setActivePage("terminal");
+      const label = hostConfig.label || `${hostConfig.username}@${hostConfig.host}`;
+      useTabStore.getState().addTab({ type: "terminal", id: sessionId, label });
       close();
     } catch (err) {
       setError(extractError(err, "Connection failed"));

@@ -3,6 +3,7 @@ import { Terminal } from "./Terminal";
 import { SplitContainer } from "./SplitContainer";
 import { DisconnectOverlay } from "./DisconnectOverlay";
 import { TerminalSearchBar } from "./TerminalSearchBar";
+import { PaneHeader } from "./PaneHeader";
 import { useSessionStore } from "../../stores/session-store";
 import { useTerminalSearchStore } from "../../stores/terminal-search-store";
 
@@ -15,8 +16,9 @@ interface TerminalAreaProps {
 export function TerminalPane({ sessionId }: { sessionId: string }) {
   const session = useSessionStore((s) => s.sessions.get(sessionId));
   const isActive = useSessionStore((s) => s.activeSessionId === sessionId);
+  const isZoomed = useSessionStore((s) => s.zoomedPaneId === sessionId);
   const hasSplits = useSessionStore((s) => {
-    const tabId = s.activeTabId;
+    const tabId = s.activeTerminalTabId;
     if (!tabId) return false;
     const tab = s.tabs.get(tabId);
     return tab ? tab.layout.type === "split" : false;
@@ -27,30 +29,41 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
   const showOverlay =
     session?.status === "Disconnected" || session?.status === "Error";
 
-  const showFocusRing = isActive && hasSplits;
-
+  // When zoomed, this pane expands to fill the entire tab area
+  // while staying in the same DOM tree (no remount).
+  // Non-zoomed sibling panes get hidden by SplitContainer.
   return (
     <div
       className={[
-        "relative h-full w-full",
-        showFocusRing ? "ring-1 ring-inset ring-accent/40" : "",
+        "group/pane flex flex-col rounded-lg overflow-hidden border",
+        "transition-[border-color,box-shadow] duration-[var(--duration-fast)]",
+        isZoomed
+          ? "fixed-zoom absolute inset-0 z-30 border-accent/40"
+          : "relative h-full w-full",
+        !isZoomed && isActive && hasSplits
+          ? "border-accent/40 shadow-[0_0_0_1px_oklch(var(--accent)/.12)]"
+          : !isZoomed ? "border-border/60" : "",
       ].join(" ")}
       onClick={() => {
         if (!isActive) setActiveSession(sessionId);
       }}
     >
-      <Terminal sessionId={sessionId} />
+      <PaneHeader sessionId={sessionId} />
 
-      {searchOpen && <TerminalSearchBar sessionId={sessionId} />}
+      <div className="relative flex-1 min-h-0">
+        <Terminal sessionId={sessionId} />
 
-      {showOverlay && session && (
-        <DisconnectOverlay
-          sessionId={sessionId}
-          status={session.status as "Disconnected" | "Error"}
-          message={session.statusMessage}
-          hostConfig={session.hostConfig}
-        />
-      )}
+        {searchOpen && <TerminalSearchBar sessionId={sessionId} />}
+
+        {showOverlay && session && (
+          <DisconnectOverlay
+            sessionId={sessionId}
+            status={session.status as "Disconnected" | "Error"}
+            message={session.statusMessage}
+            hostConfig={session.hostConfig}
+          />
+        )}
+      </div>
     </div>
   );
 }

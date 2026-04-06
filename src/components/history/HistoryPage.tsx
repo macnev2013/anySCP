@@ -4,7 +4,7 @@ import { CustomSelect } from "../shared/CustomSelect";
 import { useSftpStore } from "../../stores/sftp-store";
 import { useSessionStore } from "../../stores/session-store";
 import { useHostsStore } from "../../stores/hosts-store";
-import { useUiStore } from "../../stores/ui-store";
+import { useTabStore } from "../../stores/tab-store";
 import { ContextMenu } from "../shared/ContextMenu";
 import type { ContextMenuItem } from "../shared/ContextMenu";
 import type { ConnectionHistoryEntry } from "../../types";
@@ -107,6 +107,7 @@ export function HistoryPage() {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const sessionId = await invoke<string>("connect_saved_host", { hostId: entry.host_id });
+      const label = entry.host_label || `${entry.username}@${entry.host}`;
       useSessionStore.getState().addSession(sessionId, {
         host: entry.host,
         port: entry.port,
@@ -114,7 +115,7 @@ export function HistoryPage() {
         label: entry.host_label || undefined,
         auth_method: { type: "password", password: "" },
       });
-      useUiStore.getState().setActivePage("terminal");
+      useTabStore.getState().addTab({ type: "terminal", id: sessionId, label });
     } catch {
       // Connection errors show via disconnect overlay
     }
@@ -127,7 +128,7 @@ export function HistoryPage() {
       const sftpSessionId = await invoke<string>("sftp_open", { sessionId });
       const label = entry.host_label || `${entry.username}@${entry.host}`;
       useSftpStore.getState().openSession(sftpSessionId, sessionId, label);
-      useUiStore.getState().setActivePage("sftp");
+      useTabStore.getState().addTab({ type: "sftp", id: sftpSessionId, label });
     } catch {
       // Errors surface via SFTP page
     }
