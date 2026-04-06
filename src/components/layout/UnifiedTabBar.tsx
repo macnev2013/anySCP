@@ -130,17 +130,19 @@ export function UnifiedTabBar() {
                   : "bg-bg-overlay/80 text-text-secondary border border-border/60 hover:text-text-primary hover:bg-bg-overlay hover:border-border",
               ].join(" ")}
             >
-              {/* Icon or status dot */}
-              {statusDot ? (
-                <span className={`w-[7px] h-[7px] rounded-lg shrink-0 ${statusDot}`} />
-              ) : (
-                <Icon
-                  size={13}
-                  strokeWidth={1.8}
-                  className={isActive ? "text-accent shrink-0" : "text-text-muted shrink-0"}
-                  aria-hidden="true"
-                />
-              )}
+              {/* Tab icon */}
+              <Icon
+                size={13}
+                strokeWidth={1.8}
+                className={[
+                  "shrink-0",
+                  tab.type === "terminal" && statusDot ? statusDot.replace("bg-", "text-") : "",
+                  tab.type === "sftp" || tab.type === "s3" ? "text-status-connected" : "",
+                  tab.type === "page" && isActive ? "text-accent" : "",
+                  tab.type === "page" && !isActive ? "text-text-muted" : "",
+                ].join(" ")}
+                aria-hidden="true"
+              />
 
               {/* Label */}
               <span className={`truncate ${isActive ? "font-medium" : ""}`}>
