@@ -68,8 +68,8 @@ function PillButton({
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           expanded ? "w-full gap-2.5 px-2.5 h-9" : "justify-center w-9 h-9",
           isActive
-            ? "bg-accent/15 text-accent"
-            : "text-text-muted hover:text-text-primary hover:bg-bg-overlay",
+            ? "bg-accent/15 text-accent border border-accent/40"
+            : "text-text-muted border border-transparent hover:text-text-primary hover:bg-bg-overlay hover:border-border/60",
         ].join(" ")}
       >
         <Icon size={16} strokeWidth={isActive ? 2 : 1.5} className="shrink-0" />
@@ -193,7 +193,7 @@ export function Sidebar() {
         aria-label="Main navigation"
         className={[
           "no-select flex flex-col shrink-0 h-full py-3",
-          "bg-bg-surface border border-border rounded-2xl",
+          "bg-bg-surface border border-border/60 rounded-2xl",
           "transition-[width] duration-[var(--duration-base)] ease-[var(--ease-expo-out)]",
           expanded ? "w-[168px] items-stretch px-2" : "w-[48px] items-center",
         ].join(" ")}

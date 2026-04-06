@@ -4,7 +4,6 @@ import {
   Maximize2,
   Columns2,
   Rows2,
-  Plus,
   TerminalSquare,
   FolderOpen,
   Cloud,
@@ -17,7 +16,6 @@ import {
 import { useTabStore, type UnifiedTab, type PageId } from "../../stores/tab-store";
 import { useSessionStore, countPanes, getTopDirection } from "../../stores/session-store";
 import { useUiStore } from "../../stores/ui-store";
-import { NEW_HOST_ID } from "../dashboard/HostEditModal";
 
 // ─── Icon mapping ───────────────────────────────────────────────────────────
 
@@ -49,7 +47,6 @@ export function UnifiedTabBar() {
   const terminalTabs = useSessionStore((s) => s.tabs);
   const zoomedPaneId = useSessionStore((s) => s.zoomedPaneId);
 
-  const setEditingHostId = useUiStore((s) => s.setEditingHostId);
   const toggleSnippetPanel = useUiStore((s) => s.toggleSnippetPanel);
   const snippetPanelOpen = useUiStore((s) => s.snippetPanelOpen);
 
@@ -83,7 +80,7 @@ export function UnifiedTabBar() {
   if (tabOrder.length === 0) return null;
 
   return (
-    <div className="flex items-center h-[var(--tabbar-height)] bg-bg-surface border-b border-border no-select px-2">
+    <div className="flex items-center h-[var(--tabbar-height)] no-select px-2">
       <div className="flex items-center gap-1.5 overflow-x-auto overflow-y-hidden flex-1 min-w-0">
         {tabOrder.map((tabId) => {
           const tab = tabs.get(tabId);
@@ -129,8 +126,8 @@ export function UnifiedTabBar() {
                 "transition-[color,background-color] duration-[var(--duration-fast)]",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 isActive
-                  ? "bg-accent/15 text-accent"
-                  : "text-text-secondary hover:text-text-primary hover:bg-bg-overlay/50",
+                  ? "bg-accent/15 text-accent border border-accent/40"
+                  : "bg-bg-overlay/80 text-text-secondary border border-border/60 hover:text-text-primary hover:bg-bg-overlay hover:border-border",
               ].join(" ")}
             >
               {/* Icon or status dot */}
@@ -196,15 +193,6 @@ export function UnifiedTabBar() {
           );
         })}
 
-        {/* New tab button */}
-        <button
-          onClick={() => setEditingHostId(NEW_HOST_ID)}
-          title="New connection (⌘T)"
-          aria-label="New connection"
-          className="flex items-center justify-center w-7 h-7 shrink-0 rounded-lg text-text-muted hover:text-text-primary hover:bg-bg-overlay/50 transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <Plus size={14} strokeWidth={2} aria-hidden="true" />
-        </button>
       </div>
 
       {/* Right actions */}

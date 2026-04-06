@@ -40,7 +40,7 @@ export function SplitContainer({ node, path, tabId }: SplitContainerProps) {
   return (
     <div
       ref={containerRef}
-      className={`relative flex h-full w-full gap-0.5 overflow-hidden ${isHorizontal ? "flex-row" : "flex-col"}`}
+      className={`flex h-full w-full gap-0.5 overflow-visible ${isHorizontal ? "flex-row" : "flex-col"}`}
     >
       <div style={{ flex: `${node.ratio} 1 0%` }} className="min-w-0 min-h-0 overflow-hidden">
         <TerminalArea node={node.children[0]} path={[...path, 0]} tabId={tabId} />

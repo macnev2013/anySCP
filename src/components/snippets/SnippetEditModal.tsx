@@ -515,20 +515,6 @@ export function SnippetEditModal({
             >
               {saving ? "Saving\u2026" : "Save"}
             </button>
-            <button
-              type="button"
-              onClick={() => void handleSaveAndExecute()}
-              disabled={saving || !form.name.trim() || !form.command.trim()}
-              className={[
-                "px-4 py-2 text-[length:var(--text-sm)] font-medium rounded-lg",
-                "text-text-inverse bg-accent hover:bg-accent-hover",
-                "disabled:opacity-50 disabled:cursor-not-allowed",
-                "transition-colors duration-[var(--duration-fast)]",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg-overlay",
-              ].join(" ")}
-            >
-              Save &amp; Execute
-            </button>
           </div>
         </div>
         </form>
