@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, Check } from "lucide-react";
 
 export interface SelectOption {
@@ -29,7 +30,9 @@ export function CustomSelect({
 }: CustomSelectProps) {
   const [open, setOpen] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(-1);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const selectedOption = options.find((o) => o.value === value);
@@ -39,7 +42,11 @@ export function CustomSelect({
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        containerRef.current && !containerRef.current.contains(target) &&
+        listRef.current && !listRef.current.contains(target)
+      ) {
         setOpen(false);
       }
     };
@@ -67,11 +74,19 @@ export function CustomSelect({
     item?.scrollIntoView({ block: "nearest" });
   }, [open, highlightIndex]);
 
+  const computePos = () => {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setDropdownPos({ top: rect.bottom + 4, left: rect.left, width: rect.width });
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (disabled) return;
 
     if (!open && (e.key === "Enter" || e.key === " " || e.key === "ArrowDown")) {
       e.preventDefault();
+      computePos();
       setOpen(true);
       setHighlightIndex(options.findIndex((o) => o.value === value));
       return;
@@ -98,6 +113,7 @@ export function CustomSelect({
     <div ref={containerRef} className={`relative ${className ?? ""}`}>
       {/* Trigger */}
       <button
+        ref={triggerRef}
         type="button"
         id={id}
         role="combobox"
@@ -107,6 +123,7 @@ export function CustomSelect({
         disabled={disabled}
         onClick={() => {
           if (!disabled) {
+            if (!open) computePos();
             setOpen(!open);
             if (!open) setHighlightIndex(options.findIndex((o) => o.value === value));
           }
@@ -136,14 +153,15 @@ export function CustomSelect({
         />
       </button>
 
-      {/* Dropdown */}
-      {open && (
+      {/* Dropdown — portaled to body to escape transform/overflow ancestors */}
+      {open && dropdownPos && createPortal(
         <div
           ref={listRef}
           role="listbox"
           aria-label={ariaLabel}
+          style={{ top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width }}
           className={[
-            "absolute left-0 right-0 z-50 mt-1",
+            "fixed z-[100]",
             "max-h-[200px] overflow-y-auto",
             "bg-bg-overlay border border-border rounded-lg",
             "shadow-[var(--shadow-lg)]",
@@ -180,7 +198,8 @@ export function CustomSelect({
               </button>
             );
           })}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

@@ -197,25 +197,27 @@ export function UnifiedTabBar() {
 
       </div>
 
-      {/* Right actions */}
-      <div className="flex items-center gap-1 pl-2 shrink-0">
-        <button
-          onClick={toggleSnippetPanel}
-          title="Snippets"
-          aria-label="Toggle snippets panel"
-          aria-pressed={snippetPanelOpen}
-          className={[
-            "flex items-center justify-center w-7 h-7 rounded-md",
-            "transition-colors duration-[var(--duration-fast)]",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            snippetPanelOpen
-              ? "bg-accent/15 text-accent"
-              : "text-text-muted hover:text-text-secondary hover:bg-bg-subtle",
-          ].join(" ")}
-        >
-          <Code size={14} strokeWidth={1.8} aria-hidden="true" />
-        </button>
-      </div>
+      {/* Right actions — only show snippet button when a terminal tab is active */}
+      {activeTabId && tabs.get(activeTabId)?.type === "terminal" && (
+        <div className="flex items-center gap-1 pl-2 shrink-0">
+          <button
+            onClick={toggleSnippetPanel}
+            title="Snippets (⌘K)"
+            aria-label="Open snippet palette"
+            aria-pressed={snippetPanelOpen}
+            className={[
+              "flex items-center justify-center w-7 h-7 rounded-md",
+              "transition-colors duration-[var(--duration-fast)]",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              snippetPanelOpen
+                ? "bg-accent/15 text-accent"
+                : "text-text-muted hover:text-text-secondary hover:bg-bg-subtle",
+            ].join(" ")}
+          >
+            <Code size={14} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

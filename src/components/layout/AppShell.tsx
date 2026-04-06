@@ -14,7 +14,8 @@ import { UnifiedTabBar } from "./UnifiedTabBar";
 
 import { HostsDashboard, HostEditModal } from "../dashboard";
 import { NEW_HOST_ID } from "../dashboard/HostEditModal";
-import { SnippetsPage, SnippetQuickPanel } from "../snippets";
+import { SnippetsPage } from "../snippets";
+import { SnippetPalette } from "../snippets/SnippetPalette";
 import { ExplorerPage } from "../sftp";
 import { SettingsPage } from "../settings";
 import { PortForwardingPage } from "../port-forwarding";
@@ -30,11 +31,6 @@ export function AppShell() {
 
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
   const setEditingHostId = useUiStore((s) => s.setEditingHostId);
-  const snippetPanelOpen = useUiStore((s) => s.snippetPanelOpen);
-  const snippetPanelPinned = useUiStore((s) => s.snippetPanelPinned);
-
-  const isTerminalActive = activeTab?.type === "terminal";
-
   // Auto-open hosts tab if active tab gets removed
   useEffect(() => {
     if (!activeTabId || !allTabs.has(activeTabId)) {
@@ -209,6 +205,14 @@ export function AppShell() {
         },
         when: () => useTabStore.getState().tabs.get(useTabStore.getState().activeTabId ?? "")?.type === "terminal",
       },
+      // ─── Snippet palette ─────────────────────────────────────────
+      {
+        key: "k",
+        meta: true,
+        action: () => {
+          useUiStore.getState().toggleSnippetPanel();
+        },
+      },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [toggleSidebar, setEditingHostId],
@@ -257,10 +261,6 @@ export function AppShell() {
                 );
               })}
 
-            {/* Snippet panel (floating / unpinned) — inside terminal container */}
-            {isTerminalActive && snippetPanelOpen && !snippetPanelPinned && (
-              <SnippetQuickPanel />
-            )}
 
             {/* Page / SFTP / S3 content — rendered on top when active */}
             {activeTab && activeTab.type !== "terminal" && (
@@ -284,16 +284,15 @@ export function AppShell() {
             )}
           </div>
 
-          {/* Snippet quick panel — pinned: docked as flex sibling */}
-          {isTerminalActive && snippetPanelOpen && snippetPanelPinned && (
-            <SnippetQuickPanel />
-          )}
         </div>
 
       </div>
 
       {/* Host modal (new + edit) */}
       <HostEditModal />
+
+      {/* Snippet command palette */}
+      <SnippetPalette />
     </div>
   );
 }

@@ -121,6 +121,8 @@ export function Terminal({ sessionId }: TerminalProps) {
         if (e.metaKey && !e.shiftKey && e.key >= "1" && e.key <= "9") return false;
         if (e.metaKey && (e.key === "[" || e.key === "]")) return false;
         if (e.metaKey && !e.shiftKey && e.key === "f") return false;
+        // Cmd+K — snippet palette
+        if (e.metaKey && !e.shiftKey && e.key === "k") return false;
         if (e.metaKey && e.key.toLowerCase() === "d") return false;
         if (e.metaKey && e.shiftKey && e.key === "Enter") return false;
         if (e.metaKey && e.altKey && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return false;
