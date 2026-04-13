@@ -119,6 +119,16 @@ pub struct SavedHost {
     pub last_connected_at: Option<String>,
     /// Running total of successful connections to this host.
     pub connection_count: Option<u32>,
+
+    // Protocol
+    /// Connection protocol: "ssh" or "rdp".
+    pub protocol: String,
+    /// Windows domain for RDP authentication (RDP only).
+    pub rdp_domain: Option<String>,
+    /// RDP session width in pixels (RDP only).
+    pub rdp_width: Option<u32>,
+    /// RDP session height in pixels (RDP only).
+    pub rdp_height: Option<u32>,
 }
 
 /// A named group that hosts can be assigned to.
@@ -447,6 +457,17 @@ impl HostDb {
             tracing::info!("migration 10→11 applied: ensured color, environment, notes on s3_connections");
         }
 
+        if version < 12 {
+            conn.execute_batch(
+                "ALTER TABLE saved_hosts ADD COLUMN protocol TEXT NOT NULL DEFAULT 'ssh';
+                 ALTER TABLE saved_hosts ADD COLUMN rdp_domain TEXT;
+                 ALTER TABLE saved_hosts ADD COLUMN rdp_width INTEGER;
+                 ALTER TABLE saved_hosts ADD COLUMN rdp_height INTEGER;
+                 INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '12');",
+            )?;
+            tracing::info!("migration 11→12 applied: added protocol, rdp_domain, rdp_width, rdp_height to saved_hosts");
+        }
+
         Ok(())
     }
 
@@ -464,13 +485,15 @@ impl HostDb {
                  id, label, host, port, username, auth_type, group_id, created_at, updated_at,
                  key_path, color, notes, environment, os_type,
                  startup_command, proxy_jump, keep_alive_interval, default_shell,
-                 font_size, last_connected_at, connection_count
+                 font_size, last_connected_at, connection_count,
+                 protocol, rdp_domain, rdp_width, rdp_height
              )
              VALUES (
                  ?1,  ?2,  ?3,  ?4,  ?5,  ?6,  ?7,  ?8,  ?9,
                  ?10, ?11, ?12, ?13, ?14,
                  ?15, ?16, ?17, ?18,
-                 ?19, ?20, ?21
+                 ?19, ?20, ?21,
+                 ?22, ?23, ?24, ?25
              )
              ON CONFLICT(id) DO UPDATE SET
                  label                = excluded.label,
@@ -491,7 +514,11 @@ impl HostDb {
                  default_shell        = excluded.default_shell,
                  font_size            = excluded.font_size,
                  last_connected_at    = excluded.last_connected_at,
-                 connection_count     = excluded.connection_count",
+                 connection_count     = excluded.connection_count,
+                 protocol             = excluded.protocol,
+                 rdp_domain           = excluded.rdp_domain,
+                 rdp_width            = excluded.rdp_width,
+                 rdp_height           = excluded.rdp_height",
             params![
                 host.id,
                 host.label,
@@ -514,6 +541,10 @@ impl HostDb {
                 host.font_size,
                 host.last_connected_at,
                 host.connection_count,
+                host.protocol,
+                host.rdp_domain,
+                host.rdp_width,
+                host.rdp_height,
             ],
         )?;
         Ok(())
@@ -527,7 +558,8 @@ impl HostDb {
             "SELECT id, label, host, port, username, auth_type, group_id, created_at, updated_at,
                     key_path, color, notes, environment, os_type,
                     startup_command, proxy_jump, keep_alive_interval, default_shell,
-                    font_size, last_connected_at, connection_count
+                    font_size, last_connected_at, connection_count,
+                    COALESCE(protocol, 'ssh'), rdp_domain, rdp_width, rdp_height
              FROM saved_hosts
              ORDER BY label ASC",
         )?;
@@ -555,6 +587,10 @@ impl HostDb {
                 font_size: row.get(18)?,
                 last_connected_at: row.get(19)?,
                 connection_count: row.get(20)?,
+                protocol: row.get(21)?,
+                rdp_domain: row.get(22)?,
+                rdp_width: row.get(23)?,
+                rdp_height: row.get(24)?,
             })
         })?;
 
@@ -582,7 +618,8 @@ impl HostDb {
             "SELECT id, label, host, port, username, auth_type, group_id, created_at, updated_at,
                     key_path, color, notes, environment, os_type,
                     startup_command, proxy_jump, keep_alive_interval, default_shell,
-                    font_size, last_connected_at, connection_count
+                    font_size, last_connected_at, connection_count,
+                    COALESCE(protocol, 'ssh'), rdp_domain, rdp_width, rdp_height
              FROM saved_hosts
              WHERE id = ?1",
         )?;
@@ -610,6 +647,10 @@ impl HostDb {
                 font_size: row.get(18)?,
                 last_connected_at: row.get(19)?,
                 connection_count: row.get(20)?,
+                protocol: row.get(21)?,
+                rdp_domain: row.get(22)?,
+                rdp_width: row.get(23)?,
+                rdp_height: row.get(24)?,
             })
         })?;
 

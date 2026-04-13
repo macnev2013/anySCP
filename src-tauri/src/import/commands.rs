@@ -76,6 +76,10 @@ pub async fn import_save_ssh_hosts(
                 font_size: None,
                 last_connected_at: None,
                 connection_count: None,
+                protocol: "ssh".to_string(),
+                rdp_domain: None,
+                rdp_width: None,
+                rdp_height: None,
                 created_at: now.clone(),
                 updated_at: now,
             };

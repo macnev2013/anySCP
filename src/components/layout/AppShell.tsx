@@ -21,6 +21,7 @@ import { SettingsPage } from "../settings";
 import { PortForwardingPage } from "../port-forwarding";
 import { HistoryPage } from "../history";
 import { usePortForwardEvents } from "../../hooks/use-port-forward-events";
+import { RdpViewer } from "../rdp/RdpViewer";
 
 export function AppShell() {
   const activeTabId = useTabStore((s) => s.activeTabId);
@@ -262,8 +263,23 @@ export function AppShell() {
               })}
 
 
+            {/* RDP tabs — render ALL, toggle visibility (like terminals) */}
+            {Array.from(allTabs.entries())
+              .filter(([, tab]) => tab.type === "rdp")
+              .map(([tabId]) => {
+                const isVisible = tabId === activeTabId;
+                return (
+                  <div
+                    key={tabId}
+                    className={`absolute inset-0 ${isVisible ? "z-10 visible" : "z-0 invisible"}`}
+                  >
+                    <RdpViewer sessionId={tabId} />
+                  </div>
+                );
+              })}
+
             {/* Page / SFTP / S3 content — rendered on top when active */}
-            {activeTab && activeTab.type !== "terminal" && (
+            {activeTab && activeTab.type !== "terminal" && activeTab.type !== "rdp" && (
               <div className="absolute inset-0 z-10">
                 {activeTab.type === "sftp" ? (
                   <ExplorerPage sftpSessionId={activeTab.id} />

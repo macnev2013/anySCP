@@ -2,6 +2,7 @@ mod ai;
 mod db;
 mod import;
 mod portforward;
+mod rdp;
 mod s3;
 mod sftp;
 mod snippets;
@@ -14,6 +15,7 @@ use db::HostDb;
 use sftp::SftpManager;
 use sftp::transfer_manager::TransferManager;
 use portforward::manager::PortForwardManager;
+use rdp::manager::RdpManager;
 use s3::S3Manager;
 use s3::transfer_manager::S3TransferManager;
 use ssh::manager::SshManager;
@@ -25,6 +27,7 @@ pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter("anyscp=debug,russh=info")
         .init();
+
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -61,6 +64,9 @@ pub fn run() {
             ));
             app.manage(s3_manager);
             app.manage(s3_transfer_manager);
+
+            let rdp_manager = Arc::new(RdpManager::new());
+            app.manage(rdp_manager);
 
             telemetry::init();
 
@@ -165,6 +171,13 @@ pub fn run() {
             portforward::commands::pf_start_tunnel,
             portforward::commands::pf_stop_tunnel,
             portforward::commands::pf_list_active_tunnels,
+            // RDP
+            rdp::commands::rdp_connect,
+            rdp::commands::rdp_disconnect,
+            rdp::commands::rdp_send_mouse,
+            rdp::commands::rdp_send_key,
+            rdp::commands::rdp_resize,
+            rdp::commands::rdp_connect_saved_host,
             // Snippets
             snippets::commands::save_snippet,
             snippets::commands::get_snippet,

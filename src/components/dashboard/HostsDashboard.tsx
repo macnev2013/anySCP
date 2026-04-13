@@ -172,19 +172,38 @@ export function HostsDashboard() {
       setConnectingHost({ label, error: null, retry: () => void connectToHost(host) });
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        const addSession = useSessionStore.getState().addSession;
-        const sessionId = await invoke<string>("connect_saved_host", { hostId: host.id });
-        const hostLabel = host.label || `${host.username}@${host.host}`;
-        addSession(sessionId, {
-          host: host.host,
-          port: host.port,
-          username: host.username,
-          label: host.label || undefined,
-          auth_method: { type: "password", password: "" },
-        });
-        void useHostsStore.getState().recordConnection(host.id);
-        setConnectingHost(null);
-        useTabStore.getState().addTab({ type: "terminal", id: sessionId, label: hostLabel });
+
+        if (host.protocol === "rdp") {
+          const result = await invoke<{ session_id: string; ws_port: number }>("rdp_connect_saved_host", { hostId: host.id });
+          const rdpLabel = host.label || `${host.username}@${host.host} (RDP)`;
+          const { useRdpStore } = await import("../../stores/rdp-store");
+          useRdpStore.getState().addSession(result.session_id, {
+            host: host.host,
+            port: host.port,
+            username: host.username,
+            password: "",
+            domain: host.rdp_domain ?? undefined,
+            width: host.rdp_width ?? 1920,
+            height: host.rdp_height ?? 1080,
+          }, result.ws_port);
+          void useHostsStore.getState().recordConnection(host.id);
+          setConnectingHost(null);
+          useTabStore.getState().addTab({ type: "rdp", id: result.session_id, label: rdpLabel });
+        } else {
+          const addSession = useSessionStore.getState().addSession;
+          const sessionId = await invoke<string>("connect_saved_host", { hostId: host.id });
+          const hostLabel = host.label || `${host.username}@${host.host}`;
+          addSession(sessionId, {
+            host: host.host,
+            port: host.port,
+            username: host.username,
+            label: host.label || undefined,
+            auth_method: { type: "password", password: "" },
+          });
+          void useHostsStore.getState().recordConnection(host.id);
+          setConnectingHost(null);
+          useTabStore.getState().addTab({ type: "terminal", id: sessionId, label: hostLabel });
+        }
       } catch (err) {
         const msg = err && typeof err === "object" && "message" in err
           ? String((err as { message: string }).message)

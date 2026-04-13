@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { useSessionStore } from "./session-store";
 import { useSftpStore } from "./sftp-store";
 import { useS3Store } from "./s3-store";
+import { useRdpStore } from "./rdp-store";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -11,6 +12,7 @@ export type UnifiedTab =
   | { type: "terminal"; id: string; label: string }
   | { type: "sftp"; id: string; label: string }
   | { type: "s3"; id: string; label: string }
+  | { type: "rdp"; id: string; label: string }
   | { type: "page"; id: string; label: string; page: PageId };
 
 export function getTabType(tab: UnifiedTab): string {
@@ -31,7 +33,7 @@ interface TabState {
   /** Activate or create a singleton page tab. */
   openPageTab: (page: PageId, label: string) => void;
   /** Find the most recent tab of a given type and activate it. Returns false if none found. */
-  activateRecentTabOfType: (type: "terminal" | "sftp" | "s3") => boolean;
+  activateRecentTabOfType: (type: "terminal" | "sftp" | "s3" | "rdp") => boolean;
 }
 
 const PAGE_TAB_PREFIX = "page:";
@@ -137,5 +139,7 @@ function syncDomainStores(tab: UnifiedTab) {
     useSftpStore.getState().setActiveSftpSession(tab.id);
   } else if (tab.type === "s3") {
     useS3Store.getState().setActiveS3Session(tab.id);
+  } else if (tab.type === "rdp") {
+    useRdpStore.getState().setActiveRdpSession(tab.id);
   }
 }

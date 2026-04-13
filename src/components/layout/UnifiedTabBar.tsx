@@ -31,6 +31,7 @@ function getTabIcon(tab: UnifiedTab): React.ElementType {
   if (tab.type === "terminal") return TerminalSquare;
   if (tab.type === "sftp") return FolderOpen;
   if (tab.type === "s3") return Cloud;
+  if (tab.type === "rdp") return Monitor;
   return PAGE_ICONS[tab.page] ?? Monitor;
 }
 
@@ -72,6 +73,10 @@ export function UnifiedTabBar() {
       try { await invoke("s3_disconnect", { s3SessionId: tabId }); } catch { /* ok */ }
       const { useS3Store } = await import("../../stores/s3-store");
       useS3Store.getState().closeSession(tabId);
+    } else if (tab.type === "rdp") {
+      try { await invoke("rdp_disconnect", { sessionId: tabId }); } catch { /* ok */ }
+      const { useRdpStore } = await import("../../stores/rdp-store");
+      useRdpStore.getState().removeSession(tabId);
     }
 
     removeTab(tabId);
@@ -172,12 +177,13 @@ export function UnifiedTabBar() {
                 </span>
               )}
 
-              {/* Close button */}
+              {/* Close button — uses <span> to avoid nested <button> in <button> */}
               {closeable && (
-                <button
+                <span
+                  role="button"
                   onClick={(e) => void handleClose(tabId, tab, e)}
                   className={[
-                    "ml-auto p-0.5 -mr-1 rounded-lg shrink-0",
+                    "ml-auto p-0.5 -mr-1 rounded-lg shrink-0 cursor-pointer",
                     isActive
                       ? "text-accent/60 hover:text-accent hover:bg-accent/10"
                       : "text-text-muted hover:text-text-primary hover:bg-bg-muted",
@@ -189,7 +195,7 @@ export function UnifiedTabBar() {
                   tabIndex={-1}
                 >
                   <X size={11} strokeWidth={2} aria-hidden="true" />
-                </button>
+                </span>
               )}
             </button>
           );

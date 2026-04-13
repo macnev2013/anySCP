@@ -18,6 +18,7 @@ export const NEW_HOST_ID = "__new__";
 
 interface FormState {
   // Connection
+  protocol: "ssh" | "rdp";
   label: string;
   host: string;
   port: string;
@@ -32,6 +33,10 @@ interface FormState {
   // Auth credentials (only used at connect-time, never persisted)
   password: string;
   passphrase: string;
+  // RDP-specific
+  rdpDomain: string;
+  rdpWidth: string;
+  rdpHeight: string;
   // Appearance
   color: string;
   environment: string;
@@ -41,6 +46,7 @@ interface FormState {
 }
 
 const EMPTY_FORM: FormState = {
+  protocol: "ssh",
   label: "",
   host: "",
   port: "22",
@@ -54,6 +60,9 @@ const EMPTY_FORM: FormState = {
   startupCommand: "",
   password: "",
   passphrase: "",
+  rdpDomain: "",
+  rdpWidth: "1920",
+  rdpHeight: "1080",
   color: "",
   environment: "",
   osType: "",
@@ -73,6 +82,7 @@ function savedHostToForm(host: SavedHost): FormState {
   const authType: AuthType =
     host.auth_type === "privateKey" ? "privateKey" : "password";
   return {
+    protocol: (host.protocol === "rdp" ? "rdp" : "ssh") as "ssh" | "rdp",
     label: host.label ?? "",
     host: host.host,
     port: String(host.port),
@@ -86,6 +96,9 @@ function savedHostToForm(host: SavedHost): FormState {
     startupCommand: host.startup_command ?? "",
     password: "",
     passphrase: "",
+    rdpDomain: host.rdp_domain ?? "",
+    rdpWidth: host.rdp_width != null ? String(host.rdp_width) : "1920",
+    rdpHeight: host.rdp_height != null ? String(host.rdp_height) : "1080",
     color: host.color ?? "",
     environment: host.environment ?? "",
     osType: host.os_type ?? "",
@@ -293,6 +306,10 @@ export function HostEditModal() {
       font_size: null,
       last_connected_at: null,
       connection_count: null,
+      protocol: "ssh",
+      rdp_domain: null,
+      rdp_width: null,
+      rdp_height: null,
     };
     return {
       ...base,
@@ -316,6 +333,10 @@ export function HostEditModal() {
       environment: form.environment || null,
       os_type: form.osType || null,
       notes: form.notes.trim() || null,
+      protocol: form.protocol,
+      rdp_domain: form.protocol === "rdp" && form.rdpDomain?.trim() ? form.rdpDomain.trim() : null,
+      rdp_width: form.protocol === "rdp" ? (parseInt(form.rdpWidth, 10) || 1920) : null,
+      rdp_height: form.protocol === "rdp" ? (parseInt(form.rdpHeight, 10) || 1080) : null,
     };
   };
 
@@ -385,22 +406,38 @@ export function HostEditModal() {
       await syncVaultCredential(host.id, typedInvoke);
 
       // The backend resolves host config + credentials from its own DB and keychain.
-      const sessionId = await invoke<string>("connect_saved_host", { hostId: host.id });
+      if (host.protocol === "rdp") {
+        const result = await invoke<{ session_id: string; ws_port: number }>("rdp_connect_saved_host", { hostId: host.id });
+        const label = host.label || `${host.username}@${host.host} (RDP)`;
+        const { useRdpStore } = await import("../../stores/rdp-store");
+        useRdpStore.getState().addSession(result.session_id, {
+          host: host.host,
+          port: host.port,
+          username: host.username,
+          password: "",
+          domain: host.rdp_domain ?? undefined,
+          width: host.rdp_width ?? 1920,
+          height: host.rdp_height ?? 1080,
+        }, result.ws_port);
+        useTabStore.getState().addTab({ type: "rdp", id: result.session_id, label });
+      } else {
+        const sessionId = await invoke<string>("connect_saved_host", { hostId: host.id });
 
-      // Build a minimal HostConfig for the session store label — no credentials.
-      const hostConfig: HostConfig = {
-        host: host.host,
-        port: host.port,
-        username: host.username,
-        label: host.label || undefined,
-        auth_method:
-          form.authType === "privateKey"
-            ? { type: "privateKey", key_path: form.keyPath }
-            : { type: "password", password: "" },
-      };
-      addSession(sessionId, hostConfig);
-      const label = hostConfig.label || `${hostConfig.username}@${hostConfig.host}`;
-      useTabStore.getState().addTab({ type: "terminal", id: sessionId, label });
+        // Build a minimal HostConfig for the session store label — no credentials.
+        const hostConfig: HostConfig = {
+          host: host.host,
+          port: host.port,
+          username: host.username,
+          label: host.label || undefined,
+          auth_method:
+            form.authType === "privateKey"
+              ? { type: "privateKey", key_path: form.keyPath }
+              : { type: "password", password: "" },
+        };
+        addSession(sessionId, hostConfig);
+        const label = hostConfig.label || `${hostConfig.username}@${hostConfig.host}`;
+        useTabStore.getState().addTab({ type: "terminal", id: sessionId, label });
+      }
       close();
     } catch (err) {
       setError(extractError(err, "Connection failed"));
@@ -487,6 +524,44 @@ export function HostEditModal() {
               {/* ════════════════ CONNECTION ════════════════ */}
               <SectionHeader>Connection</SectionHeader>
 
+              {/* Protocol toggle */}
+              <div>
+                <label className={labelClass}>Protocol</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setField("protocol", "ssh");
+                      setField("port", "22");
+                    }}
+                    disabled={isBusy}
+                    className={`flex-1 px-3 py-2 rounded-lg text-[length:var(--text-sm)] font-medium border transition-colors duration-[var(--duration-fast)] ${
+                      form.protocol === "ssh"
+                        ? "bg-accent/10 border-accent text-accent"
+                        : "bg-bg-base border-border text-text-secondary hover:text-text-primary"
+                    }`}
+                  >
+                    SSH
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setField("protocol", "rdp");
+                      setField("port", "3389");
+                      setField("authType", "password");
+                    }}
+                    disabled={isBusy}
+                    className={`flex-1 px-3 py-2 rounded-lg text-[length:var(--text-sm)] font-medium border transition-colors duration-[var(--duration-fast)] ${
+                      form.protocol === "rdp"
+                        ? "bg-accent/10 border-accent text-accent"
+                        : "bg-bg-base border-border text-text-secondary hover:text-text-primary"
+                    }`}
+                  >
+                    RDP
+                  </button>
+                </div>
+              </div>
+
               {/* Label */}
               <div>
                 <label htmlFor="hem-label" className={labelClass}>
@@ -556,21 +631,23 @@ export function HostEditModal() {
 
               {/* Auth Type + Group row */}
               <div className="flex gap-3">
-                <div className="flex-1">
-                  <label htmlFor="hem-auth" className={labelClass}>
-                    Auth Type
-                  </label>
-                  <CustomSelect
-                    id="hem-auth"
-                    value={form.authType}
-                    onChange={(v) => setField("authType", v as AuthType)}
-                    disabled={isBusy}
-                    options={[
-                      { value: "password", label: "Password" },
-                      { value: "privateKey", label: "Private Key" },
-                    ]}
-                  />
-                </div>
+                {form.protocol === "ssh" && (
+                  <div className="flex-1">
+                    <label htmlFor="hem-auth" className={labelClass}>
+                      Auth Type
+                    </label>
+                    <CustomSelect
+                      id="hem-auth"
+                      value={form.authType}
+                      onChange={(v) => setField("authType", v as AuthType)}
+                      disabled={isBusy}
+                      options={[
+                        { value: "password", label: "Password" },
+                        { value: "privateKey", label: "Private Key" },
+                      ]}
+                    />
+                  </div>
+                )}
 
                 <div className="flex-1">
                   <label htmlFor="hem-group" className={labelClass}>
@@ -588,30 +665,77 @@ export function HostEditModal() {
               </div>
 
               {/* Auth credentials — conditional on auth type */}
-              {form.authType === "password" ? (
-                <div>
-                  <label htmlFor="hem-password" className={labelClass}>
-                    Password
-                  </label>
-                  <input
-                    id="hem-password"
-                    type="password"
-                    value={form.password}
-                    onChange={(e) => setField("password", e.target.value)}
-                    placeholder={
-                      hasSavedCred && !credCleared && !form.password
-                        ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
-                        : "Enter password to connect"
-                    }
-                    disabled={isBusy}
-                    className={inputClass}
-                  />
-                  <CredentialStatus
-                    visible={hasSavedCred && !credCleared && !form.password}
-                    busy={isBusy}
-                    onClear={() => setCredCleared(true)}
-                  />
-                </div>
+              {(form.protocol === "rdp" || form.authType === "password") ? (
+                <>
+                  <div>
+                    <label htmlFor="hem-password" className={labelClass}>
+                      Password
+                    </label>
+                    <input
+                      id="hem-password"
+                      type="password"
+                      value={form.password}
+                      onChange={(e) => setField("password", e.target.value)}
+                      placeholder={
+                        hasSavedCred && !credCleared && !form.password
+                          ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
+                          : "Enter password to connect"
+                      }
+                      disabled={isBusy}
+                      className={inputClass}
+                    />
+                    <CredentialStatus
+                      visible={hasSavedCred && !credCleared && !form.password}
+                      busy={isBusy}
+                      onClear={() => setCredCleared(true)}
+                    />
+                  </div>
+
+                  {/* RDP-specific fields */}
+                  {form.protocol === "rdp" && (
+                    <>
+                      {/* Domain */}
+                      <div>
+                        <label className={labelClass}>
+                          Domain <span className="ml-1 text-text-muted font-normal">(optional)</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={form.rdpDomain}
+                          onChange={(e) => setField("rdpDomain", e.target.value)}
+                          placeholder="WORKGROUP"
+                          disabled={isBusy}
+                          className={inputClass}
+                        />
+                      </div>
+                      {/* Resolution */}
+                      <div className="flex gap-3">
+                        <div className="flex-1">
+                          <label className={labelClass}>Width</label>
+                          <input
+                            type="number"
+                            value={form.rdpWidth}
+                            onChange={(e) => setField("rdpWidth", e.target.value)}
+                            placeholder="1920"
+                            disabled={isBusy}
+                            className={inputClass}
+                          />
+                        </div>
+                        <div className="flex-1">
+                          <label className={labelClass}>Height</label>
+                          <input
+                            type="number"
+                            value={form.rdpHeight}
+                            onChange={(e) => setField("rdpHeight", e.target.value)}
+                            placeholder="1080"
+                            disabled={isBusy}
+                            className={inputClass}
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </>
               ) : (
                 <>
                   <div>
@@ -723,58 +847,63 @@ export function HostEditModal() {
 
               {/* TODO: Proxy / Jump Host — hidden until backend support is implemented */}
 
-              {/* Keep Alive + Default Shell row */}
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <label htmlFor="hem-keepalive" className={labelClass}>
-                    Keep Alive
-                    <span className="ml-1 text-text-muted font-normal">(seconds)</span>
-                  </label>
-                  <input
-                    id="hem-keepalive"
-                    type="number"
-                    min={0}
-                    value={form.keepAliveInterval}
-                    onChange={(e) => setField("keepAliveInterval", e.target.value)}
-                    placeholder="60"
-                    disabled={isBusy}
-                    className={`${inputClass} font-mono`}
-                  />
-                </div>
-                <div className="flex-1">
-                  <label htmlFor="hem-shell" className={labelClass}>
-                    Default Shell
-                  </label>
-                  <input
-                    id="hem-shell"
-                    type="text"
-                    value={form.defaultShell}
-                    onChange={(e) => setField("defaultShell", e.target.value)}
-                    placeholder="/bin/zsh"
-                    disabled={isBusy}
-                    className={`${inputClass} font-mono`}
-                  />
-                </div>
-              </div>
+              {/* SSH-only advanced fields */}
+              {form.protocol === "ssh" && (
+                <>
+                  {/* Keep Alive + Default Shell row */}
+                  <div className="flex gap-3">
+                    <div className="flex-1">
+                      <label htmlFor="hem-keepalive" className={labelClass}>
+                        Keep Alive
+                        <span className="ml-1 text-text-muted font-normal">(seconds)</span>
+                      </label>
+                      <input
+                        id="hem-keepalive"
+                        type="number"
+                        min={0}
+                        value={form.keepAliveInterval}
+                        onChange={(e) => setField("keepAliveInterval", e.target.value)}
+                        placeholder="60"
+                        disabled={isBusy}
+                        className={`${inputClass} font-mono`}
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label htmlFor="hem-shell" className={labelClass}>
+                        Default Shell
+                      </label>
+                      <input
+                        id="hem-shell"
+                        type="text"
+                        value={form.defaultShell}
+                        onChange={(e) => setField("defaultShell", e.target.value)}
+                        placeholder="/bin/zsh"
+                        disabled={isBusy}
+                        className={`${inputClass} font-mono`}
+                      />
+                    </div>
+                  </div>
 
-              {/* Startup Command */}
-              <div>
-                <label htmlFor="hem-startup" className={labelClass}>
-                  Startup Command
-                  <span className="ml-1 text-text-muted font-normal">(optional)</span>
-                </label>
-                <input
-                  id="hem-startup"
-                  type="text"
-                  value={form.startupCommand}
-                  onChange={(e) => setField("startupCommand", e.target.value)}
-                  placeholder="cd /app && tail -f logs"
-                  disabled={isBusy}
-                  className={`${inputClass} font-mono`}
-                />
-                {/* TODO: startup_command execution should be handled in the Rust backend
-                    after the shell prompt is detected — not sent as raw input from the frontend. */}
-              </div>
+                  {/* Startup Command */}
+                  <div>
+                    <label htmlFor="hem-startup" className={labelClass}>
+                      Startup Command
+                      <span className="ml-1 text-text-muted font-normal">(optional)</span>
+                    </label>
+                    <input
+                      id="hem-startup"
+                      type="text"
+                      value={form.startupCommand}
+                      onChange={(e) => setField("startupCommand", e.target.value)}
+                      placeholder="cd /app && tail -f logs"
+                      disabled={isBusy}
+                      className={`${inputClass} font-mono`}
+                    />
+                    {/* TODO: startup_command execution should be handled in the Rust backend
+                        after the shell prompt is detected — not sent as raw input from the frontend. */}
+                  </div>
+                </>
+              )}
 
               {/* ════════════════ APPEARANCE ════════════════ */}
               <SectionHeader>Appearance</SectionHeader>

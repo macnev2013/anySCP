@@ -75,6 +75,10 @@ export interface SavedHost {
   font_size: number | null;
   last_connected_at: string | null;
   connection_count: number | null;
+  protocol: string;              // "ssh" | "rdp"
+  rdp_domain: string | null;
+  rdp_width: number | null;
+  rdp_height: number | null;
 }
 
 export interface RecentConnection {

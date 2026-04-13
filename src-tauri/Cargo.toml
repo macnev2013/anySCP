@@ -17,6 +17,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+cmake = "0.1"
+bindgen = "0.70"
 
 [dependencies]
 # Tauri framework
@@ -65,6 +67,10 @@ keyring = { version = "3", features = ["apple-native", "linux-native", "windows-
 tauri-plugin-dialog = "2.6.0"
 tauri-plugin-updater = "2"
 ssh2-config = "0.7.0"
+
+# RDP frame streaming over localhost WebSocket (binary, no JSON overhead)
+tokio-tungstenite = "0.29"
+futures-util = "0.3"
 rust-s3 = { version = "0.37.1", default-features = false, features = ["tokio-rustls-tls"] }
 
 # Telemetry

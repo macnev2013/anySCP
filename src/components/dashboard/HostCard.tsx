@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Pencil, TerminalSquare, Copy, Trash2, FolderOpen } from "lucide-react";
+import { Pencil, TerminalSquare, Copy, Trash2, FolderOpen, Monitor } from "lucide-react";
 import type { SavedHost } from "../../types";
 import { relativeTime } from "../../utils/time";
 import { ContextMenu } from "../shared/ContextMenu";
@@ -63,8 +63,10 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
+  const isRdp = host.protocol === "rdp";
+
   // Build subtitle segments
-  const subtitleParts: string[] = [`SSH, ${host.username}`];
+  const subtitleParts: string[] = [`${isRdp ? "RDP" : "SSH"}, ${host.username}`];
   if (host.os_type) {
     const osLabels: Record<string, string> = {
       linux: "Linux",
@@ -89,15 +91,15 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
 
   const contextItems = [
     {
-      label: "Terminal",
-      icon: TerminalSquare,
+      label: isRdp ? "Remote Desktop" : "Terminal",
+      icon: isRdp ? Monitor : TerminalSquare,
       onClick: () => onConnect(host),
     },
-    {
+    ...(!isRdp ? [{
       label: "Explorer",
       icon: FolderOpen,
       onClick: () => onExplore(host),
-    },
+    }] : []),
     {
       label: "Edit",
       icon: Pencil,
@@ -132,16 +134,27 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
       >
 
         {/* Avatar circle */}
-        <div
-          className="flex items-center justify-center w-9 h-9 rounded-full shrink-0 font-semibold text-[length:var(--text-sm)] select-none"
-          style={{
-            backgroundColor: `${avatarColor}25`,
-            color: avatarColor,
-            fontFamily: "var(--font-sans)",
-          }}
-          aria-hidden="true"
-        >
-          {initial}
+        <div className="relative w-9 h-9 shrink-0">
+          <div
+            className="flex items-center justify-center w-9 h-9 rounded-full font-semibold text-[length:var(--text-sm)] select-none"
+            style={{
+              backgroundColor: `${avatarColor}25`,
+              color: avatarColor,
+              fontFamily: "var(--font-sans)",
+            }}
+            aria-hidden="true"
+          >
+            {initial}
+          </div>
+          {isRdp && (
+            <div
+              className="absolute -bottom-0.5 -right-0.5 flex items-center justify-center w-4 h-4 rounded-full bg-bg-overlay border border-border"
+              title="RDP"
+              aria-label="RDP protocol"
+            >
+              <Monitor size={8} strokeWidth={2} className="text-text-muted" />
+            </div>
+          )}
         </div>
 
         {/* Host info */}

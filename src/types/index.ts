@@ -61,3 +61,14 @@ export type {
   ProviderCapabilities,
   FileSystemProvider,
 } from "./explorer";
+
+export type {
+  RdpSessionId,
+  RdpConnectionStatus,
+  RdpConfig,
+  RdpConnectResult,
+  RdpStatusPayload,
+  RdpMouseInput,
+  RdpKeyInput,
+  RdpSession,
+} from "./rdp";
