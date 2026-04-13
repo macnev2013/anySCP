@@ -13,6 +13,7 @@ import { useHostsStore } from "../../stores/hosts-store";
 import { useGroupsStore } from "../../stores/groups-store";
 import { useSessionStore } from "../../stores/session-store";
 import { useUiStore } from "../../stores/ui-store";
+import { useTabStore } from "../../stores/tab-store";
 import { useSftpStore } from "../../stores/sftp-store";
 import { useS3Store } from "../../stores/s3-store";
 import type { SavedHost, HostGroup, RecentConnection, S3Connection } from "../../types";
@@ -71,7 +72,7 @@ export function HostsDashboard() {
         useS3Store.getState().setCurrentBucket(conn.id, conn.bucket);
       }
       setConnectingHost(null);
-      useUiStore.getState().setActivePage("sftp");
+      useTabStore.getState().addTab({ type: "s3", id: conn.id, label: conn.label });
     } catch (err) {
       const msg = err && typeof err === "object" && "message" in err
         ? String((err as { message: string }).message)
@@ -173,6 +174,7 @@ export function HostsDashboard() {
         const { invoke } = await import("@tauri-apps/api/core");
         const addSession = useSessionStore.getState().addSession;
         const sessionId = await invoke<string>("connect_saved_host", { hostId: host.id });
+        const hostLabel = host.label || `${host.username}@${host.host}`;
         addSession(sessionId, {
           host: host.host,
           port: host.port,
@@ -182,7 +184,7 @@ export function HostsDashboard() {
         });
         void useHostsStore.getState().recordConnection(host.id);
         setConnectingHost(null);
-        useUiStore.getState().setActivePage("terminal");
+        useTabStore.getState().addTab({ type: "terminal", id: sessionId, label: hostLabel });
       } catch (err) {
         const msg = err && typeof err === "object" && "message" in err
           ? String((err as { message: string }).message)
@@ -201,6 +203,7 @@ export function HostsDashboard() {
         const { invoke } = await import("@tauri-apps/api/core");
         const addSession = useSessionStore.getState().addSession;
         const sessionId = await invoke<string>("connect_saved_host", { hostId: conn.host_id });
+        const connLabel = conn.host_label || `${conn.username}@${conn.host}`;
         addSession(sessionId, {
           host: conn.host,
           port: conn.port,
@@ -210,7 +213,7 @@ export function HostsDashboard() {
         });
         void useHostsStore.getState().recordConnection(conn.host_id);
         setConnectingHost(null);
-        useUiStore.getState().setActivePage("terminal");
+        useTabStore.getState().addTab({ type: "terminal", id: sessionId, label: connLabel });
       } catch (err) {
         const msg = err && typeof err === "object" && "message" in err
           ? String((err as { message: string }).message)
@@ -236,7 +239,7 @@ export function HostsDashboard() {
         useSftpStore.getState().openSession(sftpSessionId, sessionId, label);
 
         setConnectingHost(null);
-        useUiStore.getState().setActivePage("sftp");
+        useTabStore.getState().addTab({ type: "sftp", id: sftpSessionId, label });
       } catch (err) {
         const msg = err && typeof err === "object" && "message" in err
           ? String((err as { message: string }).message)

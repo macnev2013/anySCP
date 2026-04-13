@@ -106,14 +106,15 @@ interface SessionState {
   activeSessionId: SessionId | null;
   /** Each tab owns its own layout tree. Tab ID = the first session's ID. */
   tabs: Map<string, Tab>;
-  tabOrder: string[];
-  activeTabId: string | null;
+  /** Which terminal tab is focused (used by PaneHeader / TerminalArea for split detection). */
+  activeTerminalTabId: string | null;
   zoomedPaneId: string | null;
 
   addSession: (id: SessionId, hostConfig: HostConfig) => void;
   removeSession: (id: SessionId) => void;
   setActiveSession: (id: SessionId | null) => void;
-  setActiveTab: (tabId: string) => void;
+  /** Called by tab-store when a terminal tab is activated. Sets activeSessionId from the layout tree. */
+  focusTab: (tabId: string) => void;
   updateStatus: (id: SessionId, status: ConnectionStatus, message?: string) => void;
   splitPane: (direction: SplitDirection, targetSessionId: string, newSessionId: string) => void;
   unsplitPane: (sessionId: string) => void;
@@ -133,8 +134,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   sessions: new Map(),
   activeSessionId: null,
   tabs: new Map(),
-  tabOrder: [],
-  activeTabId: null,
+  activeTerminalTabId: null,
   zoomedPaneId: null,
 
   addSession: (id, hostConfig) => {
@@ -148,7 +148,7 @@ export const useSessionStore = create<SessionState>((set) => ({
         label: `${hostConfig.username}@${hostConfig.host}`,
       });
 
-      // New connection = new tab
+      // New connection = new layout tree entry
       const tabs = new Map(state.tabs);
       tabs.set(id, {
         layout: { type: "pane", sessionId: id },
@@ -159,8 +159,7 @@ export const useSessionStore = create<SessionState>((set) => ({
         sessions,
         activeSessionId: id,
         tabs,
-        tabOrder: [...state.tabOrder, id],
-        activeTabId: id,
+        activeTerminalTabId: id,
       };
     });
   },
@@ -172,8 +171,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       sessions.delete(id);
 
       const tabs = new Map(state.tabs);
-      let tabOrder = [...state.tabOrder];
-      let activeTabId = state.activeTabId;
+      let activeTerminalTabId = state.activeTerminalTabId;
 
       // Find which tab this session belongs to
       const ownerTabId = findTabForSession(state.tabs, id);
@@ -182,11 +180,10 @@ export const useSessionStore = create<SessionState>((set) => ({
         const tab = tabs.get(ownerTabId);
         if (tab) {
           if (ownerTabId === id && tab.layout.type === "pane") {
-            // This session IS the tab and it's the only pane — remove the tab
+            // This session IS the tab and it's the only pane — remove the layout
             tabs.delete(ownerTabId);
-            tabOrder = tabOrder.filter((t) => t !== ownerTabId);
-            if (activeTabId === ownerTabId) {
-              activeTabId = tabOrder.length > 0 ? tabOrder[tabOrder.length - 1] : null;
+            if (activeTerminalTabId === ownerTabId) {
+              activeTerminalTabId = null;
             }
           } else {
             // Session is in a split — remove it from the tree
@@ -194,11 +191,9 @@ export const useSessionStore = create<SessionState>((set) => ({
             if (newLayout) {
               tabs.set(ownerTabId, { ...tab, layout: newLayout });
             } else {
-              // Tree collapsed entirely (shouldn't happen, but handle it)
               tabs.delete(ownerTabId);
-              tabOrder = tabOrder.filter((t) => t !== ownerTabId);
-              if (activeTabId === ownerTabId) {
-                activeTabId = tabOrder.length > 0 ? tabOrder[tabOrder.length - 1] : null;
+              if (activeTerminalTabId === ownerTabId) {
+                activeTerminalTabId = null;
               }
             }
           }
@@ -208,8 +203,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       // Pick a new active session
       let activeSessionId = state.activeSessionId;
       if (activeSessionId === id) {
-        if (activeTabId) {
-          const activeTab = tabs.get(activeTabId);
+        if (activeTerminalTabId) {
+          const activeTab = tabs.get(activeTerminalTabId);
           if (activeTab) {
             const ids = collectSessionIds(activeTab.layout);
             activeSessionId = ids[0] ?? null;
@@ -225,8 +220,7 @@ export const useSessionStore = create<SessionState>((set) => ({
         sessions,
         activeSessionId,
         tabs,
-        tabOrder,
-        activeTabId,
+        activeTerminalTabId,
         zoomedPaneId: state.zoomedPaneId === id ? null : state.zoomedPaneId,
       };
     });
@@ -235,22 +229,20 @@ export const useSessionStore = create<SessionState>((set) => ({
   setActiveSession: (id) =>
     set((state) => {
       if (!id) return { activeSessionId: null };
-      // Also activate the tab that contains this session
       const tabId = findTabForSession(state.tabs, id);
       return {
         activeSessionId: id,
-        activeTabId: tabId ?? state.activeTabId,
+        activeTerminalTabId: tabId ?? state.activeTerminalTabId,
       };
     }),
 
-  setActiveTab: (tabId) =>
+  focusTab: (tabId) =>
     set((state) => {
       const tab = state.tabs.get(tabId);
       if (!tab) return state;
-      // Focus the first pane in the tab
       const ids = collectSessionIds(tab.layout);
       return {
-        activeTabId: tabId,
+        activeTerminalTabId: tabId,
         activeSessionId: ids[0] ?? state.activeSessionId,
       };
     }),

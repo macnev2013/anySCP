@@ -1,27 +1,26 @@
 import { useRef, useCallback, useState } from "react";
-import { TerminalSquare, Monitor, Braces, FolderOpen, Settings, ArrowUpDown, Plug, History, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { Monitor, Braces, Settings, ArrowUpDown, Plug, History, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { useUiStore } from "../../stores/ui-store";
-import { useSessionStore } from "../../stores/session-store";
-import { useSftpStore } from "../../stores/sftp-store";
-import { useS3Store } from "../../stores/s3-store";
+import { useTabStore, type PageId } from "../../stores/tab-store";
 import { useTransferStore } from "../../stores/transfer-store";
 import { TransferPopover } from "../transfers/TransferPopover";
 import { getStatusString } from "../../utils/format";
-import type { ActivePage } from "../../stores/ui-store";
 
 interface NavItem {
-  page: ActivePage;
+  id: string;
   icon: React.ElementType;
   label: string;
+  /** For page tabs */
+  page?: PageId;
+  /** For session-type tabs */
+  sessionType?: "terminal" | "sftp";
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { page: "hosts",            icon: Monitor,        label: "Hosts" },
-  { page: "terminal",         icon: TerminalSquare, label: "Terminal" },
-  { page: "sftp",             icon: FolderOpen,     label: "Explorer" },
-  { page: "snippets",         icon: Braces,         label: "Snippets" },
-  { page: "port-forwarding",  icon: Plug,           label: "Tunnels" },
-  { page: "history",          icon: History,        label: "History" },
+  { id: "hosts",            icon: Monitor,        label: "Hosts",     page: "hosts" },
+  { id: "snippets",         icon: Braces,         label: "Snippets",  page: "snippets" },
+  { id: "port-forwarding",  icon: Plug,           label: "Tunnels",   page: "port-forwarding" },
+  { id: "history",          icon: History,        label: "History",   page: "history" },
 ];
 
 // ─── Pill button ─────────────────────────────────────────────────────────────
@@ -64,8 +63,8 @@ function PillButton({
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           expanded ? "w-full gap-2.5 px-2.5 h-9" : "justify-center w-9 h-9",
           isActive
-            ? "bg-accent/15 text-accent"
-            : "text-text-muted hover:text-text-primary hover:bg-bg-overlay",
+            ? "bg-accent/15 text-accent border border-accent/40"
+            : "text-text-muted border border-transparent hover:text-text-primary hover:bg-bg-overlay hover:border-border/60",
         ].join(" ")}
       >
         <Icon size={16} strokeWidth={isActive ? 2 : 1.5} className="shrink-0" />
@@ -120,13 +119,12 @@ function PillButton({
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 
 export function Sidebar() {
-  const activePage = useUiStore((s) => s.activePage);
-  const setActivePage = useUiStore((s) => s.setActivePage);
   const expanded = useUiStore((s) => s.sidebarExpanded);
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
-  const sessionCount = useSessionStore((s) => s.tabOrder.length);
-  const sftpSessionCount = useSftpStore((s) => s.sessions.size);
-  const s3SessionCount = useS3Store((s) => s.sessions.size);
+
+  const activeTab = useTabStore((s) => s.activeTabId ? s.tabs.get(s.activeTabId) : null);
+  const openPageTab = useTabStore((s) => s.openPageTab);
+  const activateRecent = useTabStore((s) => s.activateRecentTabOfType);
 
   const activeTransferCount = useTransferStore((s) => {
     let count = 0;
@@ -149,16 +147,25 @@ export function Sidebar() {
     setPopoverOpenStore(false);
   }, [setPopoverOpenStore]);
 
-  const visibleNavItems = NAV_ITEMS.filter(({ page }) => {
-    if (page === "terminal" && sessionCount === 0) return false;
-    if (page === "sftp" && sftpSessionCount === 0 && s3SessionCount === 0) return false;
-    return true;
-  });
+  // Determine which nav item is "active" based on the active tab
+  const getActiveId = (): string | null => {
+    if (!activeTab) return null;
+    if (activeTab.type === "terminal") return "terminal";
+    if (activeTab.type === "sftp") return "sftp";
+    if (activeTab.type === "s3") return "sftp"; // S3 grouped under Explorer
+    if (activeTab.type === "page") return activeTab.page;
+    return null;
+  };
+  const activeNavId = getActiveId();
 
-  const getBadge = (page: ActivePage): number | undefined => {
-    if (page === "terminal" && sessionCount > 0) return sessionCount;
-    if (page === "sftp" && (sftpSessionCount + s3SessionCount) > 0) return sftpSessionCount + s3SessionCount;
-    return undefined;
+  const visibleNavItems = NAV_ITEMS;
+
+  const handleNavClick = (item: NavItem) => {
+    if (item.page) {
+      openPageTab(item.page, item.label);
+    } else if (item.sessionType) {
+      activateRecent(item.sessionType);
+    }
   };
 
   return (
@@ -167,22 +174,22 @@ export function Sidebar() {
         aria-label="Main navigation"
         className={[
           "no-select flex flex-col shrink-0 h-full py-3",
-          "bg-bg-surface border border-border rounded-2xl",
+          "bg-bg-surface border border-border/60 rounded-2xl",
           "transition-[width] duration-[var(--duration-base)] ease-[var(--ease-expo-out)]",
           expanded ? "w-[168px] items-stretch px-2" : "w-[48px] items-center",
         ].join(" ")}
       >
         {/* Nav items */}
         <div className={`flex flex-col gap-1 ${expanded ? "" : "items-center"}`}>
-          {visibleNavItems.map(({ page, icon, label }) => (
+          {visibleNavItems.map((item) => (
             <PillButton
-              key={page}
-              icon={icon}
-              label={label}
-              isActive={activePage === page}
-              badge={getBadge(page)}
+              key={item.id}
+              icon={item.icon}
+              label={item.label}
+              isActive={activeNavId === item.id}
+              badge={undefined}
               expanded={expanded}
-              onClick={() => setActivePage(page)}
+              onClick={() => handleNavClick(item)}
             />
           ))}
         </div>
@@ -206,9 +213,9 @@ export function Sidebar() {
           <PillButton
             icon={Settings}
             label="Settings"
-            isActive={activePage === "settings"}
+            isActive={activeNavId === "settings"}
             expanded={expanded}
-            onClick={() => setActivePage("settings")}
+            onClick={() => openPageTab("settings", "Settings")}
           />
 
           {/* Expand/collapse */}

@@ -1,18 +1,16 @@
-import { useEffect, useRef } from "react";
-import { Terminal as XTerm } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
 import { invoke } from "@tauri-apps/api/core";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { useSshOutput } from "../../hooks/use-ssh-events";
+import { useEffect, useRef } from "react";
 import { useDebouncedCallback } from "../../hooks/use-debounce";
-import { registerSearchAddon, unregisterSearchAddon } from "../../stores/terminal-registry";
-import { drainBuffer } from "../../stores/output-buffer";
+import { useSshOutput } from "../../hooks/use-ssh-events";
 import { useSettingsStore } from "../../stores/settings-store";
+import { registerSearchAddon, unregisterSearchAddon } from "../../stores/terminal-registry";
 import type { SessionId } from "../../types";
 
 /**
  * Read OKLCH CSS custom properties and convert to hex for xterm.js.
- * Uses a temporary canvas to do the color space conversion.
  */
 function getTerminalTheme(): Record<string, string> {
   const styles = getComputedStyle(document.documentElement);
@@ -50,7 +48,6 @@ export function Terminal({ sessionId }: TerminalProps) {
   const terminalRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
 
-  // Read settings — snapshot at mount time (terminal recreated if session changes)
   const settings = useSettingsStore.getState();
 
   const debouncedResize = useDebouncedCallback(
@@ -98,18 +95,6 @@ export function Terminal({ sessionId }: TerminalProps) {
       terminalRef.current = terminal;
       fitAddonRef.current = fitAddon;
 
-      // Replay any buffered output from before this mount
-      for (const chunk of drainBuffer(sessionId)) {
-        terminal.write(chunk);
-      }
-
-      // Try WebGL addon for GPU-accelerated rendering
-      import("@xterm/addon-webgl")
-        .then(({ WebglAddon }) => {
-          if (!disposed) terminal.loadAddon(new WebglAddon());
-        })
-        .catch(() => { /* Canvas renderer fallback */ });
-
       // Load search addon
       import("@xterm/addon-search")
         .then(({ SearchAddon }) => {
@@ -126,49 +111,39 @@ export function Terminal({ sessionId }: TerminalProps) {
         if (!disposed) fitAddon.fit();
       });
 
-      // Let app-level shortcuts pass through xterm to the document handler.
-      // Return false = xterm ignores the key, letting it bubble up.
       terminal.attachCustomKeyEventHandler((e) => {
-        // Cmd+Shift+S — snippet panel toggle
         if (e.metaKey && e.shiftKey && e.key === "s") return false;
-        // Cmd+T — new host
         if (e.metaKey && !e.shiftKey && e.key === "t") return false;
-        // Cmd+B — toggle sidebar
         if (e.metaKey && !e.shiftKey && e.key === "b") return false;
-        // Cmd+W — close tab/pane
         if (e.metaKey && !e.shiftKey && e.key === "w") return false;
-        // Cmd+1-9 — tab switching
         if (e.metaKey && !e.shiftKey && e.key >= "1" && e.key <= "9") return false;
-        // Cmd+[ and Cmd+] — prev/next tab
         if (e.metaKey && (e.key === "[" || e.key === "]")) return false;
-        // Cmd+F — terminal search
         if (e.metaKey && !e.shiftKey && e.key === "f") return false;
-        // Cmd+D — split horizontal / Cmd+Shift+D — split vertical
+        // Cmd+K — snippet palette
+        if (e.metaKey && !e.shiftKey && e.key === "k") return false;
         if (e.metaKey && e.key.toLowerCase() === "d") return false;
-        // Cmd+N — new tab + host picker / Cmd+Shift+N — split + host picker
-        if (e.metaKey && e.key.toLowerCase() === "n") return false;
-        // Cmd+Shift+Enter — zoom/unzoom pane
         if (e.metaKey && e.shiftKey && e.key === "Enter") return false;
-        // Cmd+Option+Arrow — navigate panes
         if (e.metaKey && e.altKey && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return false;
         return true;
       });
 
-      // Send keystrokes to backend
-      const encoder = new TextEncoder();
       terminal.onData((data) => {
         const bytes = Array.from(encoder.encode(data));
         invoke("ssh_send_input", { sessionId, data: bytes }).catch(() => {});
       });
 
-      // Handle terminal resize
       terminal.onResize(({ cols, rows }) => {
         debouncedResize(cols, rows);
       });
 
       // ResizeObserver for container size changes
       observer = new ResizeObserver(() => {
-        requestAnimationFrame(() => fitAddonRef.current?.fit());
+        requestAnimationFrame(() => {
+          if (fitAddonRef.current && containerRef.current &&
+              containerRef.current.clientWidth > 0 && containerRef.current.clientHeight > 0) {
+            fitAddonRef.current.fit();
+          }
+        });
       });
       observer.observe(containerRef.current);
     });
@@ -188,9 +163,8 @@ export function Terminal({ sessionId }: TerminalProps) {
   return (
     <div
       ref={containerRef}
-      className="h-full w-full bg-bg-base"
+      className="h-full w-full bg-bg-base p-2"
       onKeyDown={(e) => {
-        // Intercept Cmd+D before xterm can send EOF (\x04) to the shell
         if (e.metaKey && (e.key === "d" || e.key === "D")) {
           e.preventDefault();
           e.stopPropagation();

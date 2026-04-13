@@ -2,6 +2,7 @@ import { useState } from "react";
 import { WifiOff, AlertTriangle, RefreshCw, X } from "lucide-react";
 import type { HostConfig, SessionId } from "../../types";
 import { useSessionStore } from "../../stores/session-store";
+import { useTabStore } from "../../stores/tab-store";
 
 interface DisconnectOverlayProps {
   sessionId: SessionId;
@@ -42,8 +43,11 @@ export function DisconnectOverlay({
       }
 
       const { removeSession, addSession } = useSessionStore.getState();
+      const label = hostConfig.label || `${hostConfig.username}@${hostConfig.host}`;
+      useTabStore.getState().removeTab(sessionId);
       removeSession(sessionId);
       addSession(newSessionId as SessionId, hostConfig);
+      useTabStore.getState().addTab({ type: "terminal", id: newSessionId, label });
     } catch (err) {
       const msg =
         err instanceof Error ? err.message

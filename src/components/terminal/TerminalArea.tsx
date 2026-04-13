@@ -1,17 +1,13 @@
 import { useState } from "react";
-import { Columns2, Rows2, Globe, Maximize2, Minimize2, X } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
-import type { LayoutNode } from "../../types";
-import { Terminal } from "./Terminal";
-import { SplitContainer } from "./SplitContainer";
-import { DisconnectOverlay } from "./DisconnectOverlay";
-import { TerminalSearchBar } from "./TerminalSearchBar";
-import { HostPickerDropdown } from "./HostPickerDropdown";
-import { ContextMenu } from "../shared/ContextMenu";
-import type { ContextMenuItem } from "../shared/ContextMenu";
 import { useSessionStore } from "../../stores/session-store";
-import { useUiStore } from "../../stores/ui-store";
 import { useTerminalSearchStore } from "../../stores/terminal-search-store";
+import { useUiStore } from "../../stores/ui-store";
+import type { LayoutNode } from "../../types";
+import { DisconnectOverlay } from "./DisconnectOverlay";
+import { PaneHeader } from "./PaneHeader";
+import { SplitContainer } from "./SplitContainer";
+import { Terminal } from "./Terminal";
+import { TerminalSearchBar } from "./TerminalSearchBar";
 
 interface TerminalAreaProps {
   node: LayoutNode;
@@ -23,8 +19,9 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
   const session = useSessionStore((s) => s.sessions.get(sessionId));
   const isPending = useUiStore((s) => s.pendingPanes.has(sessionId));
   const isActive = useSessionStore((s) => s.activeSessionId === sessionId);
+  const isZoomed = useSessionStore((s) => s.zoomedPaneId === sessionId);
   const hasSplits = useSessionStore((s) => {
-    const tabId = s.activeTabId;
+    const tabId = s.activeTerminalTabId;
     if (!tabId) return false;
     const tab = s.tabs.get(tabId);
     return tab ? tab.layout.type === "split" : false;
@@ -47,101 +44,42 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
   const showOverlay =
     session?.status === "Disconnected" || session?.status === "Error";
 
-  const showFocusRing = isActive && hasSplits;
-
-  const handleContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY });
-  };
-
-  const contextItems: ContextMenuItem[] = [
-    {
-      label: "Split Horizontal",
-      icon: Columns2,
-      onClick: () => {
-        invoke<string>("ssh_split_session", { sourceSessionId: sessionId })
-            .then((newId) => useSessionStore.getState().splitPane("horizontal", sessionId, newId))
-            .catch((err) => console.error("Split failed:", err));
-      },
-    },
-    {
-      label: "Split Vertical",
-      icon: Rows2,
-      onClick: () => {
-        invoke<string>("ssh_split_session", { sourceSessionId: sessionId })
-            .then((newId) => useSessionStore.getState().splitPane("vertical", sessionId, newId))
-            .catch((err) => console.error("Split failed:", err));
-      },
-    },
-    {
-      label: "Connect to Host...",
-      icon: Globe,
-      separator: true,
-      onClick: () => {
-        // Create a pending split to pick a new host
-        const pendingId = crypto.randomUUID();
-        useUiStore.getState().addPendingPane(pendingId);
-        useSessionStore.getState().addPendingSplit("horizontal", sessionId, pendingId);
-      },
-    },
-    {
-      label: zoomedPaneId === sessionId ? "Unzoom Pane" : "Zoom Pane",
-      icon: zoomedPaneId === sessionId ? Minimize2 : Maximize2,
-      separator: true,
-      onClick: () => {
-        useSessionStore.getState().toggleZoom(sessionId);
-      },
-    },
-    ...(hasSplits
-      ? [
-          {
-            label: "Close Pane",
-            icon: X,
-            danger: true,
-            onClick: () => {
-              invoke("ssh_disconnect", { sessionId })
-                .catch(() => { /* already disconnected */ })
-                .finally(() => {
-                  useSessionStore.getState().unsplitPane(sessionId);
-                  useSessionStore.getState().removeSession(sessionId);
-                });
-            },
-          } satisfies ContextMenuItem,
-        ]
-      : []),
-  ];
-
+  // When zoomed, this pane expands to fill the entire tab area
+  // while staying in the same DOM tree (no remount).
+  // Non-zoomed sibling panes get hidden by SplitContainer.
   return (
     <div
       className={[
-        "relative h-full w-full",
-        showFocusRing ? "ring-1 ring-inset ring-accent/40" : "",
+        "group/pane flex flex-col rounded-lg overflow-hidden border",
+        "transition-[border-color,box-shadow] duration-[var(--duration-fast)]",
+        isZoomed
+          ? "fixed-zoom absolute inset-0 z-30 border-accent/40"
+          : "relative h-full w-full",
+        !isZoomed && isActive && hasSplits
+          ? "border-accent/40 shadow-[0_0_0_1px_oklch(var(--accent)/.12)]"
+          : !isZoomed ? "border-border/60" : "",
       ].join(" ")}
       onClick={() => {
         if (!isActive) setActiveSession(sessionId);
       }}
       onContextMenu={handleContextMenu}
     >
-      <Terminal sessionId={sessionId} />
+      <PaneHeader sessionId={sessionId} />
 
-      {searchOpen && <TerminalSearchBar sessionId={sessionId} />}
+      <div className="relative flex-1 min-h-0">
+        <Terminal sessionId={sessionId} />
 
-      {showOverlay && session && (
-        <DisconnectOverlay
-          sessionId={sessionId}
-          status={session.status as "Disconnected" | "Error"}
-          message={session.statusMessage}
-          hostConfig={session.hostConfig}
-        />
-      )}
+        {searchOpen && <TerminalSearchBar sessionId={sessionId} />}
 
-      {contextMenu && (
-        <ContextMenu
-          items={contextItems}
-          position={contextMenu}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
+        {showOverlay && session && (
+          <DisconnectOverlay
+            sessionId={sessionId}
+            status={session.status as "Disconnected" | "Error"}
+            message={session.statusMessage}
+            hostConfig={session.hostConfig}
+          />
+        )}
+      </div>
     </div>
   );
 }

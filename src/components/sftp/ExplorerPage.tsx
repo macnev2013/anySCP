@@ -1,78 +1,38 @@
-import { useState, useEffect } from "react";
+import { FolderOpen, Cloud } from "lucide-react";
+import { SftpBrowser } from "./SftpBrowser";
+import { S3Browser } from "../s3/S3Browser";
 import { useSftpStore } from "../../stores/sftp-store";
 import { useS3Store } from "../../stores/s3-store";
-import { SftpBrowser } from "./SftpBrowser";
-import { SftpSessionPicker } from "./SftpSessionPicker";
-import { ExplorerTabs } from "./ExplorerTabs";
-import { S3Browser } from "../s3/S3Browser";
-import type { ExplorerTab } from "./ExplorerTabs";
 
-export function ExplorerPage() {
-  const sftpSessions = useSftpStore((s) => s.sessions);
-  const activeSftpSessionId = useSftpStore((s) => s.activeSftpSessionId);
-  const setActiveSftpSession = useSftpStore((s) => s.setActiveSftpSession);
+interface ExplorerPageProps {
+  sftpSessionId?: string;
+  s3SessionId?: string;
+}
 
-  const s3Sessions = useS3Store((s) => s.sessions);
-  const activeS3SessionId = useS3Store((s) => s.activeS3SessionId);
-  const setActiveS3Session = useS3Store((s) => s.setActiveS3Session);
+export function ExplorerPage({ sftpSessionId, s3SessionId }: ExplorerPageProps) {
+  const sftpSession = useSftpStore((s) => sftpSessionId ? s.sessions.get(sftpSessionId) : null);
+  const s3Session = useS3Store((s) => s3SessionId ? s.sessions.get(s3SessionId) : null);
 
-  const totalSessions = sftpSessions.size + s3Sessions.size;
-
-  // Derive the active tab from store state
-  const [activeTab, setActiveTab] = useState<ExplorerTab | null>(null);
-
-  // Sync active tab from stores
-  useEffect(() => {
-    if (activeSftpSessionId && sftpSessions.has(activeSftpSessionId)) {
-      const session = sftpSessions.get(activeSftpSessionId)!;
-      setActiveTab({ type: "sftp", id: activeSftpSessionId, label: session.label });
-    } else if (activeS3SessionId && s3Sessions.has(activeS3SessionId)) {
-      const session = s3Sessions.get(activeS3SessionId)!;
-      setActiveTab({ type: "s3", id: activeS3SessionId, label: session.label });
-    } else if (sftpSessions.size > 0) {
-      const first = sftpSessions.values().next().value;
-      if (first) {
-        setActiveTab({ type: "sftp", id: first.sftpSessionId, label: first.label });
-        setActiveSftpSession(first.sftpSessionId);
-      }
-    } else if (s3Sessions.size > 0) {
-      const first = s3Sessions.values().next().value;
-      if (first) {
-        setActiveTab({ type: "s3", id: first.sessionId, label: first.label });
-        setActiveS3Session(first.sessionId);
-      }
-    } else {
-      setActiveTab(null);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSftpSessionId, activeS3SessionId, sftpSessions.size, s3Sessions.size]);
-
-  const handleSelectTab = (tab: ExplorerTab) => {
-    setActiveTab(tab);
-    if (tab.type === "sftp") {
-      setActiveSftpSession(tab.id);
-      setActiveS3Session(null);
-    } else {
-      setActiveS3Session(tab.id);
-      setActiveSftpSession(null);
-    }
-  };
-
-  // No sessions — show the session picker
-  if (totalSessions === 0) {
-    return <SftpSessionPicker />;
-  }
+  const label = sftpSession?.label ?? s3Session?.label ?? "Explorer";
+  const isSftp = !!sftpSessionId;
+  const Icon = isSftp ? FolderOpen : Cloud;
 
   return (
-    <div className="flex flex-col h-full">
-      <ExplorerTabs activeTab={activeTab} onSelectTab={handleSelectTab} />
-      <div className="flex-1 min-h-0">
-        {activeTab?.type === "sftp" && (
-          <SftpBrowser sftpSessionId={activeTab.id} />
-        )}
-        {activeTab?.type === "s3" && (
-          <S3Browser sessionId={activeTab.id} />
-        )}
+    <div className="flex flex-col h-full p-2">
+      <div className="flex flex-col flex-1 min-h-0 rounded-lg overflow-hidden border border-border/60">
+        {/* Pane header — matching terminal pane style */}
+        <div className="flex items-center h-8 px-2.5 gap-2.5 shrink-0 no-select bg-bg-surface/80 border-b border-border/60">
+          <Icon size={13} strokeWidth={1.8} className="shrink-0 text-status-connected" aria-hidden="true" />
+          <span className="text-[11px] font-mono truncate flex-1 min-w-0 text-text-primary leading-none" title={label}>
+            {label}
+          </span>
+        </div>
+
+        {/* Browser content */}
+        <div className="flex-1 min-h-0 bg-bg-base">
+          {sftpSessionId && <SftpBrowser sftpSessionId={sftpSessionId} />}
+          {s3SessionId && <S3Browser sessionId={s3SessionId} />}
+        </div>
       </div>
     </div>
   );

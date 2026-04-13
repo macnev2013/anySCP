@@ -13,8 +13,14 @@ interface SplitContainerProps {
 export function SplitContainer({ node, path, tabId }: SplitContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const updateSplitRatio = useSessionStore((s) => s.updateSplitRatio);
+  const isZoomed = useSessionStore((s) => s.zoomedPaneId !== null);
 
   const isHorizontal = node.direction === "horizontal";
+
+  // Keep a ref to the latest ratio so the drag callback always reads the
+  // current value, not a stale closure capture.
+  const ratioRef = useRef(node.ratio);
+  ratioRef.current = node.ratio;
 
   const handleResize = useCallback(
     (delta: number) => {
@@ -25,25 +31,22 @@ export function SplitContainer({ node, path, tabId }: SplitContainerProps) {
       if (total === 0) return;
 
       const ratioDelta = delta / total;
-      const newRatio = Math.max(0.15, Math.min(0.85, node.ratio + ratioDelta));
+      const newRatio = Math.max(0.15, Math.min(0.85, ratioRef.current + ratioDelta));
       updateSplitRatio(tabId, path, newRatio);
     },
-    [isHorizontal, node.ratio, path, tabId, updateSplitRatio],
+    [isHorizontal, path, tabId, updateSplitRatio],
   );
-
-  const firstPercent = `${node.ratio * 100}%`;
-  const secondPercent = `${(1 - node.ratio) * 100}%`;
 
   return (
     <div
       ref={containerRef}
-      className={`flex h-full w-full ${isHorizontal ? "flex-row" : "flex-col"}`}
+      className={`flex h-full w-full gap-0.5 overflow-visible ${isHorizontal ? "flex-row" : "flex-col"}`}
     >
-      <div style={{ [isHorizontal ? "width" : "height"]: firstPercent }} className="min-w-0 min-h-0">
+      <div style={{ flex: `${node.ratio} 1 0%` }} className="min-w-0 min-h-0 overflow-hidden">
         <TerminalArea node={node.children[0]} path={[...path, 0]} tabId={tabId} />
       </div>
-      <SplitHandle direction={node.direction} onResize={handleResize} />
-      <div style={{ [isHorizontal ? "width" : "height"]: secondPercent }} className="min-w-0 min-h-0">
+      {!isZoomed && <SplitHandle direction={node.direction} onResize={handleResize} />}
+      <div style={{ flex: `${1 - node.ratio} 1 0%` }} className="min-w-0 min-h-0 overflow-hidden">
         <TerminalArea node={node.children[1]} path={[...path, 1]} tabId={tabId} />
       </div>
     </div>
