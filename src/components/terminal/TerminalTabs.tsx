@@ -22,8 +22,13 @@ export function TerminalTabs() {
     if (!tab) return;
     const sessionIds = collectIds(tab);
     const { invoke } = await import("@tauri-apps/api/core");
+    const { pendingPanes, removePendingPane } = useUiStore.getState();
     for (const sid of sessionIds) {
-      try { await invoke("ssh_disconnect", { sessionId: sid }); } catch { /* already disconnected */ }
+      if (pendingPanes.has(sid)) {
+        removePendingPane(sid);
+      } else {
+        try { await invoke("ssh_disconnect", { sessionId: sid }); } catch { /* already disconnected */ }
+      }
       useSessionStore.getState().removeSession(sid);
     }
   };

@@ -7,6 +7,7 @@ import type {
   LayoutNode,
   SplitDirection,
 } from "../types";
+import { startBuffering, stopBuffering } from "./output-buffer";
 
 // ─── Layout tree helpers ─────────────────────────────────────────────────────
 
@@ -118,6 +119,12 @@ interface SessionState {
   unsplitPane: (sessionId: string) => void;
   updateSplitRatio: (tabId: string, path: number[], ratio: number) => void;
   toggleZoom: (sessionId: string) => void;
+  /** Create a new tab with an empty placeholder pane (no SSH session). */
+  addPendingTab: (pendingId: string) => void;
+  /** Split an existing pane, placing a placeholder in the new half. */
+  addPendingSplit: (direction: SplitDirection, targetSessionId: string, pendingId: string) => void;
+  /** Replace a pending placeholder pane with a real connected session. */
+  replacePendingPane: (pendingId: string, realSessionId: SessionId, hostConfig: HostConfig) => void;
 }
 
 // ─── Store ───────────────────────────────────────────────────────────────────
@@ -130,7 +137,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   activeTabId: null,
   zoomedPaneId: null,
 
-  addSession: (id, hostConfig) =>
+  addSession: (id, hostConfig) => {
+    startBuffering(id);
     set((state) => {
       const sessions = new Map(state.sessions);
       sessions.set(id, {
@@ -154,9 +162,11 @@ export const useSessionStore = create<SessionState>((set) => ({
         tabOrder: [...state.tabOrder, id],
         activeTabId: id,
       };
-    }),
+    });
+  },
 
-  removeSession: (id) =>
+  removeSession: (id) => {
+    stopBuffering(id);
     set((state) => {
       const sessions = new Map(state.sessions);
       sessions.delete(id);
@@ -219,7 +229,8 @@ export const useSessionStore = create<SessionState>((set) => ({
         activeTabId,
         zoomedPaneId: state.zoomedPaneId === id ? null : state.zoomedPaneId,
       };
-    }),
+    });
+  },
 
   setActiveSession: (id) =>
     set((state) => {
@@ -253,7 +264,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       return { sessions };
     }),
 
-  splitPane: (direction, targetSessionId, newSessionId) =>
+  splitPane: (direction, targetSessionId, newSessionId) => {
+    startBuffering(newSessionId);
     set((state) => {
       const tabId = findTabForSession(state.tabs, targetSessionId);
       if (!tabId) return state;
@@ -287,7 +299,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       tabs.set(tabId, { ...tab, layout: newLayout });
 
       return { sessions, tabs, activeSessionId: newSessionId };
-    }),
+    });
+  },
 
   unsplitPane: (sessionId) =>
     set((state) => {
@@ -319,4 +332,90 @@ export const useSessionStore = create<SessionState>((set) => ({
       zoomedPaneId: state.zoomedPaneId === sessionId ? null : sessionId,
       activeSessionId: sessionId,
     })),
+
+  addPendingTab: (pendingId) =>
+    set((state) => {
+      const tabs = new Map(state.tabs);
+      tabs.set(pendingId, {
+        layout: { type: "pane", sessionId: pendingId },
+        label: "New Connection",
+      });
+      return {
+        tabs,
+        tabOrder: [...state.tabOrder, pendingId],
+        activeTabId: pendingId,
+        activeSessionId: pendingId,
+      };
+    }),
+
+  addPendingSplit: (direction, targetSessionId, pendingId) =>
+    set((state) => {
+      const tabId = findTabForSession(state.tabs, targetSessionId);
+      if (!tabId) return state;
+      const tab = state.tabs.get(tabId);
+      if (!tab) return state;
+
+      const splitNode: LayoutNode = {
+        type: "split",
+        direction,
+        ratio: 0.5,
+        children: [
+          { type: "pane", sessionId: targetSessionId },
+          { type: "pane", sessionId: pendingId },
+        ],
+      };
+
+      const newLayout = replacePane(tab.layout, targetSessionId, splitNode);
+      const tabs = new Map(state.tabs);
+      tabs.set(tabId, { ...tab, layout: newLayout });
+
+      return { tabs, activeSessionId: pendingId };
+    }),
+
+  replacePendingPane: (pendingId, realSessionId, hostConfig) => {
+    startBuffering(realSessionId);
+    set((state) => {
+      const sessions = new Map(state.sessions);
+      sessions.set(realSessionId, {
+        id: realSessionId,
+        hostConfig,
+        status: "Connected",
+        label: hostConfig.label || `${hostConfig.username}@${hostConfig.host}`,
+      });
+
+      // Replace the pending pane ID in whichever tab/layout it lives
+      const tabId = findTabForSession(state.tabs, pendingId);
+      if (!tabId) return { sessions };
+
+      const tab = state.tabs.get(tabId)!;
+      const newLayout = replacePane(tab.layout, pendingId, {
+        type: "pane",
+        sessionId: realSessionId,
+      });
+
+      const tabs = new Map(state.tabs);
+      // If the tab key itself is the pending ID (i.e. it was a pending tab), re-key it
+      if (tabId === pendingId) {
+        tabs.delete(pendingId);
+        tabs.set(realSessionId, {
+          layout: newLayout,
+          label: hostConfig.label || `${hostConfig.username}@${hostConfig.host}`,
+        });
+        return {
+          sessions,
+          tabs,
+          tabOrder: state.tabOrder.map((t) => (t === pendingId ? realSessionId : t)),
+          activeTabId: state.activeTabId === pendingId ? realSessionId : state.activeTabId,
+          activeSessionId: state.activeSessionId === pendingId ? realSessionId : state.activeSessionId,
+        };
+      }
+
+      tabs.set(tabId, { ...tab, layout: newLayout });
+      return {
+        sessions,
+        tabs,
+        activeSessionId: state.activeSessionId === pendingId ? realSessionId : state.activeSessionId,
+      };
+    });
+  },
 }));

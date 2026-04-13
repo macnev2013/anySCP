@@ -13,7 +13,6 @@ import { Sidebar } from "../sidebar";
 import { TerminalTabs, TerminalPane, TerminalArea } from "../terminal";
 import { StatusBar } from "./StatusBar";
 import { HostsDashboard, HostEditModal } from "../dashboard";
-import { NEW_HOST_ID } from "../dashboard/HostEditModal";
 import { SnippetsPage, SnippetQuickPanel } from "../snippets";
 import { ExplorerPage } from "../sftp";
 import { SettingsPage } from "../settings";
@@ -53,8 +52,6 @@ export function AppShell() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePage, tabs.size, sftpSessionCount, setActivePage]);
 
-  const openNewHost = () => setEditingHostId(NEW_HOST_ID);
-
   const shortcuts = useMemo<ShortcutDef[]>(
     () => [
       {
@@ -65,7 +62,13 @@ export function AppShell() {
       {
         key: "t",
         meta: true,
-        action: openNewHost,
+        action: () => {
+          // New tab with embedded host picker
+          const pendingId = crypto.randomUUID();
+          useUiStore.getState().addPendingPane(pendingId);
+          useSessionStore.getState().addPendingTab(pendingId);
+          useUiStore.getState().setActivePage("terminal");
+        },
       },
       {
         key: "w",
@@ -83,6 +86,16 @@ export function AppShell() {
           // Check if this pane is in a split
           const activeTab = activeTabId ? tabs.get(activeTabId) : null;
           const isInSplit = activeTab && activeTab.layout.type === "split";
+
+          const isPending = useUiStore.getState().pendingPanes.has(activeSessionId);
+
+          if (isPending) {
+            // Pending pane has no SSH session — just clean up layout
+            useUiStore.getState().removePendingPane(activeSessionId);
+            if (isInSplit) unsplitPane(activeSessionId);
+            else removeSession(activeSessionId);
+            return;
+          }
 
           (async () => {
             try {
@@ -184,6 +197,32 @@ export function AppShell() {
           const { activeSessionId } = useSessionStore.getState();
           if (!activeSessionId) return;
           useTerminalSearchStore.getState().openSearch(activeSessionId);
+        },
+        when: () => useUiStore.getState().activePage === "terminal",
+      },
+      // ─── New tab / split with host picker ──────────────────────────
+      {
+        key: "n",
+        meta: true,
+        action: () => {
+          // New tab with embedded host picker
+          const pendingId = crypto.randomUUID();
+          useUiStore.getState().addPendingPane(pendingId);
+          useSessionStore.getState().addPendingTab(pendingId);
+          useUiStore.getState().setActivePage("terminal");
+        },
+      },
+      {
+        key: "n",
+        meta: true,
+        shift: true,
+        action: () => {
+          const { activeSessionId } = useSessionStore.getState();
+          if (!activeSessionId) return;
+          // Split pane with embedded host picker in the new half
+          const pendingId = crypto.randomUUID();
+          useUiStore.getState().addPendingPane(pendingId);
+          useSessionStore.getState().addPendingSplit("horizontal", activeSessionId, pendingId);
         },
         when: () => useUiStore.getState().activePage === "terminal",
       },

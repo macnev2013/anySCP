@@ -14,6 +14,13 @@ export function useResizeHandle({ direction, onResize, onResizeEnd }: UseResizeH
   const startPos = useRef(0);
   const isDragging = useRef(false);
 
+  // Keep refs to latest callbacks so the drag closure always calls the current version.
+  // Without this, the mousemove closure captures a stale onResize that reads an old ratio.
+  const onResizeRef = useRef(onResize);
+  onResizeRef.current = onResize;
+  const onResizeEndRef = useRef(onResizeEnd);
+  onResizeEndRef.current = onResizeEnd;
+
   // Safety cleanup: if component unmounts mid-drag, reset body styles
   useEffect(() => {
     return () => {
@@ -34,7 +41,7 @@ export function useResizeHandle({ direction, onResize, onResizeEnd }: UseResizeH
         const current = direction === "horizontal" ? moveEvent.clientX : moveEvent.clientY;
         const delta = current - startPos.current;
         startPos.current = current;
-        onResize(delta);
+        onResizeRef.current(delta);
       };
 
       const onMouseUp = () => {
@@ -43,7 +50,7 @@ export function useResizeHandle({ direction, onResize, onResizeEnd }: UseResizeH
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
         isDragging.current = false;
-        onResizeEnd?.();
+        onResizeEndRef.current?.();
       };
 
       document.body.style.cursor = direction === "horizontal" ? "col-resize" : "row-resize";
@@ -51,7 +58,7 @@ export function useResizeHandle({ direction, onResize, onResizeEnd }: UseResizeH
       document.addEventListener("mousemove", onMouseMove);
       document.addEventListener("mouseup", onMouseUp);
     },
-    [direction, onResize, onResizeEnd],
+    [direction],
   );
 
   return { onMouseDown };

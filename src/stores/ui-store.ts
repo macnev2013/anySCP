@@ -10,6 +10,8 @@ interface UiState {
   editingHostId: string | null;
   snippetPanelOpen: boolean;
   snippetPanelPinned: boolean;
+  /** Pane IDs that are placeholders waiting for the user to pick a host. */
+  pendingPanes: Set<string>;
 
   toggleSidebar: () => void;
   setSidebarWidth: (width: number) => void;
@@ -18,6 +20,8 @@ interface UiState {
   setEditingHostId: (id: string | null) => void;
   toggleSnippetPanel: () => void;
   toggleSnippetPanelPinned: () => void;
+  addPendingPane: (id: string) => void;
+  removePendingPane: (id: string) => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -28,6 +32,7 @@ export const useUiStore = create<UiState>((set) => ({
   editingHostId: null,
   snippetPanelOpen: false,
   snippetPanelPinned: false,
+  pendingPanes: new Set(),
 
   toggleSidebar: () =>
     set((s) => ({ sidebarExpanded: !s.sidebarExpanded })),
@@ -49,4 +54,18 @@ export const useUiStore = create<UiState>((set) => ({
 
   toggleSnippetPanelPinned: () =>
     set((s) => ({ snippetPanelPinned: !s.snippetPanelPinned })),
+
+  addPendingPane: (id) =>
+    set((s) => {
+      const pendingPanes = new Set(s.pendingPanes);
+      pendingPanes.add(id);
+      return { pendingPanes };
+    }),
+
+  removePendingPane: (id) =>
+    set((s) => {
+      const pendingPanes = new Set(s.pendingPanes);
+      pendingPanes.delete(id);
+      return { pendingPanes };
+    }),
 }));

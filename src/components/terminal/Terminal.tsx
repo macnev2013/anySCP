@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { invoke } from "@tauri-apps/api/core";
 import "@xterm/xterm/css/xterm.css";
 import { useSshOutput } from "../../hooks/use-ssh-events";
 import { useDebouncedCallback } from "../../hooks/use-debounce";
 import { registerSearchAddon, unregisterSearchAddon } from "../../stores/terminal-registry";
+import { drainBuffer } from "../../stores/output-buffer";
 import { useSettingsStore } from "../../stores/settings-store";
 import type { SessionId } from "../../types";
 
@@ -53,10 +55,7 @@ export function Terminal({ sessionId }: TerminalProps) {
 
   const debouncedResize = useDebouncedCallback(
     (cols: number, rows: number) => {
-      (async () => {
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("ssh_resize_pty", { sessionId, cols, rows });
-      })();
+      invoke("ssh_resize_pty", { sessionId, cols, rows }).catch(() => {});
     },
     150,
   );
@@ -98,6 +97,11 @@ export function Terminal({ sessionId }: TerminalProps) {
 
       terminalRef.current = terminal;
       fitAddonRef.current = fitAddon;
+
+      // Replay any buffered output from before this mount
+      for (const chunk of drainBuffer(sessionId)) {
+        terminal.write(chunk);
+      }
 
       // Try WebGL addon for GPU-accelerated rendering
       import("@xterm/addon-webgl")
@@ -141,6 +145,8 @@ export function Terminal({ sessionId }: TerminalProps) {
         if (e.metaKey && !e.shiftKey && e.key === "f") return false;
         // Cmd+D — split horizontal / Cmd+Shift+D — split vertical
         if (e.metaKey && e.key.toLowerCase() === "d") return false;
+        // Cmd+N — new tab + host picker / Cmd+Shift+N — split + host picker
+        if (e.metaKey && e.key.toLowerCase() === "n") return false;
         // Cmd+Shift+Enter — zoom/unzoom pane
         if (e.metaKey && e.shiftKey && e.key === "Enter") return false;
         // Cmd+Option+Arrow — navigate panes
@@ -149,12 +155,10 @@ export function Terminal({ sessionId }: TerminalProps) {
       });
 
       // Send keystrokes to backend
+      const encoder = new TextEncoder();
       terminal.onData((data) => {
-        (async () => {
-          const { invoke } = await import("@tauri-apps/api/core");
-          const bytes = Array.from(new TextEncoder().encode(data));
-          await invoke("ssh_send_input", { sessionId, data: bytes });
-        })();
+        const bytes = Array.from(encoder.encode(data));
+        invoke("ssh_send_input", { sessionId, data: bytes }).catch(() => {});
       });
 
       // Handle terminal resize
