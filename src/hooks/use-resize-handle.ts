@@ -16,6 +16,10 @@ export function useResizeHandle({ direction, onResize, onResizeEnd }: UseResizeH
   const startPos = useRef(0);
   const isDragging = useRef(false);
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  const onResizeRef = useRef(onResize);
+  const onResizeEndRef = useRef(onResizeEnd);
+  onResizeRef.current = onResize;
+  onResizeEndRef.current = onResizeEnd;
 
   // Safety cleanup: if component unmounts mid-drag, reset body styles + remove overlay
   useEffect(() => {

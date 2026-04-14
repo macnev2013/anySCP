@@ -334,8 +334,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       });
       return {
         tabs,
-        tabOrder: [...state.tabOrder, pendingId],
-        activeTabId: pendingId,
+        activeTerminalTabId: pendingId,
         activeSessionId: pendingId,
       };
     }),
@@ -396,8 +395,7 @@ export const useSessionStore = create<SessionState>((set) => ({
         return {
           sessions,
           tabs,
-          tabOrder: state.tabOrder.map((t) => (t === pendingId ? realSessionId : t)),
-          activeTabId: state.activeTabId === pendingId ? realSessionId : state.activeTabId,
+          activeTerminalTabId: state.activeTerminalTabId === pendingId ? realSessionId : state.activeTerminalTabId,
           activeSessionId: state.activeSessionId === pendingId ? realSessionId : state.activeSessionId,
         };
       }

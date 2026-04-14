@@ -52,7 +52,7 @@ export function AppShell() {
           const pendingId = crypto.randomUUID();
           useUiStore.getState().addPendingPane(pendingId);
           useSessionStore.getState().addPendingTab(pendingId);
-          useUiStore.getState().setActivePage("terminal");
+          useTabStore.getState().addTab({ type: "terminal", id: pendingId, label: "New Connection" });
         },
       },
       {
@@ -83,7 +83,12 @@ export function AppShell() {
             void (async () => {
               try {
                 const { invoke } = await import("@tauri-apps/api/core");
-                await invoke("ssh_disconnect", { sessionId: activeSessionId });
+                const sess = useSessionStore.getState().sessions.get(activeSessionId);
+                if (sess?.isLocal) {
+                  await invoke("local_disconnect", { sessionId: activeSessionId });
+                } else {
+                  await invoke("ssh_disconnect", { sessionId: activeSessionId });
+                }
               } catch { /* already disconnected */ }
 
               if (isInSplit) {
@@ -150,15 +155,26 @@ export function AppShell() {
         key: "d",
         meta: true,
         action: () => {
-          const { activeSessionId } = useSessionStore.getState();
+          const { activeSessionId, sessions } = useSessionStore.getState();
           if (!activeSessionId) return;
+          const isLocal = sessions.get(activeSessionId)?.isLocal === true;
           void (async () => {
             try {
               const { invoke } = await import("@tauri-apps/api/core");
-              const newId = await invoke<string>("ssh_split_session", {
-                sourceSessionId: activeSessionId,
-              });
+              let newId: string;
+              if (isLocal) {
+                newId = await invoke<string>("local_open_pty");
+              } else {
+                newId = await invoke<string>("ssh_split_session", {
+                  sourceSessionId: activeSessionId,
+                });
+              }
               useSessionStore.getState().splitPane("horizontal", activeSessionId, newId);
+              if (isLocal) {
+                const s = useSessionStore.getState().sessions;
+                const ns = s.get(newId);
+                if (ns) s.set(newId, { ...ns, isLocal: true });
+              }
             } catch (err) {
               console.error("Split failed:", err);
             }
@@ -171,15 +187,26 @@ export function AppShell() {
         meta: true,
         shift: true,
         action: () => {
-          const { activeSessionId } = useSessionStore.getState();
+          const { activeSessionId, sessions } = useSessionStore.getState();
           if (!activeSessionId) return;
+          const isLocal = sessions.get(activeSessionId)?.isLocal === true;
           void (async () => {
             try {
               const { invoke } = await import("@tauri-apps/api/core");
-              const newId = await invoke<string>("ssh_split_session", {
-                sourceSessionId: activeSessionId,
-              });
+              let newId: string;
+              if (isLocal) {
+                newId = await invoke<string>("local_open_pty");
+              } else {
+                newId = await invoke<string>("ssh_split_session", {
+                  sourceSessionId: activeSessionId,
+                });
+              }
               useSessionStore.getState().splitPane("vertical", activeSessionId, newId);
+              if (isLocal) {
+                const s = useSessionStore.getState().sessions;
+                const ns = s.get(newId);
+                if (ns) s.set(newId, { ...ns, isLocal: true });
+              }
             } catch (err) {
               console.error("Split failed:", err);
             }
@@ -225,7 +252,7 @@ export function AppShell() {
           const pendingId = crypto.randomUUID();
           useUiStore.getState().addPendingPane(pendingId);
           useSessionStore.getState().addPendingTab(pendingId);
-          useUiStore.getState().setActivePage("terminal");
+          useTabStore.getState().addTab({ type: "terminal", id: pendingId, label: "New Connection" });
         },
       },
       {
@@ -240,7 +267,7 @@ export function AppShell() {
           useUiStore.getState().addPendingPane(pendingId);
           useSessionStore.getState().addPendingSplit("horizontal", activeSessionId, pendingId);
         },
-        when: () => useUiStore.getState().activePage === "terminal",
+        when: () => useTabStore.getState().tabs.get(useTabStore.getState().activeTabId ?? "")?.type === "terminal",
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -1,17 +1,17 @@
 import { X, Code, Columns2, Rows2, Maximize2 } from "lucide-react";
 import { useSessionStore, countPanes, getTopDirection } from "../../stores/session-store";
 import type { Tab } from "../../stores/session-store";
+import { useTabStore } from "../../stores/tab-store";
 import { useUiStore } from "../../stores/ui-store";
 
 export function TerminalTabs() {
-  const tabOrder = useSessionStore((s) => s.tabOrder);
+  const tabOrder = useTabStore((s) => s.tabOrder);
   const tabs = useSessionStore((s) => s.tabs);
   const sessions = useSessionStore((s) => s.sessions);
-  const activeTabId = useSessionStore((s) => s.activeTabId);
-  const setActiveTab = useSessionStore((s) => s.setActiveTab);
+  const activeTabId = useTabStore((s) => s.activeTabId);
+  const setActiveTab = useTabStore((s) => s.setActiveTab);
   const zoomedPaneId = useSessionStore((s) => s.zoomedPaneId);
 
-  const setActivePage = useUiStore((s) => s.setActivePage);
   const toggleSnippetPanel = useUiStore((s) => s.toggleSnippetPanel);
   const snippetPanelOpen = useUiStore((s) => s.snippetPanelOpen);
 
@@ -62,7 +62,7 @@ export function TerminalTabs() {
           return (
             <button
               key={tabId}
-              onClick={() => { setActiveTab(tabId); setActivePage("terminal"); }}
+              onClick={() => { setActiveTab(tabId); }}
               title={tab.label + (paneCount > 1 ? ` (${paneCount} panes)` : "")}
               aria-label={`${tab.label}${paneCount > 1 ? `, ${paneCount} panes` : ""}`}
               className={[

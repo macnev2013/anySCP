@@ -1,9 +1,9 @@
-import { useState } from "react";
 import { useSessionStore } from "../../stores/session-store";
 import { useTerminalSearchStore } from "../../stores/terminal-search-store";
 import { useUiStore } from "../../stores/ui-store";
 import type { LayoutNode } from "../../types";
 import { DisconnectOverlay } from "./DisconnectOverlay";
+import { HostPickerDropdown } from "./HostPickerDropdown";
 import { PaneHeader } from "./PaneHeader";
 import { SplitContainer } from "./SplitContainer";
 import { Terminal } from "./Terminal";
@@ -26,17 +26,23 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
     const tab = s.tabs.get(tabId);
     return tab ? tab.layout.type === "split" : false;
   });
-  const zoomedPaneId = useSessionStore((s) => s.zoomedPaneId);
   const setActiveSession = useSessionStore((s) => s.setActiveSession);
   const searchOpen = useTerminalSearchStore((s) => s.openSessions.has(sessionId));
-
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
   // Pending pane — show embedded host picker instead of terminal
   if (isPending) {
     return (
-      <div className="relative h-full w-full">
-        <HostPickerDropdown pendingId={sessionId} />
+      <div
+        className={[
+          "group/pane flex flex-col rounded-lg overflow-hidden border",
+          "transition-[border-color,box-shadow] duration-[var(--duration-fast)]",
+          "relative h-full w-full border-border/60",
+        ].join(" ")}
+      >
+        <PaneHeader sessionId={sessionId} isPending />
+        <div className="relative flex-1 min-h-0">
+          <HostPickerDropdown pendingId={sessionId} />
+        </div>
       </div>
     );
   }
@@ -62,7 +68,6 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
       onClick={() => {
         if (!isActive) setActiveSession(sessionId);
       }}
-      onContextMenu={handleContextMenu}
     >
       <PaneHeader sessionId={sessionId} />
 

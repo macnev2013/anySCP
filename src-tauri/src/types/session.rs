@@ -38,6 +38,15 @@ pub enum AuthMethod {
     },
 }
 
+/// Configuration for an SSH bastion/jump host.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BastionConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_method: AuthMethod,
+}
+
 /// Everything needed to open an SSH connection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostConfig {
@@ -53,6 +62,8 @@ pub struct HostConfig {
     pub default_shell: Option<String>,
     /// Command to execute after the shell is ready.
     pub startup_command: Option<String>,
+    /// Bastion / jump host configuration.
+    pub bastion: Option<BastionConfig>,
 }
 
 /// Lifecycle state of a single SSH session.

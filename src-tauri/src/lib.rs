@@ -1,6 +1,7 @@
 mod ai;
 mod db;
 mod import;
+mod local_terminal;
 mod portforward;
 mod s3;
 mod sftp;
@@ -67,6 +68,7 @@ pub fn run() {
             Ok(())
         })
         .manage(SshManager::new())
+        .manage(local_terminal::LocalTerminalManager::new())
         .invoke_handler(tauri::generate_handler![
             // SFTP — session & filesystem
             sftp::commands::sftp_open,
@@ -154,6 +156,11 @@ pub fn run() {
             s3::commands::s3_list_transfers,
             s3::commands::s3_clear_finished_transfers,
             s3::commands::s3_edit_in_vscode,
+            // Local terminal
+            local_terminal::local_open_pty,
+            local_terminal::local_send_input,
+            local_terminal::local_resize_pty,
+            local_terminal::local_disconnect,
             // SSH config import
             import::commands::import_parse_ssh_config,
             import::commands::import_save_ssh_hosts,

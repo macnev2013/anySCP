@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Search, Plus, Clock, Server } from "lucide-react";
+import { Search, Plus, Clock, Server, Monitor } from "lucide-react";
 import { useHostsStore } from "../../stores/hosts-store";
 import { useSessionStore } from "../../stores/session-store";
+import { useTabStore } from "../../stores/tab-store";
 import { useUiStore } from "../../stores/ui-store";
+import { startBuffering } from "../../stores/output-buffer";
 import { NEW_HOST_ID } from "../dashboard/HostEditModal";
 import type { SavedHost, RecentConnection } from "../../types";
 
@@ -39,6 +41,7 @@ export function HostPickerDropdown({ pendingId }: HostPickerDropdownProps) {
         const { invoke } = await import("@tauri-apps/api/core");
         const sessionId = await invoke<string>("connect_saved_host", { hostId: host.id });
 
+        const label = host.label || `${host.username}@${host.host}`;
         useSessionStore.getState().replacePendingPane(pendingId, sessionId, {
           host: host.host,
           port: host.port,
@@ -47,6 +50,12 @@ export function HostPickerDropdown({ pendingId }: HostPickerDropdownProps) {
           auth_method: { type: "password", password: "" },
         });
         useUiStore.getState().removePendingPane(pendingId);
+        // Re-key the unified tab if this was a pending tab
+        const tabStore = useTabStore.getState();
+        if (tabStore.tabs.has(pendingId)) {
+          tabStore.removeTab(pendingId);
+          tabStore.addTab({ type: "terminal", id: sessionId, label });
+        }
         void useHostsStore.getState().recordConnection(host.id);
       } catch (err) {
         const msg = err && typeof err === "object" && "message" in err
@@ -68,6 +77,7 @@ export function HostPickerDropdown({ pendingId }: HostPickerDropdownProps) {
         const { invoke } = await import("@tauri-apps/api/core");
         const sessionId = await invoke<string>("connect_saved_host", { hostId: conn.host_id });
 
+        const label = conn.host_label || `${conn.username}@${conn.host}`;
         useSessionStore.getState().replacePendingPane(pendingId, sessionId, {
           host: conn.host,
           port: conn.port,
@@ -76,6 +86,12 @@ export function HostPickerDropdown({ pendingId }: HostPickerDropdownProps) {
           auth_method: { type: "password", password: "" },
         });
         useUiStore.getState().removePendingPane(pendingId);
+        // Re-key the unified tab if this was a pending tab
+        const tabStore = useTabStore.getState();
+        if (tabStore.tabs.has(pendingId)) {
+          tabStore.removeTab(pendingId);
+          tabStore.addTab({ type: "terminal", id: sessionId, label });
+        }
         void useHostsStore.getState().recordConnection(conn.host_id);
       } catch (err) {
         const msg = err && typeof err === "object" && "message" in err
@@ -87,6 +103,47 @@ export function HostPickerDropdown({ pendingId }: HostPickerDropdownProps) {
     },
     [pendingId, connecting],
   );
+
+  const connectLocal = useCallback(async () => {
+    if (connecting) return;
+    setConnecting("__local__");
+    setError(null);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const sessionId = await invoke<string>("local_open_pty");
+
+      const label = "Local Terminal";
+      startBuffering(sessionId);
+
+      // Add to session store as a local session
+      useSessionStore.getState().replacePendingPane(pendingId, sessionId, {
+        host: "localhost",
+        port: 0,
+        username: "",
+        auth_method: { type: "password", password: "" },
+        label,
+      });
+      // Mark as local so Terminal.tsx uses local_* commands
+      const sessions = useSessionStore.getState().sessions;
+      const session = sessions.get(sessionId);
+      if (session) {
+        sessions.set(sessionId, { ...session, isLocal: true });
+      }
+      useUiStore.getState().removePendingPane(pendingId);
+
+      const tabStore = useTabStore.getState();
+      if (tabStore.tabs.has(pendingId)) {
+        tabStore.removeTab(pendingId);
+        tabStore.addTab({ type: "terminal", id: sessionId, label });
+      }
+    } catch (err) {
+      const msg = err && typeof err === "object" && "message" in err
+        ? String((err as { message: string }).message)
+        : "Failed to open local terminal";
+      setError(msg);
+      setConnecting(null);
+    }
+  }, [pendingId, connecting]);
 
   const lowerQuery = query.toLowerCase();
   const filteredHosts = hosts.filter(
@@ -128,6 +185,19 @@ export function HostPickerDropdown({ pendingId }: HostPickerDropdownProps) {
             {error}
           </div>
         )}
+
+        {/* Local terminal */}
+        <button
+          disabled={connecting !== null}
+          onClick={() => connectLocal()}
+          className="w-full px-3 py-2.5 mb-2 flex items-center gap-2.5 text-left text-[length:var(--text-sm)] text-text-primary bg-bg-overlay border border-border rounded-lg hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] disabled:opacity-50"
+        >
+          <Monitor size={14} className="text-accent shrink-0" />
+          <span className="font-medium">Local Terminal</span>
+          {connecting === "__local__" && (
+            <span className="ml-auto text-[length:var(--text-xs)] text-text-muted">Opening...</span>
+          )}
+        </button>
 
         {/* Scrollable host list */}
         <div className="flex-1 overflow-y-auto border border-border rounded-lg bg-bg-overlay">

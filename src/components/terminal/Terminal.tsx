@@ -5,6 +5,8 @@ import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
 import { useDebouncedCallback } from "../../hooks/use-debounce";
 import { useSshOutput } from "../../hooks/use-ssh-events";
+import { drainBuffer } from "../../stores/output-buffer";
+import { useSessionStore } from "../../stores/session-store";
 import { useSettingsStore } from "../../stores/settings-store";
 import { registerSearchAddon, unregisterSearchAddon } from "../../stores/terminal-registry";
 import type { SessionId } from "../../types";
@@ -47,12 +49,17 @@ export function Terminal({ sessionId }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const isLocal = useSessionStore((s) => s.sessions.get(sessionId)?.isLocal === true);
 
   const settings = useSettingsStore.getState();
 
   const debouncedResize = useDebouncedCallback(
     (cols: number, rows: number) => {
-      invoke("ssh_resize_pty", { sessionId, cols, rows }).catch(() => {});
+      if (isLocal) {
+        invoke("local_resize_pty", { sessionId, cols: cols as number, rows: rows as number }).catch(() => {});
+      } else {
+        invoke("ssh_resize_pty", { sessionId, cols, rows }).catch(() => {});
+      }
     },
     150,
   );
@@ -92,6 +99,12 @@ export function Terminal({ sessionId }: TerminalProps) {
 
       terminal.open(containerRef.current);
 
+      // Replay buffered output so history survives remounts (e.g. splits)
+      const buffered = drainBuffer(sessionId);
+      for (const chunk of buffered) {
+        terminal.write(chunk);
+      }
+
       terminalRef.current = terminal;
       fitAddonRef.current = fitAddon;
 
@@ -128,8 +141,12 @@ export function Terminal({ sessionId }: TerminalProps) {
       });
 
       terminal.onData((data) => {
-        const bytes = Array.from(encoder.encode(data));
-        invoke("ssh_send_input", { sessionId, data: bytes }).catch(() => {});
+        const bytes = Array.from(new TextEncoder().encode(data));
+        if (isLocal) {
+          invoke("local_send_input", { sessionId, data: bytes }).catch(() => {});
+        } else {
+          invoke("ssh_send_input", { sessionId, data: bytes }).catch(() => {});
+        }
       });
 
       terminal.onResize(({ cols, rows }) => {
