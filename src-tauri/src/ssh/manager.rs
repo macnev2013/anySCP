@@ -52,60 +52,54 @@ impl SshManager {
             ..Default::default()
         });
 
-        let addr = format!("{}:{}", config.host, config.port);
-        let handler = SshClientHandler;
-        let mut handle = client::connect(russh_config, &addr, handler)
-            .await
-            .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
-
-        let authenticated = match &config.auth_method {
-            AuthMethod::Password { password } => handle
-                .authenticate_password(&config.username, password)
+        // If a bastion/jump host is configured, connect through it
+        let mut handle = if let Some(ref bastion) = config.bastion {
+            // Connect to the bastion host
+            let bastion_addr = format!("{}:{}", bastion.host, bastion.port);
+            let bastion_handler = SshClientHandler;
+            let mut bastion_handle = client::connect(russh_config.clone(), &bastion_addr, bastion_handler)
                 .await
-                .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?,
-            AuthMethod::PrivateKey {
-                key_path,
-                passphrase,
-            } => {
-                let key_data = tokio::fs::read_to_string(key_path)
-                    .await
-                    .map_err(|e| SshError::IoError(e.to_string()))?;
+                .map_err(|e| SshError::ConnectionFailed(format!("bastion connection failed: {e}")))?;
 
-                // Auto-convert PPK to OpenSSH if detected
-                let key_data = if super::keys::is_ppk_format(&key_data) {
-                    let kp = key_path.clone();
-                    let pp = passphrase.clone();
-                    tokio::task::spawn_blocking(move || {
-                        super::keys::convert_ppk_to_openssh(&kp, pp.as_deref())
-                    })
-                    .await
-                    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
-                    ?
+            // Authenticate to bastion with its own credentials
+            let bastion_auth = Self::authenticate(&mut bastion_handle, &bastion.username, &bastion.auth_method).await?;
+
+            if !bastion_auth {
+                return Err(SshError::AuthenticationFailed(
+                    "bastion rejected credentials".to_string(),
+                ));
+            }
+
+            info!(session_id = %sid, bastion = %bastion.host, "Bastion authenticated, opening tunnel");
+
+            // Open a forwarded TCP channel through the bastion to the target host
+            let channel = bastion_handle
+                .channel_open_direct_tcpip(&config.host, config.port as u32, &bastion.host, bastion.port as u32)
+                .await
+                .map_err(|e| SshError::ConnectionFailed(format!("bastion tunnel failed: {e}")))?;
+
+            // Use the forwarded channel as transport for the real SSH connection
+            let target_handler = SshClientHandler;
+            let target_config = Arc::new(client::Config {
+                inactivity_timeout: if keepalive_secs > 0 {
+                    Some(std::time::Duration::from_secs(keepalive_secs))
                 } else {
-                    key_data
-                };
-
-                Self::auth_with_key_data(
-                    &mut handle,
-                    &config.username,
-                    &key_data,
-                    passphrase.as_deref(),
-                )
-                .await?
-            }
-            AuthMethod::PrivateKeyData {
-                key_data,
-                passphrase,
-            } => {
-                Self::auth_with_key_data(
-                    &mut handle,
-                    &config.username,
-                    key_data,
-                    passphrase.as_deref(),
-                )
-                .await?
-            }
+                    None
+                },
+                ..Default::default()
+            });
+            client::connect_stream(target_config, channel.into_stream(), target_handler)
+                .await
+                .map_err(|e| SshError::ConnectionFailed(format!("target connection via bastion failed: {e}")))?
+        } else {
+            let addr = format!("{}:{}", config.host, config.port);
+            let handler = SshClientHandler;
+            client::connect(russh_config, &addr, handler)
+                .await
+                .map_err(|e| SshError::ConnectionFailed(e.to_string()))?
         };
+
+        let authenticated = Self::authenticate(&mut handle, &config.username, &config.auth_method).await?;
 
         if !authenticated {
             return Err(SshError::AuthenticationFailed(
@@ -146,60 +140,44 @@ impl SshManager {
             ..Default::default()
         });
 
-        let addr = format!("{}:{}", config.host, config.port);
-        let handler = SshClientHandler;
-        let mut handle = client::connect(russh_config, &addr, handler)
-            .await
-            .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
-
-        let authenticated = match &config.auth_method {
-            AuthMethod::Password { password } => handle
-                .authenticate_password(&config.username, password)
+        // If a bastion/jump host is configured, connect through it
+        let mut handle = if let Some(ref bastion) = config.bastion {
+            let bastion_addr = format!("{}:{}", bastion.host, bastion.port);
+            let bastion_handler = SshClientHandler;
+            let mut bastion_handle = client::connect(russh_config.clone(), &bastion_addr, bastion_handler)
                 .await
-                .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?,
-            AuthMethod::PrivateKey {
-                key_path,
-                passphrase,
-            } => {
-                let key_data = tokio::fs::read_to_string(key_path)
-                    .await
-                    .map_err(|e| SshError::IoError(e.to_string()))?;
+                .map_err(|e| SshError::ConnectionFailed(format!("bastion connection failed: {e}")))?;
 
-                // Auto-convert PPK to OpenSSH if detected
-                let key_data = if super::keys::is_ppk_format(&key_data) {
-                    let kp = key_path.clone();
-                    let pp = passphrase.clone();
-                    tokio::task::spawn_blocking(move || {
-                        super::keys::convert_ppk_to_openssh(&kp, pp.as_deref())
-                    })
-                    .await
-                    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
-                    ?
-                } else {
-                    key_data
-                };
+            let bastion_auth = Self::authenticate(&mut bastion_handle, &bastion.username, &bastion.auth_method).await?;
 
-                Self::auth_with_key_data(
-                    &mut handle,
-                    &config.username,
-                    &key_data,
-                    passphrase.as_deref(),
-                )
-                .await?
+            if !bastion_auth {
+                return Err(SshError::AuthenticationFailed(
+                    "bastion rejected credentials".to_string(),
+                ));
             }
-            AuthMethod::PrivateKeyData {
-                key_data,
-                passphrase,
-            } => {
-                Self::auth_with_key_data(
-                    &mut handle,
-                    &config.username,
-                    key_data,
-                    passphrase.as_deref(),
-                )
-                .await?
-            }
+
+            let channel = bastion_handle
+                .channel_open_direct_tcpip(&config.host, config.port as u32, &bastion.host, bastion.port as u32)
+                .await
+                .map_err(|e| SshError::ConnectionFailed(format!("bastion tunnel failed: {e}")))?;
+
+            let target_handler = SshClientHandler;
+            let target_config = Arc::new(client::Config {
+                inactivity_timeout: None,
+                ..Default::default()
+            });
+            client::connect_stream(target_config, channel.into_stream(), target_handler)
+                .await
+                .map_err(|e| SshError::ConnectionFailed(format!("target connection via bastion failed: {e}")))?
+        } else {
+            let addr = format!("{}:{}", config.host, config.port);
+            let handler = SshClientHandler;
+            client::connect(russh_config, &addr, handler)
+                .await
+                .map_err(|e| SshError::ConnectionFailed(e.to_string()))?
         };
+
+        let authenticated = Self::authenticate(&mut handle, &config.username, &config.auth_method).await?;
 
         if !authenticated {
             return Err(SshError::AuthenticationFailed(
@@ -230,6 +208,41 @@ impl SshManager {
             .authenticate_publickey(username, key)
             .await
             .map_err(|e| SshError::AuthenticationFailed(e.to_string()))
+    }
+
+    /// Authenticate a handle using an AuthMethod. Handles password, key file, and inline key.
+    async fn authenticate(
+        handle: &mut client::Handle<SshClientHandler>,
+        username: &str,
+        auth_method: &AuthMethod,
+    ) -> Result<bool, SshError> {
+        match auth_method {
+            AuthMethod::Password { password } => handle
+                .authenticate_password(username, password)
+                .await
+                .map_err(|e| SshError::AuthenticationFailed(e.to_string())),
+            AuthMethod::PrivateKey { key_path, passphrase } => {
+                let key_data = tokio::fs::read_to_string(key_path)
+                    .await
+                    .map_err(|e| SshError::IoError(e.to_string()))?;
+                let key_data = if super::keys::is_ppk_format(&key_data) {
+                    let kp = key_path.clone();
+                    let pp = passphrase.clone();
+                    tokio::task::spawn_blocking(move || {
+                        super::keys::convert_ppk_to_openssh(&kp, pp.as_deref())
+                    })
+                    .await
+                    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
+                    ?
+                } else {
+                    key_data
+                };
+                Self::auth_with_key_data(handle, username, &key_data, passphrase.as_deref()).await
+            }
+            AuthMethod::PrivateKeyData { key_data, passphrase } => {
+                Self::auth_with_key_data(handle, username, key_data, passphrase.as_deref()).await
+            }
+        }
     }
 
     /// Return the shared Handle for an active session.  Used by the SFTP layer

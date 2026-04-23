@@ -185,6 +185,7 @@ pub async fn pf_start_tunnel(
         keep_alive_interval: None,
         default_shell: None,
         startup_command: None,
+        bastion: None, // Port forwarding does not use bastion tunneling for now
     };
 
     let session_id = ssh_manager.connect_no_pty(config).await?;

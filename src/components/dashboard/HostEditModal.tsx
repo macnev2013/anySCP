@@ -25,13 +25,21 @@ interface FormState {
   authType: AuthType;
   groupId: string;
   keyPath: string;
-  proxyJump: string;
   keepAliveInterval: string;
   defaultShell: string;
   startupCommand: string;
   // Auth credentials (only used at connect-time, never persisted)
   password: string;
   passphrase: string;
+  // Bastion / Jump Host
+  bastionEnabled: boolean;
+  bastionHost: string;
+  bastionPort: string;
+  bastionUsername: string;
+  bastionAuthType: AuthType;
+  bastionKeyPath: string;
+  bastionPassword: string;
+  bastionPassphrase: string;
   // Appearance
   color: string;
   environment: string;
@@ -48,12 +56,19 @@ const EMPTY_FORM: FormState = {
   authType: "password",
   groupId: "",
   keyPath: "",
-  proxyJump: "",
   keepAliveInterval: "",
   defaultShell: "",
   startupCommand: "",
   password: "",
   passphrase: "",
+  bastionEnabled: false,
+  bastionHost: "",
+  bastionPort: "22",
+  bastionUsername: "",
+  bastionAuthType: "password",
+  bastionKeyPath: "",
+  bastionPassword: "",
+  bastionPassphrase: "",
   color: "",
   environment: "",
   osType: "",
@@ -72,6 +87,39 @@ function extractError(err: unknown, fallback: string): string {
 function savedHostToForm(host: SavedHost): FormState {
   const authType: AuthType =
     host.auth_type === "privateKey" ? "privateKey" : "password";
+
+  // Parse bastion config from JSON stored in proxy_jump
+  let bastionEnabled = false;
+  let bastionHost = "";
+  let bastionPort = "22";
+  let bastionUsername = "";
+  let bastionAuthType: AuthType = "password";
+  let bastionKeyPath = "";
+  if (host.proxy_jump) {
+    try {
+      const b = JSON.parse(host.proxy_jump);
+      bastionEnabled = true;
+      bastionHost = b.host ?? "";
+      bastionPort = String(b.port ?? 22);
+      bastionUsername = b.username ?? "";
+      bastionAuthType = b.auth_type === "privateKey" ? "privateKey" : "password";
+      bastionKeyPath = b.key_path ?? "";
+    } catch {
+      // Legacy format: user@host:port string — parse it
+      bastionEnabled = true;
+      const atIdx = host.proxy_jump.indexOf("@");
+      const rest = atIdx >= 0 ? host.proxy_jump.slice(atIdx + 1) : host.proxy_jump;
+      bastionUsername = atIdx >= 0 ? host.proxy_jump.slice(0, atIdx) : "";
+      const colonIdx = rest.lastIndexOf(":");
+      if (colonIdx >= 0) {
+        bastionHost = rest.slice(0, colonIdx);
+        bastionPort = rest.slice(colonIdx + 1) || "22";
+      } else {
+        bastionHost = rest;
+      }
+    }
+  }
+
   return {
     label: host.label ?? "",
     host: host.host,
@@ -80,12 +128,19 @@ function savedHostToForm(host: SavedHost): FormState {
     authType,
     groupId: host.group_id ?? "",
     keyPath: host.key_path ?? "",
-    proxyJump: host.proxy_jump ?? "",
     keepAliveInterval: host.keep_alive_interval != null ? String(host.keep_alive_interval) : "",
     defaultShell: host.default_shell ?? "",
     startupCommand: host.startup_command ?? "",
     password: "",
     passphrase: "",
+    bastionEnabled,
+    bastionHost,
+    bastionPort,
+    bastionUsername,
+    bastionAuthType,
+    bastionKeyPath,
+    bastionPassword: "",
+    bastionPassphrase: "",
     color: host.color ?? "",
     environment: host.environment ?? "",
     osType: host.os_type ?? "",
@@ -265,6 +320,11 @@ export function HostEditModal() {
       const kai = parseInt(form.keepAliveInterval, 10);
       if (isNaN(kai) || kai < 0) return "Keep Alive must be a positive number";
     }
+    if (form.bastionEnabled) {
+      if (!form.bastionHost.trim()) return "Bastion server is required when Over SSH is enabled";
+      const bp = parseInt(form.bastionPort, 10);
+      if (isNaN(bp) || bp < 1 || bp > 65535) return "Bastion port must be between 1 and 65535";
+    }
     return null;
   };
 
@@ -306,7 +366,17 @@ export function HostEditModal() {
       key_path: form.authType === "privateKey" && form.keyPath.trim()
         ? form.keyPath.trim()
         : null,
-      proxy_jump: form.proxyJump.trim() || null,
+      proxy_jump: form.bastionEnabled && form.bastionHost.trim()
+        ? JSON.stringify({
+            host: form.bastionHost.trim(),
+            port: parseInt(form.bastionPort, 10) || 22,
+            username: form.bastionUsername.trim(),
+            auth_type: form.bastionAuthType,
+            key_path: form.bastionAuthType === "privateKey" && form.bastionKeyPath.trim()
+              ? form.bastionKeyPath.trim()
+              : undefined,
+          })
+        : null,
       keep_alive_interval: form.keepAliveInterval.trim()
         ? parseInt(form.keepAliveInterval, 10)
         : null,
@@ -342,6 +412,23 @@ export function HostEditModal() {
       await invoke("vault_save_credential", { hostId, credential });
     }
     // If the field is empty and not cleared, leave the existing keychain entry untouched.
+
+    // Save bastion credentials under "bastion:<hostId>" key
+    const bastionVaultKey = `bastion:${hostId}`;
+    if (form.bastionEnabled) {
+      if (form.bastionAuthType === "password" && form.bastionPassword) {
+        const credential: StoredCredential = { type: "Password", password: form.bastionPassword };
+        await invoke("vault_save_credential", { hostId: bastionVaultKey, credential });
+      } else if (form.bastionAuthType === "privateKey" && form.bastionPassphrase) {
+        const credential: StoredCredential = { type: "KeyPassphrase", passphrase: form.bastionPassphrase };
+        await invoke("vault_save_credential", { hostId: bastionVaultKey, credential });
+      }
+    } else {
+      // Bastion disabled — clean up any stale bastion credential
+      try {
+        await invoke("vault_delete_credential", { hostId: bastionVaultKey });
+      } catch { /* non-fatal */ }
+    }
   };
 
   // ── Save ────────────────────────────────────────────────────────────────────
@@ -721,7 +808,183 @@ export function HostEditModal() {
                 </>
               )}
 
-              {/* TODO: Proxy / Jump Host — hidden until backend support is implemented */}
+              {/* ── Over SSH / Bastion toggle ─────────────────────────── */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setField("bastionEnabled", !form.bastionEnabled)}
+                  disabled={isBusy}
+                  className={[
+                    "inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-[length:var(--text-sm)] font-medium",
+                    "border transition-colors duration-[var(--duration-fast)]",
+                    form.bastionEnabled
+                      ? "bg-accent/15 text-accent border-accent/30"
+                      : "bg-bg-base text-text-secondary border-border hover:border-border-focus",
+                  ].join(" ")}
+                >
+                  Over SSH
+                  <svg
+                    width="12" height="12" viewBox="0 0 12 12"
+                    className={`transition-transform duration-150 ${form.bastionEnabled ? "rotate-180" : ""}`}
+                  >
+                    <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* ── Bastion fields (shown when enabled) ────────────────── */}
+              {form.bastionEnabled && (
+                <div className="space-y-3 pl-3 border-l-2 border-accent/20">
+                  {/* Bastion Host + Port */}
+                  <div className="flex gap-3">
+                    <div className="flex-1">
+                      <label htmlFor="hem-bastion-host" className={labelClass}>
+                        Server
+                        <span className="ml-0.5 text-status-error">*</span>
+                      </label>
+                      <input
+                        id="hem-bastion-host"
+                        type="text"
+                        value={form.bastionHost}
+                        onChange={(e) => setField("bastionHost", e.target.value)}
+                        placeholder="bastion.example.com"
+                        disabled={isBusy}
+                        className={`${inputClass} font-mono`}
+                      />
+                    </div>
+                    <div className="w-20">
+                      <label htmlFor="hem-bastion-port" className={labelClass}>
+                        Port
+                      </label>
+                      <input
+                        id="hem-bastion-port"
+                        type="number"
+                        min={1}
+                        max={65535}
+                        value={form.bastionPort}
+                        onChange={(e) => setField("bastionPort", e.target.value)}
+                        disabled={isBusy}
+                        className={`${inputClass} font-mono`}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Bastion Username */}
+                  <div>
+                    <label htmlFor="hem-bastion-user" className={labelClass}>
+                      User
+                    </label>
+                    <input
+                      id="hem-bastion-user"
+                      type="text"
+                      value={form.bastionUsername}
+                      onChange={(e) => setField("bastionUsername", e.target.value)}
+                      placeholder="root"
+                      disabled={isBusy}
+                      className={inputClass}
+                    />
+                  </div>
+
+                  {/* Bastion Auth Type */}
+                  <div>
+                    <label className={labelClass}>Auth Type</label>
+                    <div className="flex gap-2">
+                      {(["password", "privateKey"] as const).map((t) => (
+                        <button
+                          key={t}
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => setField("bastionAuthType", t)}
+                          className={[
+                            "flex-1 px-3 py-1.5 rounded-lg text-[length:var(--text-sm)] border transition-colors duration-[var(--duration-fast)]",
+                            form.bastionAuthType === t
+                              ? "bg-accent/15 text-accent border-accent/30 font-medium"
+                              : "bg-bg-base text-text-secondary border-border hover:border-border-focus",
+                          ].join(" ")}
+                        >
+                          {t === "password" ? "Password" : "SSH Key"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Bastion Password */}
+                  {form.bastionAuthType === "password" && (
+                    <div>
+                      <label htmlFor="hem-bastion-password" className={labelClass}>
+                        Password
+                      </label>
+                      <input
+                        id="hem-bastion-password"
+                        type="password"
+                        value={form.bastionPassword}
+                        onChange={(e) => setField("bastionPassword", e.target.value)}
+                        placeholder="Enter password"
+                        disabled={isBusy}
+                        className={inputClass}
+                      />
+                    </div>
+                  )}
+
+                  {/* Bastion SSH Key */}
+                  {form.bastionAuthType === "privateKey" && (
+                    <>
+                      <div>
+                        <label htmlFor="hem-bastion-keypath" className={labelClass}>
+                          SSH Key
+                        </label>
+                        <div className="flex gap-2">
+                          <input
+                            id="hem-bastion-keypath"
+                            type="text"
+                            value={form.bastionKeyPath}
+                            onChange={(e) => setField("bastionKeyPath", e.target.value)}
+                            placeholder="~/.ssh/id_ed25519"
+                            disabled={isBusy}
+                            className={`${inputClass} font-mono flex-1`}
+                          />
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => {
+                              void (async () => {
+                                try {
+                                  const { open } = await import("@tauri-apps/plugin-dialog");
+                                  const path = await open({
+                                    title: "Select SSH Private Key",
+                                    multiple: false,
+                                  });
+                                  if (path && typeof path === "string") {
+                                    setField("bastionKeyPath", path);
+                                  }
+                                } catch { /* cancelled */ }
+                              })();
+                            }}
+                            className="px-3 py-2 rounded-lg border border-border bg-bg-base text-[length:var(--text-sm)] text-text-secondary hover:border-border-focus transition-colors duration-[var(--duration-fast)] shrink-0"
+                          >
+                            Browse
+                          </button>
+                        </div>
+                      </div>
+                      <div>
+                        <label htmlFor="hem-bastion-passphrase" className={labelClass}>
+                          Passphrase
+                          <span className="ml-1 text-text-muted font-normal">(if encrypted)</span>
+                        </label>
+                        <input
+                          id="hem-bastion-passphrase"
+                          type="password"
+                          value={form.bastionPassphrase}
+                          onChange={(e) => setField("bastionPassphrase", e.target.value)}
+                          placeholder="Leave empty if none"
+                          disabled={isBusy}
+                          className={inputClass}
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
 
               {/* Keep Alive + Default Shell row */}
               <div className="flex gap-3">

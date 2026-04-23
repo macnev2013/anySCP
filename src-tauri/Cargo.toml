@@ -67,6 +67,9 @@ tauri-plugin-updater = "2"
 ssh2-config = "0.7.0"
 rust-s3 = { version = "0.37.1", default-features = false, features = ["tokio-rustls-tls"] }
 
+# Local terminal (PTY)
+portable-pty = "0.8"
+
 # Telemetry
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 dirs = "6"

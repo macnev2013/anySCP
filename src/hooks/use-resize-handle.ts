@@ -1,4 +1,4 @@
-import { useCallback, useRef, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 interface UseResizeHandleOptions {
   direction: "horizontal" | "vertical";
@@ -16,6 +16,10 @@ export function useResizeHandle({ direction, onResize, onResizeEnd }: UseResizeH
   const startPos = useRef(0);
   const isDragging = useRef(false);
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  const onResizeRef = useRef(onResize);
+  const onResizeEndRef = useRef(onResizeEnd);
+  onResizeRef.current = onResize;
+  onResizeEndRef.current = onResizeEnd;
 
   // Safety cleanup: if component unmounts mid-drag, reset body styles + remove overlay
   useEffect(() => {
@@ -50,7 +54,7 @@ export function useResizeHandle({ direction, onResize, onResizeEnd }: UseResizeH
         const current = direction === "horizontal" ? moveEvent.clientX : moveEvent.clientY;
         const delta = current - startPos.current;
         startPos.current = current;
-        onResize(delta);
+        onResizeRef.current(delta);
       };
 
       const onMouseUp = () => {
@@ -61,7 +65,7 @@ export function useResizeHandle({ direction, onResize, onResizeEnd }: UseResizeH
         overlay.remove();
         overlayRef.current = null;
         isDragging.current = false;
-        onResizeEnd?.();
+        onResizeEndRef.current?.();
       };
 
       document.body.style.cursor = direction === "horizontal" ? "col-resize" : "row-resize";
@@ -69,7 +73,7 @@ export function useResizeHandle({ direction, onResize, onResizeEnd }: UseResizeH
       document.addEventListener("mousemove", onMouseMove);
       document.addEventListener("mouseup", onMouseUp);
     },
-    [direction, onResize, onResizeEnd],
+    [direction],
   );
 
   return { onMouseDown };

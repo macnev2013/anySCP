@@ -1,11 +1,14 @@
 import { Columns2, Rows2, Maximize2, Minimize2, X } from "lucide-react";
 import { useSessionStore } from "../../stores/session-store";
+import { useTabStore } from "../../stores/tab-store";
+import { useUiStore } from "../../stores/ui-store";
 
 interface PaneHeaderProps {
   sessionId: string;
+  isPending?: boolean;
 }
 
-export function PaneHeader({ sessionId }: PaneHeaderProps) {
+export function PaneHeader({ sessionId, isPending }: PaneHeaderProps) {
   const session = useSessionStore((s) => s.sessions.get(sessionId));
   const isActive = useSessionStore((s) => s.activeSessionId === sessionId);
   const isZoomed = useSessionStore((s) => s.zoomedPaneId === sessionId);
@@ -16,23 +19,45 @@ export function PaneHeader({ sessionId }: PaneHeaderProps) {
     return tab ? tab.layout.type === "split" : false;
   });
 
-  if (!session) return null;
+  if (!session && !isPending) return null;
 
-  const status = session.status;
-  const dotColor =
-    status === "Connected"    ? "bg-status-connected" :
-    status === "Connecting"   ? "bg-status-connecting motion-safe:animate-pulse" :
-    status === "Error"        ? "bg-status-error" :
-                                "bg-status-disconnected";
+  const status = session?.status;
+  const dotColor = isPending
+    ? "bg-text-muted"
+    : status === "Connected"    ? "bg-status-connected"
+    : status === "Connecting"   ? "bg-status-connecting motion-safe:animate-pulse"
+    : status === "Error"        ? "bg-status-error"
+    :                             "bg-status-disconnected";
 
   const handleSplit = (direction: "horizontal" | "vertical") => {
+    if (isPending) {
+      // Split the pending pane — create a new pending pane in the new half
+      const pendingId = crypto.randomUUID();
+      useUiStore.getState().addPendingPane(pendingId);
+      useSessionStore.getState().addPendingSplit(direction, sessionId, pendingId);
+      return;
+    }
     void (async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        const newId = await invoke<string>("ssh_split_session", {
-          sourceSessionId: sessionId,
-        });
+        const isLocalSession = session?.isLocal === true;
+        let newId: string;
+        if (isLocalSession) {
+          newId = await invoke<string>("local_open_pty");
+        } else {
+          newId = await invoke<string>("ssh_split_session", {
+            sourceSessionId: sessionId,
+          });
+        }
         useSessionStore.getState().splitPane(direction, sessionId, newId);
+        // If the source is local, mark the new session as local too
+        if (isLocalSession) {
+          const sessions = useSessionStore.getState().sessions;
+          const newSession = sessions.get(newId);
+          if (newSession) {
+            sessions.set(newId, { ...newSession, isLocal: true });
+          }
+        }
       } catch (err) {
         console.error("Split failed:", err);
       }
@@ -40,10 +65,29 @@ export function PaneHeader({ sessionId }: PaneHeaderProps) {
   };
 
   const handleClose = () => {
+    if (isPending) {
+      useUiStore.getState().removePendingPane(sessionId);
+      const tabStore = useTabStore.getState();
+      if (tabStore.tabs.has(sessionId)) {
+        tabStore.removeTab(sessionId);
+      }
+      const sessionStore = useSessionStore.getState();
+      if (sessionStore.tabs.has(sessionId)) {
+        sessionStore.removeSession(sessionId);
+      } else {
+        sessionStore.unsplitPane(sessionId);
+      }
+      return;
+    }
     void (async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("ssh_disconnect", { sessionId });
+        const isLocalSession = session?.isLocal === true;
+        if (isLocalSession) {
+          await invoke("local_disconnect", { sessionId });
+        } else {
+          await invoke("ssh_disconnect", { sessionId });
+        }
       } catch { /* already disconnected */ }
 
       const store = useSessionStore.getState();
@@ -80,9 +124,9 @@ export function PaneHeader({ sessionId }: PaneHeaderProps) {
           "text-[11px] font-mono truncate flex-1 min-w-0 leading-none",
           isActive ? "text-text-primary" : "text-text-muted",
         ].join(" ")}
-        title={session.label}
+        title={isPending ? "New Connection" : session!.label}
       >
-        {session.hostConfig.host}
+        {isPending ? "New Connection" : session!.hostConfig.host}
       </span>
 
       {/* Action buttons — visible on hover or when active */}

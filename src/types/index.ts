@@ -1,6 +1,8 @@
 export type {
   SessionId,
   AuthMethod,
+  BastionAuthType,
+  BastionConfig,
   HostConfig,
   ConnectionStatus,
   Session,
