@@ -18,6 +18,7 @@ pub struct SshConfigEntry {
     pub port: Option<u16>,
     pub identity_file: Option<String>,
     pub proxy_jump: Option<String>,
+    pub proxy_command: Option<String>,
     pub keep_alive_interval: Option<u32>,
     pub is_pattern: bool,
     pub already_exists: bool,
@@ -31,6 +32,7 @@ pub struct SshConfigImportEntry {
     pub port: u16,
     pub identity_file: Option<String>,
     pub proxy_jump: Option<String>,
+    pub proxy_command: Option<String>,
     pub keep_alive_interval: Option<u32>,
 }
 
@@ -65,8 +67,14 @@ pub fn parse_ssh_config(
         .map_err(|e| SshError::IoError(format!("Cannot read {}: {e}", config_path.display())))?;
     let mut reader = BufReader::new(file);
 
+    // ALLOW_UNSUPPORTED_FIELDS lets us recover the raw arg list for fields
+    // ssh2-config recognises but doesn't model (e.g. ProxyCommand) — the
+    // alternative is silent drop.
     let config = SshConfig::default()
-        .parse(&mut reader, ParseRule::ALLOW_UNKNOWN_FIELDS)
+        .parse(
+            &mut reader,
+            ParseRule::ALLOW_UNKNOWN_FIELDS | ParseRule::ALLOW_UNSUPPORTED_FIELDS,
+        )
         .map_err(|e| SshError::IoError(format!("Failed to parse SSH config: {e}")))?;
 
     // Pre-scan for Host block names
@@ -109,6 +117,17 @@ pub fn parse_ssh_config(
             .and_then(|jumps| jumps.first())
             .map(|j| format!("{}", j));
 
+        // ssh2-config 0.7 doesn't model ProxyCommand as a typed field; its
+        // tokenized args land in `unsupported_fields["proxycommand"]`. Join
+        // with single spaces — sufficient for the common case (`ssh -W %h:%p
+        // bastion`, `cloudflared access ssh --hostname %h`, etc). Round-trip
+        // for strings with quoted multi-word args may need a manual touch-up.
+        let proxy_command = params
+            .unsupported_fields
+            .get("proxycommand")
+            .filter(|tokens| !tokens.is_empty())
+            .map(|tokens| tokens.join(" "));
+
         let keep_alive_interval = params
             .server_alive_interval
             .map(|d| d.as_secs() as u32);
@@ -129,6 +148,7 @@ pub fn parse_ssh_config(
             port,
             identity_file,
             proxy_jump,
+            proxy_command,
             keep_alive_interval,
             is_pattern,
             already_exists,

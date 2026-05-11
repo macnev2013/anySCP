@@ -35,6 +35,10 @@ pub struct SshSession {
     #[allow(dead_code)]
     session_id: String,
     split_config: SplitConfig,
+    /// Upstream jump-host handles kept alive for the lifetime of this session.
+    /// Dropping them would tear down the channel used as transport for `handle`.
+    #[allow(dead_code)]
+    jump_chain: Vec<Arc<Mutex<Handle<SshClientHandler>>>>,
 }
 
 impl SshSession {
@@ -48,6 +52,7 @@ impl SshSession {
         app_handle: AppHandle,
         default_shell: Option<String>,
         startup_command: Option<String>,
+        jump_chain: Vec<Arc<Mutex<Handle<SshClientHandler>>>>,
     ) -> Result<Self, SshError> {
         // Wrap the handle immediately so it can be shared with SFTP later.
         let handle = Arc::new(Mutex::new(handle));
@@ -170,6 +175,7 @@ impl SshSession {
             reader_task,
             session_id,
             split_config: SplitConfig { default_shell },
+            jump_chain,
         })
     }
 
@@ -276,6 +282,7 @@ impl SshSession {
             reader_task,
             session_id,
             split_config: SplitConfig { default_shell },
+            jump_chain: Vec::new(),
         })
     }
 

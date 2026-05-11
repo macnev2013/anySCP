@@ -26,6 +26,7 @@ interface FormState {
   groupId: string;
   keyPath: string;
   proxyJump: string;
+  proxyCommand: string;
   keepAliveInterval: string;
   defaultShell: string;
   startupCommand: string;
@@ -49,6 +50,7 @@ const EMPTY_FORM: FormState = {
   groupId: "",
   keyPath: "",
   proxyJump: "",
+  proxyCommand: "",
   keepAliveInterval: "",
   defaultShell: "",
   startupCommand: "",
@@ -81,6 +83,7 @@ function savedHostToForm(host: SavedHost): FormState {
     groupId: host.group_id ?? "",
     keyPath: host.key_path ?? "",
     proxyJump: host.proxy_jump ?? "",
+    proxyCommand: host.proxy_command ?? "",
     keepAliveInterval: host.keep_alive_interval != null ? String(host.keep_alive_interval) : "",
     defaultShell: host.default_shell ?? "",
     startupCommand: host.startup_command ?? "",
@@ -288,6 +291,7 @@ export function HostEditModal() {
       os_type: null,
       startup_command: null,
       proxy_jump: null,
+      proxy_command: null,
       keep_alive_interval: null,
       default_shell: null,
       font_size: null,
@@ -307,6 +311,7 @@ export function HostEditModal() {
         ? form.keyPath.trim()
         : null,
       proxy_jump: form.proxyJump.trim() || null,
+      proxy_command: form.proxyCommand.trim() || null,
       keep_alive_interval: form.keepAliveInterval.trim()
         ? parseInt(form.keepAliveInterval, 10)
         : null,
@@ -721,7 +726,48 @@ export function HostEditModal() {
                 </>
               )}
 
-              {/* TODO: Proxy / Jump Host — hidden until backend support is implemented */}
+              {/* ════════════════ PROXY / JUMP HOST ════════════════ */}
+              <SectionHeader>Proxy / Jump host</SectionHeader>
+
+              {/* ProxyJump (single-hop bastion) */}
+              <div>
+                <label htmlFor="hem-proxy-jump" className={labelClass}>
+                  ProxyJump
+                  <span className="ml-1 text-text-muted font-normal">(optional)</span>
+                </label>
+                <input
+                  id="hem-proxy-jump"
+                  type="text"
+                  value={form.proxyJump}
+                  onChange={(e) => setField("proxyJump", e.target.value)}
+                  placeholder="user@bastion.example.com:22"
+                  disabled={isBusy}
+                  className={`${inputClass} font-mono`}
+                />
+                <p className="mt-1 text-[length:var(--text-xs)] text-text-muted">
+                  Single-hop only. Reuses this host&apos;s credentials to authenticate to the bastion.
+                </p>
+              </div>
+
+              {/* ProxyCommand */}
+              <div>
+                <label htmlFor="hem-proxy-command" className={labelClass}>
+                  ProxyCommand
+                  <span className="ml-1 text-text-muted font-normal">(optional)</span>
+                </label>
+                <input
+                  id="hem-proxy-command"
+                  type="text"
+                  value={form.proxyCommand}
+                  onChange={(e) => setField("proxyCommand", e.target.value)}
+                  placeholder="ssh -W %h:%p user@bastion"
+                  disabled={isBusy}
+                  className={`${inputClass} font-mono`}
+                />
+                <p className="mt-1 text-[length:var(--text-xs)] text-text-muted">
+                  Runs as a local subprocess. Tokens: %h host, %p port, %r remote user. If both proxy fields are set, ProxyCommand wins.
+                </p>
+              </div>
 
               {/* Keep Alive + Default Shell row */}
               <div className="flex gap-3">

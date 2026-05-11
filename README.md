@@ -64,7 +64,7 @@ AnySCP is a free, open-source desktop application that combines an SSH terminal,
 - Split terminal panes (horizontal and vertical) within a single SSH session
 - In-terminal search with regex support
 - Tabbed SSH sessions with keyboard shortcuts
-- Configurable keep-alive intervals, startup commands, default shell, and proxy jump (bastion host)
+- Configurable keep-alive intervals, startup commands, default shell, ProxyJump (single-hop bastion host), and ProxyCommand
 - SSH key authentication with automatic PPK-to-OpenSSH conversion
 - Import connections from `~/.ssh/config`
 

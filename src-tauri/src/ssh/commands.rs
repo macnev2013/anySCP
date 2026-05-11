@@ -164,6 +164,8 @@ pub async fn connect_saved_host(
         keep_alive_interval: saved_host.keep_alive_interval,
         default_shell: saved_host.default_shell,
         startup_command: saved_host.startup_command,
+        proxy_jump: saved_host.proxy_jump,
+        proxy_command: saved_host.proxy_command,
     };
 
     let session_id = state.connect(config, app_handle).await?;
@@ -229,6 +231,8 @@ pub async fn connect_saved_host_no_pty(
         keep_alive_interval: None,
         default_shell: None,
         startup_command: None,
+        proxy_jump: saved_host.proxy_jump,
+        proxy_command: saved_host.proxy_command,
     };
 
     state.connect_no_pty(config).await

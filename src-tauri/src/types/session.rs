@@ -53,6 +53,11 @@ pub struct HostConfig {
     pub default_shell: Option<String>,
     /// Command to execute after the shell is ready.
     pub startup_command: Option<String>,
+    /// Single-hop ProxyJump: `[user@]host[:port]`. Ignored if `proxy_command` is set.
+    pub proxy_jump: Option<String>,
+    /// OpenSSH-style ProxyCommand. Tokens %h/%p/%r are expanded at connect time.
+    /// Run via `sh -c` (Unix) or `cmd /C` (Windows) so quotes/pipes/env vars work.
+    pub proxy_command: Option<String>,
 }
 
 /// Lifecycle state of a single SSH session.
