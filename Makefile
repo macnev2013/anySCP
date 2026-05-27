@@ -1,22 +1,50 @@
-.PHONY: ssh-up ssh-down ssh-restart ssh-logs ssh-shell ssh-connect ssh-status ssh-clean
+.PHONY: start-ssh-pass start-ssh-key stop-ssh-pass stop-ssh-key \
+        connect-ssh-pass connect-ssh-key \
+        logs-ssh-pass logs-ssh-key \
+        shell-ssh-pass shell-ssh-key \
+        ssh-keygen ssh-status ssh-clean ssh-clean-keys
 
-# Test SSH server (linuxserver/openssh-server) for local development.
-# Exposes port 2222 with password and key auth enabled.
-SSH_CONTAINER := anyscp-test-sshd
-SSH_IMAGE     := lscr.io/linuxserver/openssh-server:latest
-SSH_PORT      := 2222
-SSH_USER      := testuser
-SSH_PASSWORD  := testpass
+# Test SSH servers (linuxserver/openssh-server) for local development.
+# Two independent containers — password-auth and key-auth — can run in parallel.
+SSH_IMAGE          := lscr.io/linuxserver/openssh-server:latest
+SSH_USER           := testuser
+SSH_PASSWORD       := testpass
 
-ssh-up:
-	@if [ "$$(docker ps -aq -f name=^/$(SSH_CONTAINER)$$)" ]; then \
-		echo "Starting existing container $(SSH_CONTAINER)..."; \
-		docker start $(SSH_CONTAINER) >/dev/null; \
+# Password-auth container
+SSH_PASS_CONTAINER := anyscp-test-sshd-pass
+SSH_PASS_PORT      := 2222
+
+# Key-auth container
+SSH_KEY_CONTAINER  := anyscp-test-sshd-key
+SSH_KEY_PORT       := 2223
+
+# Test SSH keypair — generated on demand, kept out of git.
+SSH_KEY_DIR        := .test-ssh
+SSH_KEY            := $(SSH_KEY_DIR)/id_ed25519
+SSH_PUB_KEY        := $(SSH_KEY).pub
+
+# ─── Keypair ──────────────────────────────────────────────────────────────────
+
+$(SSH_KEY):
+	@mkdir -p $(SSH_KEY_DIR)
+	@ssh-keygen -t ed25519 -f $(SSH_KEY) -N "" -C "anyscp-test-key" >/dev/null
+	@echo "Generated test SSH key at $(SSH_KEY)"
+
+ssh-keygen: $(SSH_KEY)
+	@echo "Private key: $(SSH_KEY)"
+	@echo "Public key:  $(SSH_PUB_KEY)"
+
+# ─── Password container ───────────────────────────────────────────────────────
+
+start-ssh-pass:
+	@if [ "$$(docker ps -aq -f name=^/$(SSH_PASS_CONTAINER)$$)" ]; then \
+		echo "Starting existing container $(SSH_PASS_CONTAINER)..."; \
+		docker start $(SSH_PASS_CONTAINER) >/dev/null; \
 	else \
-		echo "Creating container $(SSH_CONTAINER) on port $(SSH_PORT)..."; \
+		echo "Creating container $(SSH_PASS_CONTAINER) on port $(SSH_PASS_PORT)..."; \
 		docker run -d \
-			--name $(SSH_CONTAINER) \
-			-p $(SSH_PORT):2222 \
+			--name $(SSH_PASS_CONTAINER) \
+			-p $(SSH_PASS_PORT):2222 \
 			-e PUID=1000 \
 			-e PGID=1000 \
 			-e TZ=Etc/UTC \
@@ -27,30 +55,75 @@ ssh-up:
 			$(SSH_IMAGE) >/dev/null; \
 	fi
 	@echo ""
-	@echo "  Test SSH server running at:"
+	@echo "  Password SSH server running at:"
 	@echo "    Host:     localhost"
-	@echo "    Port:     $(SSH_PORT)"
+	@echo "    Port:     $(SSH_PASS_PORT)"
 	@echo "    User:     $(SSH_USER)"
 	@echo "    Password: $(SSH_PASSWORD)"
 	@echo ""
-	@echo "  Connect:  ssh -p $(SSH_PORT) $(SSH_USER)@localhost"
+	@echo "  Connect: ssh -p $(SSH_PASS_PORT) $(SSH_USER)@localhost"
 
-ssh-down:
-	@docker stop $(SSH_CONTAINER) >/dev/null 2>&1 && echo "Stopped $(SSH_CONTAINER)" || echo "$(SSH_CONTAINER) not running"
+stop-ssh-pass:
+	@docker stop $(SSH_PASS_CONTAINER) >/dev/null 2>&1 && echo "Stopped $(SSH_PASS_CONTAINER)" || echo "$(SSH_PASS_CONTAINER) not running"
 
-ssh-restart: ssh-down ssh-up
+connect-ssh-pass:
+	@ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $(SSH_PASS_PORT) $(SSH_USER)@localhost
 
-ssh-logs:
-	@docker logs -f $(SSH_CONTAINER)
+logs-ssh-pass:
+	@docker logs -f $(SSH_PASS_CONTAINER)
 
-ssh-shell:
-	@docker exec -it $(SSH_CONTAINER) /bin/sh
+shell-ssh-pass:
+	@docker exec -it $(SSH_PASS_CONTAINER) /bin/sh
 
-ssh-connect:
-	@ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $(SSH_PORT) $(SSH_USER)@localhost
+# ─── Key container ────────────────────────────────────────────────────────────
+
+start-ssh-key: $(SSH_KEY)
+	@if [ "$$(docker ps -aq -f name=^/$(SSH_KEY_CONTAINER)$$)" ]; then \
+		echo "Starting existing container $(SSH_KEY_CONTAINER)..."; \
+		docker start $(SSH_KEY_CONTAINER) >/dev/null; \
+	else \
+		echo "Creating container $(SSH_KEY_CONTAINER) on port $(SSH_KEY_PORT)..."; \
+		docker run -d \
+			--name $(SSH_KEY_CONTAINER) \
+			-p $(SSH_KEY_PORT):2222 \
+			-e PUID=1000 \
+			-e PGID=1000 \
+			-e TZ=Etc/UTC \
+			-e USER_NAME=$(SSH_USER) \
+			-e PASSWORD_ACCESS=false \
+			-e SUDO_ACCESS=true \
+			-e PUBLIC_KEY="$$(cat $(SSH_PUB_KEY))" \
+			$(SSH_IMAGE) >/dev/null; \
+	fi
+	@echo ""
+	@echo "  Key-auth SSH server running at:"
+	@echo "    Host: localhost"
+	@echo "    Port: $(SSH_KEY_PORT)"
+	@echo "    User: $(SSH_USER)"
+	@echo "    Key:  $(SSH_KEY)"
+	@echo ""
+	@echo "  Connect: ssh -i $(SSH_KEY) -p $(SSH_KEY_PORT) $(SSH_USER)@localhost"
+
+stop-ssh-key:
+	@docker stop $(SSH_KEY_CONTAINER) >/dev/null 2>&1 && echo "Stopped $(SSH_KEY_CONTAINER)" || echo "$(SSH_KEY_CONTAINER) not running"
+
+connect-ssh-key: $(SSH_KEY)
+	@ssh -i $(SSH_KEY) -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $(SSH_KEY_PORT) $(SSH_USER)@localhost
+
+logs-ssh-key:
+	@docker logs -f $(SSH_KEY_CONTAINER)
+
+shell-ssh-key:
+	@docker exec -it $(SSH_KEY_CONTAINER) /bin/sh
+
+# ─── Combined status / cleanup ────────────────────────────────────────────────
 
 ssh-status:
-	@docker ps -a -f name=^/$(SSH_CONTAINER)$$
+	@docker ps -a -f name=^/$(SSH_PASS_CONTAINER)$$ -f name=^/$(SSH_KEY_CONTAINER)$$
 
 ssh-clean:
-	@docker rm -f $(SSH_CONTAINER) >/dev/null 2>&1 && echo "Removed $(SSH_CONTAINER)" || echo "Nothing to remove"
+	@docker rm -f $(SSH_PASS_CONTAINER) >/dev/null 2>&1 && echo "Removed $(SSH_PASS_CONTAINER)" || echo "$(SSH_PASS_CONTAINER) not present"
+	@docker rm -f $(SSH_KEY_CONTAINER)  >/dev/null 2>&1 && echo "Removed $(SSH_KEY_CONTAINER)"  || echo "$(SSH_KEY_CONTAINER) not present"
+
+ssh-clean-keys:
+	@rm -rf $(SSH_KEY_DIR) && echo "Removed $(SSH_KEY_DIR)"
