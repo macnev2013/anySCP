@@ -135,7 +135,7 @@ export function VariableDialog({ snippet, onExecute, onCancel }: VariableDialogP
         {snippet.is_dangerous && (
           <div className="flex items-start gap-2.5 p-3 mb-5 rounded-lg bg-status-error/10 border border-status-error/30">
             <AlertTriangle
-              size={15}
+              size={16}
               strokeWidth={2}
               className="text-status-error shrink-0 mt-0.5"
               aria-hidden="true"

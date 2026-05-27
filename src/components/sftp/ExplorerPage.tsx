@@ -22,7 +22,7 @@ export function ExplorerPage({ sftpSessionId, s3SessionId }: ExplorerPageProps) 
       <div className="flex flex-col flex-1 min-h-0 rounded-lg overflow-hidden border border-border/60">
         {/* Pane header — matching terminal pane style */}
         <div className="flex items-center h-8 px-2.5 gap-2.5 shrink-0 no-select bg-bg-surface/80 border-b border-border/60">
-          <Icon size={13} strokeWidth={1.8} className="shrink-0 text-status-connected" aria-hidden="true" />
+          <Icon size={14} strokeWidth={1.8} className="shrink-0 text-status-connected" aria-hidden="true" />
           <span className="text-[11px] font-mono truncate flex-1 min-w-0 text-text-primary leading-none" title={label}>
             {label}
           </span>

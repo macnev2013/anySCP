@@ -246,7 +246,7 @@ export function SnippetsPage() {
           {/* Search bar */}
           <div className="relative">
             <Search
-              size={15}
+              size={16}
               strokeWidth={2}
               className="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none"
               aria-hidden="true"
@@ -283,7 +283,7 @@ export function SnippetsPage() {
               ].join(" ")}
               title="New Snippet (Cmd+N)"
             >
-              <Plus size={13} strokeWidth={2.2} aria-hidden="true" />
+              <Plus size={14} strokeWidth={2.2} aria-hidden="true" />
               New Snippet
             </button>
 
@@ -298,7 +298,7 @@ export function SnippetsPage() {
               ].join(" ")}
               title="New Folder"
             >
-              <FolderPlus size={13} strokeWidth={2} aria-hidden="true" />
+              <FolderPlus size={14} strokeWidth={2} aria-hidden="true" />
               New Folder
             </button>
           </div>
@@ -343,7 +343,7 @@ export function SnippetsPage() {
                   ].join(" ")}
                   aria-label="Back to all snippets"
                 >
-                  <ArrowLeft size={12} strokeWidth={2.2} aria-hidden="true" />
+                  <ArrowLeft size={13} strokeWidth={2.2} aria-hidden="true" />
                   All Snippets
                 </button>
               )}
@@ -360,7 +360,7 @@ export function SnippetsPage() {
               </h2>
 
               {loading && (
-                <span className="text-[10px] text-text-muted animate-pulse ml-auto">
+                <span className="text-[11px] text-text-muted animate-pulse ml-auto">
                   Loading...
                 </span>
               )}
@@ -441,7 +441,7 @@ function EmptySnippetsState({ query, hasFolderFilter }: EmptySnippetsStateProps)
   return (
     <div className="flex flex-col items-center gap-4 py-16 text-center">
       <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-bg-surface border border-border">
-        <Code size={22} strokeWidth={1.5} className="text-text-muted" aria-hidden="true" />
+        <Code size={24} strokeWidth={1.5} className="text-text-muted" aria-hidden="true" />
       </div>
       <div>
         <p className="text-[length:var(--text-sm)] font-medium text-text-secondary">

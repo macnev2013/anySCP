@@ -34,7 +34,7 @@ export function SftpTabs() {
               onClick={() => setActiveSftpSession(session.sftpSessionId)}
               title={session.label}
               className={[
-                "group relative flex items-center gap-2 px-3.5 h-[32px] shrink-0 max-w-[220px]",
+                "group relative flex items-center gap-2 px-3.5 h-[34px] shrink-0 max-w-[220px]",
                 "text-[length:var(--text-sm)] leading-none rounded-t-lg",
                 "transition-[color,background-color,box-shadow] duration-[var(--duration-fast)]",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
@@ -59,7 +59,7 @@ export function SftpTabs() {
                 aria-label={`Close ${session.label}`}
                 tabIndex={-1}
               >
-                <X size={12} strokeWidth={2} aria-hidden="true" />
+                <X size={13} strokeWidth={2} aria-hidden="true" />
               </button>
 
               {isActive && (

@@ -54,7 +54,7 @@ export function GroupCard({ group, hostCount, isSelected, onSelect, onDelete }: 
           style={{ backgroundColor: `${group.color}20` }}
         >
           <Icon
-            size={18}
+            size={19}
             strokeWidth={1.8}
             style={{ color: group.color }}
             aria-hidden="true"

@@ -158,9 +158,9 @@ export function SnippetQuickPanel() {
               ].join(" ")}
             >
               {pinned ? (
-                <PinOff size={13} strokeWidth={2} aria-hidden="true" />
+                <PinOff size={14} strokeWidth={2} aria-hidden="true" />
               ) : (
-                <Pin size={13} strokeWidth={2} aria-hidden="true" />
+                <Pin size={14} strokeWidth={2} aria-hidden="true" />
               )}
             </button>
             <button
@@ -174,7 +174,7 @@ export function SnippetQuickPanel() {
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               ].join(" ")}
             >
-              <X size={13} strokeWidth={2} aria-hidden="true" />
+              <X size={14} strokeWidth={2} aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -183,7 +183,7 @@ export function SnippetQuickPanel() {
         <div className="px-3 py-2.5 border-b border-border shrink-0">
           <div className="relative">
             <Search
-              size={13}
+              size={14}
               strokeWidth={2}
               className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none"
               aria-hidden="true"
@@ -242,7 +242,7 @@ export function SnippetQuickPanel() {
                 <section aria-labelledby="recent-heading" className="py-2">
                   <h3
                     id="recent-heading"
-                    className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-muted"
+                    className="px-4 py-1.5 text-[11px] font-semibold uppercase tracking-widest text-text-muted"
                   >
                     Recently Used
                   </h3>
@@ -261,7 +261,7 @@ export function SnippetQuickPanel() {
                 <section aria-labelledby="all-heading" className="py-2 border-t border-border">
                   <h3
                     id="all-heading"
-                    className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-muted"
+                    className="px-4 py-1.5 text-[11px] font-semibold uppercase tracking-widest text-text-muted"
                   >
                     All Snippets
                   </h3>
@@ -316,7 +316,7 @@ function QuickSnippetRow({ snippet, onExecute }: QuickSnippetRowProps) {
       ].join(" ")}
     >
       <Play
-        size={11}
+        size={12}
         strokeWidth={2.5}
         className="text-accent shrink-0 opacity-60 group-hover:opacity-100 transition-opacity duration-[var(--duration-fast)]"
         aria-hidden="true"
@@ -325,7 +325,7 @@ function QuickSnippetRow({ snippet, onExecute }: QuickSnippetRowProps) {
         <p className="text-[length:var(--text-xs)] font-medium text-text-primary truncate leading-tight">
           {snippet.name}
         </p>
-        <p className="text-[10px] font-mono text-text-muted truncate mt-0.5 leading-tight">
+        <p className="text-[11px] font-mono text-text-muted truncate mt-0.5 leading-tight">
           {snippet.command}
         </p>
       </div>

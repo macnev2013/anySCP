@@ -205,7 +205,7 @@ export function TerminalSearchBar({ sessionId }: TerminalSearchBarProps) {
         disabled={!query || !results?.count}
         className={`${BTN_CLASS} text-text-muted hover:text-text-primary hover:bg-bg-subtle disabled:opacity-30`}
       >
-        <ChevronUp size={13} strokeWidth={2} aria-hidden="true" />
+        <ChevronUp size={14} strokeWidth={2} aria-hidden="true" />
       </button>
       <button
         onClick={handleNext}
@@ -214,7 +214,7 @@ export function TerminalSearchBar({ sessionId }: TerminalSearchBarProps) {
         disabled={!query || !results?.count}
         className={`${BTN_CLASS} text-text-muted hover:text-text-primary hover:bg-bg-subtle disabled:opacity-30`}
       >
-        <ChevronDown size={13} strokeWidth={2} aria-hidden="true" />
+        <ChevronDown size={14} strokeWidth={2} aria-hidden="true" />
       </button>
 
       {/* Separator */}
@@ -228,7 +228,7 @@ export function TerminalSearchBar({ sessionId }: TerminalSearchBarProps) {
         aria-pressed={caseSensitive}
         className={`${BTN_CLASS} ${caseSensitive ? "text-accent bg-accent/10" : "text-text-muted hover:text-text-primary hover:bg-bg-subtle"}`}
       >
-        <CaseSensitive size={14} strokeWidth={1.8} aria-hidden="true" />
+        <CaseSensitive size={15} strokeWidth={1.8} aria-hidden="true" />
       </button>
       <button
         onClick={toggleRegex}
@@ -237,7 +237,7 @@ export function TerminalSearchBar({ sessionId }: TerminalSearchBarProps) {
         aria-pressed={regex}
         className={`${BTN_CLASS} ${regex ? "text-accent bg-accent/10" : "text-text-muted hover:text-text-primary hover:bg-bg-subtle"}`}
       >
-        <Regex size={14} strokeWidth={1.8} aria-hidden="true" />
+        <Regex size={15} strokeWidth={1.8} aria-hidden="true" />
       </button>
 
       {/* Separator */}
@@ -250,7 +250,7 @@ export function TerminalSearchBar({ sessionId }: TerminalSearchBarProps) {
         aria-label="Close search"
         className={`${BTN_CLASS} text-text-muted hover:text-text-primary hover:bg-bg-subtle`}
       >
-        <X size={13} strokeWidth={2} aria-hidden="true" />
+        <X size={14} strokeWidth={2} aria-hidden="true" />
       </button>
     </div>
   );

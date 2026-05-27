@@ -461,7 +461,7 @@ export function SftpBrowser({ sftpSessionId }: SftpBrowserProps) {
       {/* Error banner */}
       {session.error && (
         <div className="flex items-center gap-2.5 px-4 py-2.5 bg-status-error/10 border-b border-status-error/20 text-status-error">
-          <AlertCircle size={14} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+          <AlertCircle size={15} strokeWidth={2} aria-hidden="true" className="shrink-0" />
           <p className="text-[length:var(--text-sm)]">{session.error}</p>
         </div>
       )}

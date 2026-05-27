@@ -63,7 +63,7 @@ export function SnippetFolderCard({
           style={{ backgroundColor: `${color}20` }}
         >
           <Folder
-            size={18}
+            size={19}
             strokeWidth={1.8}
             style={{ color }}
             aria-hidden="true"

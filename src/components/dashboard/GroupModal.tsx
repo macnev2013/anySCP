@@ -151,7 +151,7 @@ export function GroupModal({ open, onClose, onSave, initial }: GroupModalProps) 
             className="flex items-center justify-center w-10 h-10 rounded-lg shrink-0"
             style={{ backgroundColor: `${color}20` }}
           >
-            <SelectedIcon size={20} strokeWidth={1.8} style={{ color }} />
+            <SelectedIcon size={22} strokeWidth={1.8} style={{ color }} />
           </div>
           <h2 className="text-[length:var(--text-lg)] font-semibold text-text-primary">
             {isEdit ? "Edit Group" : "New Group"}
@@ -201,7 +201,7 @@ export function GroupModal({ open, onClose, onSave, initial }: GroupModalProps) 
                     ].join(" ")}
                   >
                     <Icon
-                      size={15}
+                      size={16}
                       strokeWidth={isSelected ? 2 : 1.6}
                       style={isSelected ? { color } : undefined}
                     />

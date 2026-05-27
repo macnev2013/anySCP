@@ -121,7 +121,7 @@ export function PortForwardingPage() {
           {/* ── Search bar ── */}
           <div className="relative">
             <Search
-              size={15}
+              size={16}
               strokeWidth={2}
               className="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none"
               aria-hidden="true"
@@ -155,7 +155,7 @@ export function PortForwardingPage() {
               ].join(" ")}
               title="New Rule"
             >
-              <Plus size={13} strokeWidth={2.2} aria-hidden="true" />
+              <Plus size={14} strokeWidth={2.2} aria-hidden="true" />
               New Rule
             </button>
           </div>
@@ -170,7 +170,7 @@ export function PortForwardingPage() {
               return (
                 <section key={group.host?.id ?? "__standalone__"} aria-labelledby={`pf-group-${group.host?.id ?? "standalone"}`}>
                   <div className="flex items-center gap-2 mb-3">
-                    <Wifi size={12} strokeWidth={2} className="text-text-muted shrink-0" />
+                    <Wifi size={13} strokeWidth={2} className="text-text-muted shrink-0" />
                     <h2
                       id={`pf-group-${group.host?.id ?? "standalone"}`}
                       className="text-[length:var(--text-xs)] font-semibold uppercase tracking-widest text-text-muted"
@@ -243,7 +243,7 @@ export function PortForwardingPage() {
                           <div className="flex items-center gap-1.5">
                             <span className="flex items-center gap-1.5 text-[length:var(--text-2xs)] font-mono text-text-muted">
                               <span>:{tunnel?.local_port ?? rule.local_port}</span>
-                              <ArrowRight size={9} strokeWidth={2} className="text-text-muted/40" />
+                              <ArrowRight size={10} strokeWidth={2} className="text-text-muted/40" />
                               <span>:{rule.remote_port}</span>
                             </span>
                             <button
@@ -255,7 +255,7 @@ export function PortForwardingPage() {
                               aria-label="Copy localhost address"
                               className="p-0.5 rounded text-text-muted/0 group-hover:text-text-muted hover:!text-text-primary transition-all duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             >
-                              <Copy size={10} strokeWidth={2} />
+                              <Copy size={11} strokeWidth={2} />
                             </button>
                           </div>
 
@@ -266,12 +266,12 @@ export function PortForwardingPage() {
                             )}
                             {rule.last_used_at && !isActive && (
                               <span className="flex items-center gap-1">
-                                <Clock size={9} strokeWidth={2} />
+                                <Clock size={10} strokeWidth={2} />
                                 {new Date(rule.last_used_at).toLocaleDateString()}
                               </span>
                             )}
                             {rule.auto_start && (
-                              <span className="px-1 py-px rounded bg-bg-subtle text-[8px] uppercase tracking-wide font-semibold">
+                              <span className="px-1 py-px rounded bg-bg-subtle text-[9px] uppercase tracking-wide font-semibold">
                                 auto
                               </span>
                             )}
@@ -296,7 +296,7 @@ export function PortForwardingPage() {
             </p>
           ) : (
             <div className="flex flex-col items-center justify-center py-16 gap-3">
-              <Wifi size={28} strokeWidth={1.2} className="text-text-muted/30" />
+              <Wifi size={30} strokeWidth={1.2} className="text-text-muted/30" />
               <p className="text-[length:var(--text-sm)] text-text-muted">
                 No forwarding rules yet
               </p>
@@ -558,7 +558,7 @@ function RuleDialog({
               />
             </div>
 
-            <ArrowRight size={14} strokeWidth={2} className="text-text-muted/40 mb-3 shrink-0" />
+            <ArrowRight size={15} strokeWidth={2} className="text-text-muted/40 mb-3 shrink-0" />
 
             <div className="flex-1">
               <label htmlFor="pf-remote-port" className={labelClass}>Remote Port</label>

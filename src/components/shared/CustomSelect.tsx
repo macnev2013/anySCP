@@ -143,7 +143,7 @@ export function CustomSelect({
           {displayLabel}
         </span>
         <ChevronDown
-          size={14}
+          size={15}
           strokeWidth={2}
           className={[
             "text-text-muted shrink-0 transition-transform duration-[var(--duration-fast)]",
@@ -192,7 +192,7 @@ export function CustomSelect({
                 ].join(" ")}
               >
                 <span className="w-4 shrink-0">
-                  {isSelected && <Check size={13} strokeWidth={2.5} className="text-accent" />}
+                  {isSelected && <Check size={14} strokeWidth={2.5} className="text-accent" />}
                 </span>
                 <span className="truncate">{option.label}</span>
               </button>

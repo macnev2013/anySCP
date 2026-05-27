@@ -354,7 +354,7 @@ export function S3Browser({ sessionId }: S3BrowserProps) {
             title="Refresh"
             className="flex items-center justify-center w-7 h-7 rounded-md text-text-muted hover:text-text-secondary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <RefreshCw size={14} strokeWidth={1.8} className={session.loading ? "motion-safe:animate-spin" : ""} />
+            <RefreshCw size={15} strokeWidth={1.8} className={session.loading ? "motion-safe:animate-spin" : ""} />
           </button>
         </div>
 
@@ -370,7 +370,7 @@ export function S3Browser({ sessionId }: S3BrowserProps) {
               onClick={() => void selectBucket(bucket.name)}
               className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] text-left"
             >
-              <Folder size={15} strokeWidth={1.8} className="text-accent shrink-0" />
+              <Folder size={16} strokeWidth={1.8} className="text-accent shrink-0" />
               <span className="text-[length:var(--text-sm)] text-text-primary font-mono">{bucket.name}</span>
             </button>
           ))}
@@ -403,7 +403,7 @@ export function S3Browser({ sessionId }: S3BrowserProps) {
       {/* Error banner */}
       {session.error && (
         <div className="flex items-center gap-2.5 px-4 py-2.5 bg-status-error/10 border-b border-status-error/20 text-status-error">
-          <AlertCircle size={14} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+          <AlertCircle size={15} strokeWidth={2} aria-hidden="true" className="shrink-0" />
           <p className="text-[length:var(--text-sm)]">{session.error}</p>
         </div>
       )}

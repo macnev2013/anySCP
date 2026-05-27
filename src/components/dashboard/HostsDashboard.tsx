@@ -358,7 +358,7 @@ export function HostsDashboard() {
           {/* ── Search bar ── */}
           <div className="relative">
             <Search
-              size={15}
+              size={16}
               strokeWidth={2}
               className="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none"
               aria-hidden="true"
@@ -403,7 +403,7 @@ export function HostsDashboard() {
               ].join(" ")}
               title="New Server (Cmd+T)"
             >
-              <Plus size={13} strokeWidth={2.2} aria-hidden="true" />
+              <Plus size={14} strokeWidth={2.2} aria-hidden="true" />
               New Server
             </button>
 
@@ -418,7 +418,7 @@ export function HostsDashboard() {
               ].join(" ")}
               title="New S3 Connection"
             >
-              <Cloud size={13} strokeWidth={2} aria-hidden="true" />
+              <Cloud size={14} strokeWidth={2} aria-hidden="true" />
               New S3
             </button>
 
@@ -433,7 +433,7 @@ export function HostsDashboard() {
               ].join(" ")}
               title="New Group"
             >
-              <FolderPlus size={13} strokeWidth={2} aria-hidden="true" />
+              <FolderPlus size={14} strokeWidth={2} aria-hidden="true" />
               New Group
             </button>
 
@@ -448,7 +448,7 @@ export function HostsDashboard() {
               ].join(" ")}
               title="Import from SSH Config"
             >
-              <Import size={13} strokeWidth={2} aria-hidden="true" />
+              <Import size={14} strokeWidth={2} aria-hidden="true" />
               Import
             </button>
           </div>
@@ -491,7 +491,7 @@ export function HostsDashboard() {
                   ].join(" ")}
                   aria-label="Back to all hosts"
                 >
-                  <ArrowLeft size={12} strokeWidth={2.2} aria-hidden="true" />
+                  <ArrowLeft size={13} strokeWidth={2.2} aria-hidden="true" />
                   All Hosts
                 </button>
               )}
@@ -562,7 +562,7 @@ export function HostsDashboard() {
                             color: conn.color ? "var(--color-text-inverse)" : "var(--color-text-muted)",
                           }}
                         >
-                          <Cloud size={14} strokeWidth={2} />
+                          <Cloud size={15} strokeWidth={2} />
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
@@ -571,7 +571,7 @@ export function HostsDashboard() {
                             </p>
                             {conn.environment && (
                               <span className={[
-                                "inline-flex items-center px-1.5 py-px rounded text-[8px] font-semibold tracking-wide leading-none shrink-0 uppercase",
+                                "inline-flex items-center px-1.5 py-px rounded text-[9px] font-semibold tracking-wide leading-none shrink-0 uppercase",
                                 conn.environment === "production" ? "bg-status-error/15 text-status-error" :
                                 conn.environment === "staging" ? "bg-status-connecting/15 text-status-connecting" :
                                 "bg-accent/15 text-accent",

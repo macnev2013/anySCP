@@ -146,7 +146,7 @@ export function S3Page() {
           {/* Search */}
           <div className="relative">
             <Search
-              size={15}
+              size={16}
               strokeWidth={2}
               className="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none"
               aria-hidden="true"
@@ -179,7 +179,7 @@ export function S3Page() {
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               ].join(" ")}
             >
-              <Plus size={13} strokeWidth={2.2} />
+              <Plus size={14} strokeWidth={2.2} />
               New Connection
             </button>
           </div>
@@ -246,7 +246,7 @@ export function S3Page() {
                             </p>
                             {conn?.environment && (
                               <span className={[
-                                "inline-flex items-center px-1.5 py-px rounded text-[8px] font-semibold tracking-wide leading-none shrink-0 uppercase",
+                                "inline-flex items-center px-1.5 py-px rounded text-[9px] font-semibold tracking-wide leading-none shrink-0 uppercase",
                                 conn.environment === "production" ? "bg-status-error/15 text-status-error" :
                                 conn.environment === "staging" ? "bg-status-connecting/15 text-status-connecting" :
                                 "bg-accent/15 text-accent",
@@ -270,7 +270,7 @@ export function S3Page() {
               </p>
             ) : (
               <div className="flex flex-col items-center justify-center py-16 gap-3">
-                <Cloud size={28} strokeWidth={1.2} className="text-text-muted/30" />
+                <Cloud size={30} strokeWidth={1.2} className="text-text-muted/30" />
                 <p className="text-[length:var(--text-sm)] text-text-muted">
                   No S3 connections
                 </p>
@@ -381,7 +381,7 @@ function S3ConnectionCard({
             </p>
             {conn.environment && (
               <span className={[
-                "inline-flex items-center px-1.5 py-px rounded text-[8px] font-semibold tracking-wide leading-none shrink-0 uppercase",
+                "inline-flex items-center px-1.5 py-px rounded text-[9px] font-semibold tracking-wide leading-none shrink-0 uppercase",
                 conn.environment === "production" ? "bg-status-error/15 text-status-error" :
                 conn.environment === "staging" ? "bg-status-connecting/15 text-status-connecting" :
                 "bg-accent/15 text-accent",

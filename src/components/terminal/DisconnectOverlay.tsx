@@ -76,8 +76,8 @@ export function DisconnectOverlay({
         {/* Status indicator */}
         <div className={`flex items-center justify-center w-5 h-5 rounded-full shrink-0 ${isError ? "bg-status-error/15" : "bg-bg-subtle"}`}>
           {isError
-            ? <AlertTriangle size={10} strokeWidth={2.5} className="text-status-error" aria-hidden="true" />
-            : <WifiOff size={10} strokeWidth={2.5} className="text-text-muted" aria-hidden="true" />
+            ? <AlertTriangle size={11} strokeWidth={2.5} className="text-status-error" aria-hidden="true" />
+            : <WifiOff size={11} strokeWidth={2.5} className="text-text-muted" aria-hidden="true" />
           }
         </div>
 
@@ -88,7 +88,7 @@ export function DisconnectOverlay({
 
         {/* Error detail — only if present and short */}
         {(reconnectError || message) && (
-          <span className="text-[10px] text-status-error truncate max-w-[120px]" title={reconnectError || message || ""}>
+          <span className="text-[11px] text-status-error truncate max-w-[120px]" title={reconnectError || message || ""}>
             {reconnectError || message}
           </span>
         )}
@@ -105,7 +105,7 @@ export function DisconnectOverlay({
           aria-label="Reconnect"
         >
           <RefreshCw
-            size={10}
+            size={11}
             strokeWidth={2.5}
             aria-hidden="true"
             className={isReconnecting ? "motion-safe:animate-spin" : ""}
@@ -121,7 +121,7 @@ export function DisconnectOverlay({
           className="inline-flex items-center justify-center w-6 h-6 rounded-full text-text-muted hover:text-text-primary hover:bg-bg-subtle disabled:opacity-50 transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
           aria-label="Close session"
         >
-          <X size={11} strokeWidth={2.2} aria-hidden="true" />
+          <X size={12} strokeWidth={2.2} aria-hidden="true" />
         </button>
       </div>
 

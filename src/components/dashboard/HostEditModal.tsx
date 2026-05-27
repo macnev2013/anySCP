@@ -791,7 +791,7 @@ export function HostEditModal() {
                     title="Auto (hash-based)"
                     aria-label="Auto color"
                     className={[
-                      "w-6 h-6 rounded-full border-2 text-[10px] font-bold",
+                      "w-6 h-6 rounded-full border-2 text-[11px] font-bold",
                       "flex items-center justify-center",
                       "transition-[border-color,box-shadow] duration-[var(--duration-fast)]",
                       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",

@@ -92,21 +92,22 @@
   --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 
   /* Layout constants */
-  --sidebar-width:     240px;
+  --sidebar-width:     256px;
   --sidebar-collapsed: 0px;
-  --tabbar-height:     40px;
-  --statusbar-height:  24px;
+  --tabbar-height:     44px;
+  --statusbar-height:  26px;
 
   /* Elevation */
   --shadow-sm:  0 1px 2px oklch(0 0 0 / 0.3);
   --shadow-md:  0 2px 8px oklch(0 0 0 / 0.3), 0 1px 2px oklch(0 0 0 / 0.2);
   --shadow-lg:  0 8px 24px oklch(0 0 0 / 0.4), 0 2px 8px oklch(0 0 0 / 0.2);
 
-  /* Typography — size scale */
-  --text-2xs: 10px;
-  --text-xs:  11px;
-  --text-sm:  13px;
-  --text-base: 14px;
+  /* Typography — size scale (bumped ~8% for legibility) */
+  --text-2xs: 11px;
+  --text-xs:  12px;
+  --text-sm:  14px;
+  --text-base: 15px;
+  --text-lg:  17px;
 
   /* Motion */
   --ease-expo-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -126,7 +127,7 @@ html, body, #root {
   background: var(--color-bg-base);
   color: var(--color-text-primary);
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

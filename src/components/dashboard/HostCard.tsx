@@ -156,7 +156,7 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
             {env && (
               <span
                 className={[
-                  "inline-flex items-center px-1 py-px rounded text-[10px] font-semibold tracking-wide leading-none shrink-0",
+                  "inline-flex items-center px-1 py-px rounded text-[11px] font-semibold tracking-wide leading-none shrink-0",
                   ENV_BADGE_CLASSES[env],
                 ].join(" ")}
               >

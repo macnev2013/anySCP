@@ -54,7 +54,7 @@ export function SftpSessionPicker() {
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2.5">
             <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-bg-surface border border-border">
-              <FolderOpen size={20} strokeWidth={1.8} className="text-accent" aria-hidden="true" />
+              <FolderOpen size={22} strokeWidth={1.8} className="text-accent" aria-hidden="true" />
             </div>
             <h1 className="text-[length:var(--text-lg)] font-semibold text-text-primary">
               File Browser
@@ -97,7 +97,7 @@ export function SftpSessionPicker() {
                   >
                     {/* Session icon */}
                     <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-bg-base shrink-0">
-                      <TerminalSquare size={15} strokeWidth={1.8} className="text-text-muted" aria-hidden="true" />
+                      <TerminalSquare size={16} strokeWidth={1.8} className="text-text-muted" aria-hidden="true" />
                     </div>
 
                     {/* Label + status */}
@@ -135,12 +135,12 @@ export function SftpSessionPicker() {
                     >
                       {isOpening ? (
                         <>
-                          <Loader2 size={12} strokeWidth={2} className="animate-spin" aria-hidden="true" />
+                          <Loader2 size={13} strokeWidth={2} className="animate-spin" aria-hidden="true" />
                           Opening…
                         </>
                       ) : (
                         <>
-                          <FolderOpen size={12} strokeWidth={2} aria-hidden="true" />
+                          <FolderOpen size={13} strokeWidth={2} aria-hidden="true" />
                           Open SFTP
                         </>
                       )}
@@ -162,7 +162,7 @@ function EmptyState() {
   return (
     <div className="flex flex-col items-center gap-4 py-16 text-center">
       <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-bg-surface border border-border">
-        <TerminalSquare size={24} strokeWidth={1.4} className="text-text-muted" aria-hidden="true" />
+        <TerminalSquare size={26} strokeWidth={1.4} className="text-text-muted" aria-hidden="true" />
       </div>
       <div>
         <p className="text-[length:var(--text-sm)] font-medium text-text-secondary">

@@ -80,15 +80,15 @@ function formatModified(unix: number | null): string {
 
 function EntryIcon({ entry }: { entry: ExplorerEntry }) {
   if (entry.isSymlink) {
-    return <LinkIcon size={15} strokeWidth={1.8} className="text-accent shrink-0" aria-hidden="true" />;
+    return <LinkIcon size={16} strokeWidth={1.8} className="text-accent shrink-0" aria-hidden="true" />;
   }
   switch (entry.entryType) {
     case "Directory":
-      return <Folder size={15} strokeWidth={1.8} className="text-accent shrink-0" aria-hidden="true" />;
+      return <Folder size={16} strokeWidth={1.8} className="text-accent shrink-0" aria-hidden="true" />;
     case "File":
-      return <FileText size={15} strokeWidth={1.6} className="text-text-muted shrink-0" aria-hidden="true" />;
+      return <FileText size={16} strokeWidth={1.6} className="text-text-muted shrink-0" aria-hidden="true" />;
     default:
-      return <File size={15} strokeWidth={1.6} className="text-text-muted shrink-0" aria-hidden="true" />;
+      return <File size={16} strokeWidth={1.6} className="text-text-muted shrink-0" aria-hidden="true" />;
   }
 }
 
@@ -168,7 +168,7 @@ function NewFolderRow({
   return (
     <div className="flex items-center gap-2 px-3 py-2 bg-accent/5">
       <span className="w-5 flex items-center justify-center shrink-0">
-        <Folder size={15} strokeWidth={1.8} className="text-accent" aria-hidden="true" />
+        <Folder size={16} strokeWidth={1.8} className="text-accent" aria-hidden="true" />
       </span>
       <input
         ref={inputRef}
@@ -217,7 +217,7 @@ function NewFileRow({
   return (
     <div className="flex items-center gap-2 px-3 py-2 bg-accent/5">
       <span className="w-5 flex items-center justify-center shrink-0">
-        <FileText size={15} strokeWidth={1.6} className="text-text-muted" aria-hidden="true" />
+        <FileText size={16} strokeWidth={1.6} className="text-text-muted" aria-hidden="true" />
       </span>
       <input
         ref={inputRef}
@@ -514,8 +514,8 @@ export function ExplorerFileTable({
   const SortIcon = ({ col }: { col: "name" | "size" | "modified" }) => {
     if (sortBy !== col) return null;
     return sortAsc
-      ? <ChevronUp size={11} strokeWidth={2.5} className="inline ml-0.5" aria-hidden="true" />
-      : <ChevronDown size={11} strokeWidth={2.5} className="inline ml-0.5" aria-hidden="true" />;
+      ? <ChevronUp size={12} strokeWidth={2.5} className="inline ml-0.5" aria-hidden="true" />
+      : <ChevronDown size={12} strokeWidth={2.5} className="inline ml-0.5" aria-hidden="true" />;
   };
 
   const thClass = (col: "name" | "size" | "modified") => [
@@ -620,7 +620,7 @@ export function ExplorerFileTable({
         {/* Rows */}
         {sortedEntries.length === 0 && !creatingFolder && !creatingFile ? (
           <div className="flex flex-col items-center justify-center flex-1 min-h-[200px] gap-3 py-12">
-            <Folder size={28} strokeWidth={1.2} className="text-text-muted/30" aria-hidden="true" />
+            <Folder size={30} strokeWidth={1.2} className="text-text-muted/30" aria-hidden="true" />
             <p className="text-[length:var(--text-sm)] text-text-muted">
               This folder is empty
             </p>
@@ -630,7 +630,7 @@ export function ExplorerFileTable({
                   onClick={() => document.dispatchEvent(new CustomEvent("explorer:new-file"))}
                   className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[length:var(--text-xs)] font-medium text-text-muted hover:text-text-secondary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  <FilePlus size={12} strokeWidth={2} aria-hidden="true" />
+                  <FilePlus size={13} strokeWidth={2} aria-hidden="true" />
                   New File
                 </button>
               )}
@@ -639,7 +639,7 @@ export function ExplorerFileTable({
                   onClick={() => document.dispatchEvent(new CustomEvent("explorer:new-folder"))}
                   className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[length:var(--text-xs)] font-medium text-text-muted hover:text-text-secondary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  <FolderPlus size={12} strokeWidth={2} aria-hidden="true" />
+                  <FolderPlus size={13} strokeWidth={2} aria-hidden="true" />
                   New Folder
                 </button>
               )}
@@ -931,7 +931,7 @@ function FileInfoDialog({
             aria-label="Close"
             className="flex items-center justify-center w-6 h-6 rounded-md shrink-0 text-text-muted hover:text-text-primary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <X size={13} strokeWidth={2} aria-hidden="true" />
+            <X size={14} strokeWidth={2} aria-hidden="true" />
           </button>
         </div>
 
@@ -952,7 +952,7 @@ function FileInfoDialog({
               aria-label="Copy path"
               className="shrink-0 p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <Copy size={11} strokeWidth={2} aria-hidden="true" />
+              <Copy size={12} strokeWidth={2} aria-hidden="true" />
             </button>
           </div>
 

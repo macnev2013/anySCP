@@ -112,7 +112,7 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
             >
               {Icon && (
                 <Icon
-                  size={14}
+                  size={15}
                   strokeWidth={1.8}
                   aria-hidden="true"
                   className={item.danger ? "text-status-error" : "text-text-muted"}

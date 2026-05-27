@@ -190,7 +190,7 @@ export function SnippetPalette() {
           <>
             {/* Search */}
             <div className="flex items-center gap-2.5 px-4 h-12 border-b border-border">
-              <Search size={15} strokeWidth={2} className="text-text-muted shrink-0" />
+              <Search size={16} strokeWidth={2} className="text-text-muted shrink-0" />
               <input
                 ref={searchRef}
                 type="text"
@@ -199,7 +199,7 @@ export function SnippetPalette() {
                 placeholder="Search snippets..."
                 className="flex-1 bg-transparent text-[length:var(--text-sm)] text-text-primary placeholder:text-text-muted outline-none"
               />
-              <kbd className="text-[10px] text-text-muted bg-bg-muted px-1.5 py-0.5 rounded font-mono">esc</kbd>
+              <kbd className="text-[11px] text-text-muted bg-bg-muted px-1.5 py-0.5 rounded font-mono">esc</kbd>
             </div>
 
             {/* List */}
@@ -221,7 +221,7 @@ export function SnippetPalette() {
                     ].join(" ")}
                   >
                     <Play
-                      size={11}
+                      size={12}
                       strokeWidth={2.5}
                       className={i === selectedIndex ? "text-accent shrink-0" : "text-text-muted shrink-0"}
                     />
@@ -232,12 +232,12 @@ export function SnippetPalette() {
                       ].join(" ")}>
                         {snippet.name}
                       </p>
-                      <p className="text-[10px] font-mono text-text-muted truncate mt-0.5 leading-tight">
+                      <p className="text-[11px] font-mono text-text-muted truncate mt-0.5 leading-tight">
                         {snippet.command}
                       </p>
                     </div>
                     {snippet.is_dangerous && (
-                      <AlertTriangle size={12} strokeWidth={2} className="text-status-error shrink-0" />
+                      <AlertTriangle size={13} strokeWidth={2} className="text-status-error shrink-0" />
                     )}
                   </button>
                 ))
@@ -246,7 +246,7 @@ export function SnippetPalette() {
 
             {/* Footer hint */}
             {filtered.length > 0 && (
-              <div className="flex items-center gap-3 px-4 py-2 border-t border-border text-[10px] text-text-muted">
+              <div className="flex items-center gap-3 px-4 py-2 border-t border-border text-[11px] text-text-muted">
                 <span><kbd className="font-mono bg-bg-muted px-1 py-px rounded">↑↓</kbd> navigate</span>
                 <span><kbd className="font-mono bg-bg-muted px-1 py-px rounded">↵</kbd> execute</span>
                 <span><kbd className="font-mono bg-bg-muted px-1 py-px rounded">esc</kbd> close</span>
@@ -264,7 +264,7 @@ export function SnippetPalette() {
                 className="p-1 -ml-1 rounded-md text-text-muted hover:text-accent hover:bg-accent/10 transition-colors"
                 title="Back (Esc)"
               >
-                <ArrowLeft size={14} strokeWidth={2} />
+                <ArrowLeft size={15} strokeWidth={2} />
               </button>
               <div className="flex-1 min-w-0">
                 <p className="text-[length:var(--text-sm)] font-medium text-text-primary truncate">
@@ -272,7 +272,7 @@ export function SnippetPalette() {
                 </p>
               </div>
               {activeSnippet.is_dangerous && (
-                <span title="Dangerous command"><AlertTriangle size={13} strokeWidth={2} className="text-status-error shrink-0" /></span>
+                <span title="Dangerous command"><AlertTriangle size={14} strokeWidth={2} className="text-status-error shrink-0" /></span>
               )}
               <button
                 type="submit"
@@ -280,13 +280,13 @@ export function SnippetPalette() {
                 className="flex items-center gap-1.5 h-7 px-3 text-[11px] font-medium rounded-lg text-text-inverse bg-accent hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
               >
                 Run
-                <kbd className="text-[9px] opacity-70 font-mono">↵</kbd>
+                <kbd className="text-[10px] opacity-70 font-mono">↵</kbd>
               </button>
             </div>
 
             {/* Command preview */}
             <div className="px-4 py-2 bg-bg-base/50 border-b border-border/50">
-              <p className="text-[10px] font-mono text-text-muted break-all line-clamp-2 leading-relaxed">
+              <p className="text-[11px] font-mono text-text-muted break-all line-clamp-2 leading-relaxed">
                 {activeSnippet.command}
               </p>
             </div>
@@ -306,7 +306,7 @@ export function SnippetPalette() {
 
                 return (
                   <div key={name}>
-                    <label className="block text-[10px] font-medium uppercase tracking-wider text-text-muted mb-1">
+                    <label className="block text-[11px] font-medium uppercase tracking-wider text-text-muted mb-1">
                       {label}{required && <span className="text-status-error ml-0.5">*</span>}
                     </label>
                     {options && options.length > 0 ? (
@@ -336,7 +336,7 @@ export function SnippetPalette() {
             </div>
 
             {/* Footer */}
-            <div className="flex items-center gap-3 px-4 py-2 border-t border-border text-[10px] text-text-muted">
+            <div className="flex items-center gap-3 px-4 py-2 border-t border-border text-[11px] text-text-muted">
               <span><kbd className="font-mono bg-bg-muted px-1 py-px rounded">tab</kbd> next field</span>
               <span><kbd className="font-mono bg-bg-muted px-1 py-px rounded">↵</kbd> run</span>
               <span><kbd className="font-mono bg-bg-muted px-1 py-px rounded">esc</kbd> back</span>

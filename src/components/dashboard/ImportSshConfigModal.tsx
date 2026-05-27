@@ -155,7 +155,7 @@ export function ImportSshConfigModal({ onClose, onImported }: ImportSshConfigMod
           {result ? (
             <div className="flex flex-col items-center gap-4 py-8">
               <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-status-connected/10">
-                <Check size={24} strokeWidth={2} className="text-status-connected" />
+                <Check size={26} strokeWidth={2} className="text-status-connected" />
               </div>
               <div className="text-center">
                 <p className="text-[length:var(--text-sm)] font-semibold text-text-primary">
@@ -177,12 +177,12 @@ export function ImportSshConfigModal({ onClose, onImported }: ImportSshConfigMod
             </div>
           ) : scanning ? (
             <div className="flex flex-col items-center gap-4 py-12">
-              <Loader2 size={24} strokeWidth={2} className="text-accent motion-safe:animate-spin" />
+              <Loader2 size={26} strokeWidth={2} className="text-accent motion-safe:animate-spin" />
               <p className="text-[length:var(--text-sm)] text-text-muted">Scanning SSH config...</p>
             </div>
           ) : scanError ? (
             <div className="flex flex-col items-center gap-4 py-8">
-              <AlertCircle size={24} strokeWidth={1.8} className="text-status-error" />
+              <AlertCircle size={26} strokeWidth={1.8} className="text-status-error" />
               <p className="text-[length:var(--text-sm)] text-status-error text-center">{scanError}</p>
               <button
                 onClick={handleBrowse}
@@ -193,7 +193,7 @@ export function ImportSshConfigModal({ onClose, onImported }: ImportSshConfigMod
             </div>
           ) : entries.length === 0 ? (
             <div className="flex flex-col items-center gap-4 py-8">
-              <FileText size={24} strokeWidth={1.5} className="text-text-muted/40" />
+              <FileText size={26} strokeWidth={1.5} className="text-text-muted/40" />
               <p className="text-[length:var(--text-sm)] text-text-muted">No hosts found in SSH config</p>
               <button
                 onClick={handleBrowse}
@@ -255,12 +255,12 @@ export function ImportSshConfigModal({ onClose, onImported }: ImportSshConfigMod
                             {entry.host_alias}
                           </span>
                           {entry.is_pattern && (
-                            <span className="px-1.5 py-px rounded text-[8px] uppercase tracking-wide font-semibold bg-bg-subtle text-text-muted">
+                            <span className="px-1.5 py-px rounded text-[9px] uppercase tracking-wide font-semibold bg-bg-subtle text-text-muted">
                               pattern
                             </span>
                           )}
                           {entry.already_exists && (
-                            <span className="px-1.5 py-px rounded text-[8px] uppercase tracking-wide font-semibold bg-status-connecting/10 text-status-connecting">
+                            <span className="px-1.5 py-px rounded text-[9px] uppercase tracking-wide font-semibold bg-status-connecting/10 text-status-connecting">
                               exists
                             </span>
                           )}

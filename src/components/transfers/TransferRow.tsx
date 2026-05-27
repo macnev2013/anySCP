@@ -154,9 +154,9 @@ export const TransferRow = memo(function TransferRow({
           aria-hidden="true"
         >
           {t.direction === "Upload" ? (
-            <ArrowUp size={12} strokeWidth={2.5} />
+            <ArrowUp size={13} strokeWidth={2.5} />
           ) : (
-            <ArrowDown size={12} strokeWidth={2.5} />
+            <ArrowDown size={13} strokeWidth={2.5} />
           )}
         </span>
 
@@ -190,7 +190,7 @@ export const TransferRow = memo(function TransferRow({
               aria-label={`Retry ${t.name}`}
               className={`${ACTION_BTN_CLASS} text-text-muted hover:text-accent hover:bg-accent/10`}
             >
-              <RotateCw size={13} strokeWidth={2} aria-hidden="true" />
+              <RotateCw size={14} strokeWidth={2} aria-hidden="true" />
             </button>
           )}
 
@@ -201,7 +201,7 @@ export const TransferRow = memo(function TransferRow({
               aria-label={`Cancel ${t.name}`}
               className={`${ACTION_BTN_CLASS} text-text-muted hover:text-status-error hover:bg-status-error/10`}
             >
-              <X size={13} strokeWidth={2} aria-hidden="true" />
+              <X size={14} strokeWidth={2} aria-hidden="true" />
             </button>
           )}
 
@@ -212,7 +212,7 @@ export const TransferRow = memo(function TransferRow({
               aria-label={`Dismiss ${t.name}`}
               className={`${ACTION_BTN_CLASS} text-text-muted hover:text-text-primary hover:bg-bg-subtle`}
             >
-              <X size={13} strokeWidth={2} aria-hidden="true" />
+              <X size={14} strokeWidth={2} aria-hidden="true" />
             </button>
           )}
         </div>

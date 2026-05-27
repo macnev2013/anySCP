@@ -55,7 +55,7 @@ export function ExplorerToolbar({
         aria-label="Go to root"
         className={iconBtn}
       >
-        <Home size={14} strokeWidth={1.8} aria-hidden="true" />
+        <Home size={15} strokeWidth={1.8} aria-hidden="true" />
       </button>
 
       {/* Breadcrumb path */}
@@ -71,7 +71,7 @@ export function ExplorerToolbar({
             <span key={`${seg.path}-${index}`} className="flex items-center shrink-0">
               {!isRoot && (
                 <ChevronRight
-                  size={11}
+                  size={12}
                   strokeWidth={2}
                   className="text-text-muted/50 mx-0.5 shrink-0"
                   aria-hidden="true"
@@ -100,7 +100,7 @@ export function ExplorerToolbar({
       {/* Busy spinner */}
       {busy && (
         <Loader2
-          size={14}
+          size={15}
           strokeWidth={2}
           className="text-accent motion-safe:animate-spin shrink-0"
           aria-label="Operation in progress"
@@ -119,7 +119,7 @@ export function ExplorerToolbar({
           aria-label="Upload file"
           className={iconBtn}
         >
-          <Upload size={14} strokeWidth={1.8} aria-hidden="true" />
+          <Upload size={15} strokeWidth={1.8} aria-hidden="true" />
         </button>
       )}
 
@@ -132,7 +132,7 @@ export function ExplorerToolbar({
           aria-label="New file"
           className={iconBtn}
         >
-          <FilePlus size={14} strokeWidth={1.8} aria-hidden="true" />
+          <FilePlus size={15} strokeWidth={1.8} aria-hidden="true" />
         </button>
       )}
 
@@ -145,7 +145,7 @@ export function ExplorerToolbar({
           aria-label="New folder"
           className={iconBtn}
         >
-          <FolderPlus size={14} strokeWidth={1.8} aria-hidden="true" />
+          <FolderPlus size={15} strokeWidth={1.8} aria-hidden="true" />
         </button>
       )}
 
@@ -158,7 +158,7 @@ export function ExplorerToolbar({
         className={iconBtn}
       >
         <RefreshCw
-          size={14}
+          size={15}
           strokeWidth={1.8}
           aria-hidden="true"
           className={loading ? "motion-safe:animate-spin" : ""}

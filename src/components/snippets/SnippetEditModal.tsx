@@ -100,7 +100,7 @@ function VariableRow({ variable, onChange, disabled }: VariableRowProps) {
     "transition-[border-color,box-shadow] duration-[var(--duration-fast)]",
   ].join(" ");
 
-  const rowLabelClass = "text-[10px] font-medium text-text-muted uppercase tracking-wide";
+  const rowLabelClass = "text-[11px] font-medium text-text-muted uppercase tracking-wide";
 
   return (
     <div className="py-2.5 px-3 rounded-lg bg-bg-base border border-border flex flex-col gap-2">
@@ -117,7 +117,7 @@ function VariableRow({ variable, onChange, disabled }: VariableRowProps) {
             disabled={disabled}
             className="w-3.5 h-3.5 rounded accent-accent"
           />
-          <span className="text-[10px] text-text-muted">Required</span>
+          <span className="text-[11px] text-text-muted">Required</span>
         </label>
       </div>
 
@@ -307,7 +307,7 @@ export function SnippetEditModal({
             ].join(" ")}
             aria-label="Close"
           >
-            <X size={15} strokeWidth={2} aria-hidden="true" />
+            <X size={16} strokeWidth={2} aria-hidden="true" />
           </button>
         </div>
 
@@ -348,7 +348,7 @@ export function SnippetEditModal({
                 "font-mono resize-y min-h-[4rem]",
               ].join(" ")}
             />
-            <p className="mt-1 text-[10px] text-text-muted">
+            <p className="mt-1 text-[11px] text-text-muted">
               Use <span className="font-mono text-accent">{"{{variable_name}}"}</span> syntax to define variables.
             </p>
           </div>
@@ -426,7 +426,7 @@ export function SnippetEditModal({
                 <span className="text-[length:var(--text-xs)] font-semibold uppercase tracking-widest text-text-muted">
                   Variables
                 </span>
-                <span className="text-[10px] text-text-muted bg-bg-subtle border border-border rounded-full px-2 py-0.5">
+                <span className="text-[11px] text-text-muted bg-bg-subtle border border-border rounded-full px-2 py-0.5">
                   {variableMeta.length} detected
                 </span>
               </div>
@@ -434,7 +434,7 @@ export function SnippetEditModal({
               {/* Column headers */}
               <div className="grid grid-cols-[auto_1fr_1fr_1fr_auto] gap-2 px-3 mb-1">
                 {["Variable", "Label", "Default", "Options", "Req"].map((h) => (
-                  <span key={h} className="text-[10px] font-medium uppercase tracking-wide text-text-muted">
+                  <span key={h} className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
                     {h}
                   </span>
                 ))}

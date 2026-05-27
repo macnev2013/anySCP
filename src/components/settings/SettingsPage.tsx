@@ -6,12 +6,12 @@ import type { CursorStyle } from "../../stores/settings-store";
 
 // ─── Shared styles ───────────────────────────────────────────────────────────
 
-const LABEL_CLASS = "text-[length:var(--text-xs)] font-medium text-text-primary";
-const DESC_CLASS = "text-[length:var(--text-2xs)] text-text-muted mt-0.5";
+const LABEL_CLASS = "text-[length:var(--text-sm)] font-medium text-text-primary";
+const DESC_CLASS = "text-[length:var(--text-xs)] text-text-muted mt-0.5";
 
 
 const INPUT_CLASS = [
-  "w-20 px-2.5 py-1.5 rounded-lg text-[length:var(--text-xs)] tabular-nums",
+  "w-20 px-2.5 py-1.5 rounded-lg text-[length:var(--text-sm)] tabular-nums",
   "bg-bg-base border border-border text-text-primary",
   "outline-none focus:border-border-focus focus:ring-2 focus:ring-ring",
   "transition-[border-color,box-shadow] duration-[var(--duration-fast)]",
@@ -38,13 +38,18 @@ export function SettingsPage() {
     <div className="h-full overflow-y-auto">
       <div className="max-w-xl mx-auto px-6 py-8">
         {/* Header */}
-        <h1 className="text-[length:var(--text-base)] font-semibold text-text-primary mb-6">
-          Settings
-        </h1>
+        <div className="mb-6">
+          <h1 className="text-[length:var(--text-lg)] font-semibold text-text-primary">
+            Settings
+          </h1>
+          <p className="text-[length:var(--text-xs)] text-text-muted mt-1">
+            Configure terminal appearance, file transfers, and app updates
+          </p>
+        </div>
 
         {/* Terminal Appearance */}
         <section className="mb-8">
-          <h2 className="text-[length:var(--text-xs)] font-semibold uppercase tracking-wider text-text-muted mb-4">
+          <h2 className="text-[length:var(--text-sm)] font-semibold uppercase tracking-wider text-text-muted mb-4">
             Terminal
           </h2>
 
@@ -112,7 +117,7 @@ export function SettingsPage() {
 
         {/* Transfers */}
         <section className="mb-8">
-          <h2 className="text-[length:var(--text-xs)] font-semibold uppercase tracking-wider text-text-muted mb-4">
+          <h2 className="text-[length:var(--text-sm)] font-semibold uppercase tracking-wider text-text-muted mb-4">
             Transfers
           </h2>
 
@@ -129,7 +134,7 @@ export function SettingsPage() {
 
         {/* Updates */}
         <section className="mb-8">
-          <h2 className="text-[length:var(--text-xs)] font-semibold uppercase tracking-wider text-text-muted mb-4">
+          <h2 className="text-[length:var(--text-sm)] font-semibold uppercase tracking-wider text-text-muted mb-4">
             Updates
           </h2>
 
@@ -139,7 +144,7 @@ export function SettingsPage() {
         </section>
 
         {/* Note */}
-        <p className="text-[length:var(--text-2xs)] text-text-muted">
+        <p className="text-[length:var(--text-xs)] text-text-muted">
           Terminal settings apply to new terminals. Existing terminals keep their current settings.
         </p>
       </div>
@@ -191,6 +196,17 @@ function UpdateChecker() {
   const [version, setVersion] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+
+  // Read the real app version (injected from git tags at build) instead of hardcoding.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const { getVersion } = await import("@tauri-apps/api/app");
+        setAppVersion(await getVersion());
+      } catch { /* best-effort */ }
+    })();
+  }, []);
 
   const checkForUpdate = useCallback(async () => {
     setStatus("checking");
@@ -262,17 +278,17 @@ function UpdateChecker() {
             {status === "downloading" && `Downloading update... ${progress}%`}
             {status === "ready" && "Update downloaded. Restart to apply."}
             {status === "error" && (error ?? "Something went wrong")}
-            {(status === "idle" || status === "checking") && "Current: v0.1.0"}
+            {(status === "idle" || status === "checking") && (appVersion ? `Current: v${appVersion}` : "Reading version…")}
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           {/* Status icon */}
           {status === "up-to-date" && (
-            <CheckCircle2 size={14} strokeWidth={2} className="text-status-connected shrink-0" />
+            <CheckCircle2 size={15} strokeWidth={2} className="text-status-connected shrink-0" />
           )}
           {status === "error" && (
-            <AlertCircle size={14} strokeWidth={2} className="text-status-error shrink-0" />
+            <AlertCircle size={15} strokeWidth={2} className="text-status-error shrink-0" />
           )}
 
           {/* Action button */}
@@ -281,21 +297,21 @@ function UpdateChecker() {
               onClick={() => void checkForUpdate()}
               className={[
                 "flex items-center gap-1.5 px-3 py-1.5 rounded-lg",
-                "text-[length:var(--text-xs)] font-medium",
+                "text-[length:var(--text-sm)] font-medium",
                 "bg-bg-base border border-border text-text-secondary",
                 "hover:text-text-primary hover:border-border-focus",
                 "transition-all duration-[var(--duration-fast)]",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               ].join(" ")}
             >
-              <RefreshCw size={12} strokeWidth={2} />
+              <RefreshCw size={13} strokeWidth={2} />
               Check
             </button>
           )}
 
           {status === "checking" && (
-            <span className="flex items-center gap-1.5 px-3 py-1.5 text-[length:var(--text-xs)] font-medium text-text-muted">
-              <RefreshCw size={12} strokeWidth={2} className="motion-safe:animate-spin" />
+            <span className="flex items-center gap-1.5 px-3 py-1.5 text-[length:var(--text-sm)] font-medium text-text-muted">
+              <RefreshCw size={13} strokeWidth={2} className="motion-safe:animate-spin" />
               Checking...
             </span>
           )}
@@ -305,14 +321,14 @@ function UpdateChecker() {
               onClick={() => void installUpdate()}
               className={[
                 "flex items-center gap-1.5 px-3 py-1.5 rounded-lg",
-                "text-[length:var(--text-xs)] font-medium",
+                "text-[length:var(--text-sm)] font-medium",
                 "bg-accent text-text-inverse",
                 "hover:bg-accent-hover",
                 "transition-all duration-[var(--duration-fast)]",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               ].join(" ")}
             >
-              <Download size={12} strokeWidth={2} />
+              <Download size={13} strokeWidth={2} />
               Update to v{version}
             </button>
           )}
@@ -331,7 +347,7 @@ function UpdateChecker() {
               onClick={() => void handleRelaunch()}
               className={[
                 "flex items-center gap-1.5 px-3 py-1.5 rounded-lg",
-                "text-[length:var(--text-xs)] font-medium",
+                "text-[length:var(--text-sm)] font-medium",
                 "bg-status-connected text-text-inverse",
                 "hover:opacity-90",
                 "transition-all duration-[var(--duration-fast)]",

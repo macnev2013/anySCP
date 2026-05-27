@@ -121,7 +121,7 @@ export function UnifiedTabBar() {
               onClick={() => setActiveTab(tabId)}
               title={tab.label + (paneCount > 1 ? ` (${paneCount} panes)` : "")}
               className={[
-                "group relative flex items-center gap-2 px-3.5 h-[28px] shrink-0 max-w-[220px]",
+                "group relative flex items-center gap-2 px-3.5 h-[30px] shrink-0 max-w-[220px]",
                 "text-[length:var(--text-sm)] leading-none rounded-lg",
                 "transition-[color,background-color] duration-[var(--duration-fast)]",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -132,7 +132,7 @@ export function UnifiedTabBar() {
             >
               {/* Tab icon */}
               <Icon
-                size={13}
+                size={14}
                 strokeWidth={1.8}
                 className={[
                   "shrink-0",
@@ -153,14 +153,14 @@ export function UnifiedTabBar() {
               {tab.type === "terminal" && paneCount === 2 && topDir && (
                 <span className="shrink-0 text-text-muted" aria-hidden="true">
                   {topDir === "horizontal" ? (
-                    <Columns2 size={12} strokeWidth={1.8} />
+                    <Columns2 size={13} strokeWidth={1.8} />
                   ) : (
-                    <Rows2 size={12} strokeWidth={1.8} />
+                    <Rows2 size={13} strokeWidth={1.8} />
                   )}
                 </span>
               )}
               {tab.type === "terminal" && paneCount >= 3 && (
-                <span className="flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-lg bg-bg-muted text-[9px] font-bold text-text-secondary tabular-nums leading-none shrink-0">
+                <span className="flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-lg bg-bg-muted text-[10px] font-bold text-text-secondary tabular-nums leading-none shrink-0">
                   {paneCount}
                 </span>
               )}
@@ -168,7 +168,7 @@ export function UnifiedTabBar() {
               {/* Zoom indicator */}
               {isZoomed && (
                 <span className="shrink-0 text-accent" aria-hidden="true" title="Zoomed pane">
-                  <Maximize2 size={10} strokeWidth={2} />
+                  <Maximize2 size={11} strokeWidth={2} />
                 </span>
               )}
 
@@ -188,7 +188,7 @@ export function UnifiedTabBar() {
                   aria-label={`Close ${tab.label}`}
                   tabIndex={-1}
                 >
-                  <X size={11} strokeWidth={2} aria-hidden="true" />
+                  <X size={12} strokeWidth={2} aria-hidden="true" />
                 </button>
               )}
             </button>
@@ -214,7 +214,7 @@ export function UnifiedTabBar() {
                 : "text-text-muted hover:text-text-secondary hover:bg-bg-subtle",
             ].join(" ")}
           >
-            <Code size={14} strokeWidth={1.8} aria-hidden="true" />
+            <Code size={15} strokeWidth={1.8} aria-hidden="true" />
           </button>
         </div>
       )}

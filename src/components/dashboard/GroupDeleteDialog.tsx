@@ -69,7 +69,7 @@ export function GroupDeleteDialog({
             style={{ backgroundColor: "oklch(0.650 0.200 25 / 0.12)" }}
           >
             <AlertTriangle
-              size={18}
+              size={19}
               strokeWidth={1.8}
               className="text-status-error"
               aria-hidden="true"

@@ -102,7 +102,7 @@ export function SnippetCard({ snippet, onEdit, onDelete, onDuplicate }: SnippetC
               </h3>
               {snippet.is_dangerous && (
                 <AlertTriangle
-                  size={13}
+                  size={14}
                   strokeWidth={2}
                   className="text-status-error shrink-0"
                   aria-label="Dangerous — requires confirmation"
@@ -124,7 +124,7 @@ export function SnippetCard({ snippet, onEdit, onDelete, onDuplicate }: SnippetC
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:opacity-100",
             ].join(" ")}
           >
-            <Pencil size={15} strokeWidth={1.8} aria-hidden="true" />
+            <Pencil size={16} strokeWidth={1.8} aria-hidden="true" />
           </button>
         </div>
 
@@ -145,14 +145,14 @@ export function SnippetCard({ snippet, onEdit, onDelete, onDuplicate }: SnippetC
               key={tag}
               className={[
                 "inline-flex items-center px-1.5 py-0.5 rounded-md",
-                "text-[10px] font-medium text-text-muted bg-bg-subtle border border-border",
+                "text-[11px] font-medium text-text-muted bg-bg-subtle border border-border",
               ].join(" ")}
             >
               {tag}
             </span>
           ))}
 
-          <span className="ml-auto text-[10px] text-text-muted shrink-0 whitespace-nowrap">
+          <span className="ml-auto text-[11px] text-text-muted shrink-0 whitespace-nowrap">
             {snippet.use_count > 0
               ? `Used ${snippet.use_count}x · ${formatLastUsed(snippet.last_used_at)}`
               : "Never used"}

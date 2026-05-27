@@ -183,7 +183,7 @@ export function HistoryPage() {
           {/* Search */}
           <div className="relative">
             <Search
-              size={15}
+              size={16}
               strokeWidth={2}
               className="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none"
               aria-hidden="true"
@@ -295,9 +295,9 @@ export function HistoryPage() {
                   ].join(" ")}
                 >
                   {loading ? (
-                    <Loader2 size={13} strokeWidth={2} className="motion-safe:animate-spin" />
+                    <Loader2 size={14} strokeWidth={2} className="motion-safe:animate-spin" />
                   ) : (
-                    <ChevronDown size={13} strokeWidth={2} />
+                    <ChevronDown size={14} strokeWidth={2} />
                   )}
                   {loading ? "Loading..." : "Load more"}
                 </button>
@@ -305,7 +305,7 @@ export function HistoryPage() {
             </div>
           ) : loading ? (
             <div className="flex items-center justify-center py-16">
-              <Loader2 size={20} strokeWidth={2} className="text-text-muted motion-safe:animate-spin" />
+              <Loader2 size={22} strokeWidth={2} className="text-text-muted motion-safe:animate-spin" />
             </div>
           ) : entries.length > 0 && query.trim() ? (
             <p className="text-[length:var(--text-sm)] text-text-muted py-8 text-center">
@@ -313,7 +313,7 @@ export function HistoryPage() {
             </p>
           ) : (
             <div className="flex flex-col items-center justify-center py-16 gap-3">
-              <Clock size={28} strokeWidth={1.2} className="text-text-muted/30" />
+              <Clock size={30} strokeWidth={1.2} className="text-text-muted/30" />
               <p className="text-[length:var(--text-sm)] text-text-muted">
                 No connection history
               </p>

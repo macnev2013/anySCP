@@ -67,7 +67,7 @@ function PillButton({
             : "text-text-muted border border-transparent hover:text-text-primary hover:bg-bg-overlay hover:border-border/60",
         ].join(" ")}
       >
-        <Icon size={16} strokeWidth={isActive ? 2 : 1.5} className="shrink-0" />
+        <Icon size={17} strokeWidth={isActive ? 2 : 1.5} className="shrink-0" />
 
         {/* Label — expanded only */}
         {expanded && (
@@ -90,7 +90,7 @@ function PillButton({
               {badge}
             </span>
           ) : (
-            <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[15px] h-[15px] px-0.5 rounded-full bg-accent text-[8px] font-bold text-text-inverse leading-none">
+            <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[15px] h-[15px] px-0.5 rounded-full bg-accent text-[9px] font-bold text-text-inverse leading-none">
               {badge}
             </span>
           )

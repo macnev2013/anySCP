@@ -202,7 +202,7 @@ export function TransferPopover({ anchorRect, onClose }: TransferPopoverProps) {
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           ].join(" ")}
         >
-          <X size={14} strokeWidth={2} aria-hidden="true" />
+          <X size={15} strokeWidth={2} aria-hidden="true" />
         </button>
       </div>
 

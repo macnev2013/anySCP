@@ -122,7 +122,7 @@ export function SnippetFolderModal({ open, onClose, onSave }: SnippetFolderModal
             className="flex items-center justify-center w-10 h-10 rounded-lg shrink-0"
             style={{ backgroundColor: `${color}20` }}
           >
-            <Folder size={20} strokeWidth={1.8} style={{ color }} aria-hidden="true" />
+            <Folder size={22} strokeWidth={1.8} style={{ color }} aria-hidden="true" />
           </div>
           <h2 className="text-[length:var(--text-lg)] font-semibold text-text-primary">
             New Folder

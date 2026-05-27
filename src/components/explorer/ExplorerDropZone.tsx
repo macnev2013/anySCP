@@ -19,7 +19,7 @@ export function ExplorerDropZone({ path }: ExplorerDropZoneProps) {
     >
       <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-accent/10">
         <Upload
-          size={24}
+          size={26}
           strokeWidth={1.8}
           className="text-accent"
           aria-hidden="true"

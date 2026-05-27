@@ -31,7 +31,7 @@ export function ConnectionDialog({ label, error, onClose, onRetry }: ConnectionD
           <>
             <div className="flex items-start gap-3 mb-4">
               <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-status-error/10 shrink-0">
-                <AlertCircle size={20} strokeWidth={1.8} className="text-status-error" />
+                <AlertCircle size={22} strokeWidth={1.8} className="text-status-error" />
               </div>
               <div className="flex-1 min-w-0">
                 <h2 className="text-[length:var(--text-sm)] font-semibold text-text-primary">
@@ -46,7 +46,7 @@ export function ConnectionDialog({ label, error, onClose, onRetry }: ConnectionD
                 aria-label="Close"
                 className="p-1 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
               >
-                <X size={14} strokeWidth={2} />
+                <X size={15} strokeWidth={2} />
               </button>
             </div>
 
@@ -76,7 +76,7 @@ export function ConnectionDialog({ label, error, onClose, onRetry }: ConnectionD
         ) : (
           /* Connecting state */
           <div className="flex flex-col items-center gap-4 py-4">
-            <Loader2 size={24} strokeWidth={2} className="text-accent motion-safe:animate-spin" />
+            <Loader2 size={26} strokeWidth={2} className="text-accent motion-safe:animate-spin" />
             <div className="text-center">
               <p className="text-[length:var(--text-sm)] font-medium text-text-primary">
                 Connecting...

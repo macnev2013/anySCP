@@ -36,7 +36,7 @@ export function PathBar({ path, onNavigate }: PathBarProps) {
             {/* Chevron separator — skip before the root slash */}
             {!isRoot && (
               <ChevronRight
-                size={12}
+                size={13}
                 strokeWidth={2}
                 className="text-text-muted shrink-0"
                 aria-hidden="true"
