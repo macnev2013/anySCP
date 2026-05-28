@@ -146,6 +146,38 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
         ].join(" ")}
       >
 
+        {/* Action buttons (top-right) */}
+        <div className="absolute top-2 right-2 flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={stopAnd(() => onConnect(host))}
+            title="Open Terminal"
+            aria-label={`Open terminal for ${displayName}`}
+            className={[
+              "flex items-center justify-center w-7 h-7 rounded-md",
+              "text-text-muted hover:text-text-primary hover:bg-bg-overlay",
+              "transition-colors duration-[var(--duration-fast)]",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            ].join(" ")}
+          >
+            <TerminalSquare size={14} strokeWidth={2} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={stopAnd(() => onExplore(host))}
+            title="Open Explorer"
+            aria-label={`Open explorer for ${displayName}`}
+            className={[
+              "flex items-center justify-center w-7 h-7 rounded-md",
+              "text-text-muted hover:text-text-primary hover:bg-bg-overlay",
+              "transition-colors duration-[var(--duration-fast)]",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            ].join(" ")}
+          >
+            <FolderOpen size={14} strokeWidth={2} aria-hidden="true" />
+          </button>
+        </div>
+
         {/* Avatar circle */}
         <div
           className="flex items-center justify-center w-9 h-9 rounded-full shrink-0 font-semibold text-[length:var(--text-sm)] select-none"
@@ -181,42 +213,6 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
           </div>
         </div>
 
-        {/* Action buttons (bottom) */}
-        <div className="flex items-stretch gap-1 -mt-1 pt-1 px-3.5 -mx-3.5 -mb-2 border-t border-border/60">
-          <button
-            type="button"
-            onClick={stopAnd(() => onConnect(host))}
-            title="Open Terminal"
-            aria-label={`Open terminal for ${displayName}`}
-            className={[
-              "flex items-center justify-center gap-1.5 flex-1 h-[30px] rounded-md",
-              "text-[length:var(--text-sm)] text-text-muted",
-              "hover:text-text-primary hover:bg-bg-overlay",
-              "transition-colors duration-[var(--duration-fast)]",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            ].join(" ")}
-          >
-            <TerminalSquare size={14} strokeWidth={2} aria-hidden="true" />
-            Terminal
-          </button>
-          <span className="w-px bg-border/60 self-stretch -my-1" aria-hidden="true" />
-          <button
-            type="button"
-            onClick={stopAnd(() => onExplore(host))}
-            title="Open Explorer"
-            aria-label={`Open explorer for ${displayName}`}
-            className={[
-              "flex items-center justify-center gap-1.5 flex-1 h-[30px] rounded-md",
-              "text-[length:var(--text-sm)] text-text-muted",
-              "hover:text-text-primary hover:bg-bg-overlay",
-              "transition-colors duration-[var(--duration-fast)]",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            ].join(" ")}
-          >
-            <FolderOpen size={14} strokeWidth={2} aria-hidden="true" />
-            Explorer
-          </button>
-        </div>
       </div>
 
       {contextMenu && (
