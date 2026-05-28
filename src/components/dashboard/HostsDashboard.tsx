@@ -5,8 +5,7 @@ import {
   useCallback,
   useMemo,
 } from "react";
-import { Search, Plus, ArrowLeft, FolderPlus, Import, Cloud, Trash2, FolderOpen, Pencil, Copy } from "lucide-react";
-import { ContextMenu } from "../shared/ContextMenu";
+import { Search, Plus, ArrowLeft, FolderPlus, Import, Cloud } from "lucide-react";
 import { ImportSshConfigModal } from "./ImportSshConfigModal";
 import { S3ConnectDialog } from "../s3/S3ConnectDialog";
 import { useHostsStore } from "../../stores/hosts-store";
@@ -18,6 +17,7 @@ import { useSftpStore } from "../../stores/sftp-store";
 import { useS3Store } from "../../stores/s3-store";
 import type { SavedHost, HostGroup, RecentConnection, S3Connection } from "../../types";
 import { HostCard } from "./HostCard";
+import { S3Card } from "./S3Card";
 import { GroupCard } from "./GroupCard";
 import { GroupDeleteDialog } from "./GroupDeleteDialog";
 import { GroupModal } from "./GroupModal";
@@ -59,8 +59,28 @@ export function HostsDashboard() {
     } catch { /* best-effort */ }
   };
 
-  const [s3ContextMenu, setS3ContextMenu] = useState<{ conn: S3Connection; x: number; y: number } | null>(null);
   const [editingS3Connection, setEditingS3Connection] = useState<S3Connection | null>(null);
+
+  const handleS3Duplicate = async (conn: S3Connection) => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("s3_save_connection", {
+        label: `${conn.label} (copy)`,
+        provider: conn.provider,
+        bucketName: conn.bucket ?? "",
+        region: conn.region,
+        endpoint: conn.endpoint,
+        accessKey: "",
+        secretKey: "",
+        pathStyle: conn.path_style,
+        groupId: conn.group_id,
+        color: conn.color,
+        environment: conn.environment,
+        notes: conn.notes,
+      });
+    } catch { /* credential-less copy saved to DB */ }
+    await loadS3Connections();
+  };
 
   const handleS3Connect = async (conn: S3Connection) => {
     setConnectingHost({ label: conn.label, error: null, retry: () => void handleS3Connect(conn) });
@@ -539,54 +559,15 @@ export function HostsDashboard() {
               </h2>
               <div className="grid grid-cols-3 gap-2.5">
                 {filteredS3.map((conn) => (
-                    <button
-                      key={conn.id}
-                      onClick={() => void handleS3Connect(conn)}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        setS3ContextMenu({ conn, x: e.clientX, y: e.clientY });
-                      }}
-                      className={[
-                        "flex flex-col gap-2 px-4 py-3 rounded-lg text-left",
-                        "bg-bg-surface border border-border",
-                        "hover:bg-bg-overlay/50 hover:border-border-focus",
-                        "transition-all duration-[var(--duration-fast)]",
-                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                      ].join(" ")}
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <div
-                          className="flex items-center justify-center w-8 h-8 rounded-lg shrink-0 font-bold text-[length:var(--text-xs)]"
-                          style={{
-                            background: conn.color ?? "var(--color-bg-muted)",
-                            color: conn.color ? "var(--color-text-inverse)" : "var(--color-text-muted)",
-                          }}
-                        >
-                          <Cloud size={15} strokeWidth={2} />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="text-[length:var(--text-sm)] font-medium text-text-primary truncate">
-                              {conn.label}
-                            </p>
-                            {conn.environment && (
-                              <span className={[
-                                "inline-flex items-center px-1.5 py-px rounded text-[9px] font-semibold tracking-wide leading-none shrink-0 uppercase",
-                                conn.environment === "production" ? "bg-status-error/15 text-status-error" :
-                                conn.environment === "staging" ? "bg-status-connecting/15 text-status-connecting" :
-                                "bg-accent/15 text-accent",
-                              ].join(" ")}>
-                                {conn.environment}
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-[length:var(--text-2xs)] text-text-muted truncate">
-                            {conn.provider} · {conn.region}{conn.bucket ? ` · ${conn.bucket}` : ""}
-                          </p>
-                        </div>
-                      </div>
-                    </button>
-                  ))}
+                  <S3Card
+                    key={conn.id}
+                    conn={conn}
+                    onConnect={(c) => void handleS3Connect(c)}
+                    onEdit={(c) => setEditingS3Connection(c)}
+                    onDuplicate={(c) => void handleS3Duplicate(c)}
+                    onDelete={(c) => void handleS3Delete(c)}
+                  />
+                ))}
               </div>
             </section>
           )}
@@ -607,59 +588,6 @@ export function HostsDashboard() {
           hostCount={deletingGroup.hostCount}
           onConfirm={(deleteHosts) => void handleGroupDeleteConfirm(deleteHosts)}
           onCancel={() => setDeletingGroup(null)}
-        />
-      )}
-
-      {s3ContextMenu && (
-        <ContextMenu
-          items={[
-            {
-              label: "Explore",
-              icon: FolderOpen,
-              onClick: () => void handleS3Connect(s3ContextMenu.conn),
-            },
-            {
-              label: "Edit",
-              icon: Pencil,
-              onClick: () => setEditingS3Connection(s3ContextMenu.conn),
-            },
-            {
-              label: "Duplicate",
-              icon: Copy,
-              separator: true,
-              onClick: () => {
-                void (async () => {
-                  try {
-                    const { invoke } = await import("@tauri-apps/api/core");
-                    await invoke("s3_save_connection", {
-                      label: `${s3ContextMenu.conn.label} (copy)`,
-                      provider: s3ContextMenu.conn.provider,
-                      bucketName: s3ContextMenu.conn.bucket ?? "",
-                      region: s3ContextMenu.conn.region,
-                      endpoint: s3ContextMenu.conn.endpoint,
-                      accessKey: "",
-                      secretKey: "",
-                      pathStyle: s3ContextMenu.conn.path_style,
-                      groupId: s3ContextMenu.conn.group_id,
-                      color: s3ContextMenu.conn.color,
-                      environment: s3ContextMenu.conn.environment,
-                      notes: s3ContextMenu.conn.notes,
-                    });
-                  } catch { /* credential-less copy saved to DB */ }
-                  await loadS3Connections();
-                })();
-              },
-            },
-            {
-              label: "Delete",
-              icon: Trash2,
-              separator: true,
-              danger: true,
-              onClick: () => void handleS3Delete(s3ContextMenu.conn),
-            },
-          ]}
-          position={{ x: s3ContextMenu.x, y: s3ContextMenu.y }}
-          onClose={() => setS3ContextMenu(null)}
         />
       )}
 

@@ -1,38 +1,18 @@
 import { useState } from "react";
-import { Pencil, TerminalSquare, Copy, Trash2, FolderOpen } from "lucide-react";
-import type { SavedHost } from "../../types";
-import { relativeTime } from "../../utils/time";
+import { Cloud, Pencil, Copy, Trash2, FolderOpen } from "lucide-react";
+import type { S3Connection } from "../../types";
 import { ContextMenu } from "../shared/ContextMenu";
+import { getHostColor } from "./HostCard";
 
-interface HostCardProps {
-  host: SavedHost;
-  onConnect: (host: SavedHost) => void;
-  onExplore: (host: SavedHost) => void;
-  onEdit: (hostId: string) => void;
-  onDelete: (hostId: string) => void;
-  onDuplicate: (host: SavedHost) => void;
+interface S3CardProps {
+  conn: S3Connection;
+  onConnect: (conn: S3Connection) => void;
+  onEdit: (conn: S3Connection) => void;
+  onDuplicate: (conn: S3Connection) => void;
+  onDelete: (conn: S3Connection) => void;
 }
 
-export const HOST_COLORS = [
-  "#ef4444",
-  "#f97316",
-  "#eab308",
-  "#22c55e",
-  "#06b6d4",
-  "#3b82f6",
-  "#8b5cf6",
-  "#ec4899",
-];
-
-export function getHostColor(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = (hash * 31 + name.charCodeAt(i)) | 0;
-  }
-  return HOST_COLORS[Math.abs(hash) % HOST_COLORS.length];
-}
-
-// ─── Environment badge ────────────────────────────────────────────────────────
+// ─── Environment badge (matches HostCard) ─────────────────────────────────────
 
 type EnvironmentValue = "production" | "staging" | "dev" | "testing";
 
@@ -56,30 +36,17 @@ function isEnvironmentValue(val: string): val is EnvironmentValue {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDuplicate }: HostCardProps) {
-  const displayName = host.label || host.host;
-  const avatarColor = host.color || getHostColor(host.host);
-  const initial = displayName.charAt(0).toUpperCase();
+export function S3Card({ conn, onConnect, onEdit, onDuplicate, onDelete }: S3CardProps) {
+  const displayName = conn.label;
+  const accentColor = conn.color || getHostColor(conn.label);
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
-  // Build subtitle segments
-  const subtitleParts: string[] = [`SSH, ${host.username}`];
-  if (host.os_type) {
-    const osLabels: Record<string, string> = {
-      linux: "Linux",
-      macos: "macOS",
-      windows: "Windows",
-      freebsd: "FreeBSD",
-    };
-    subtitleParts.push(osLabels[host.os_type] ?? host.os_type);
-  }
-  const lastSeen = host.last_connected_at ? relativeTime(host.last_connected_at) : null;
-  if (lastSeen) subtitleParts.push(lastSeen);
-
+  const subtitleParts: string[] = [conn.provider, conn.region];
+  if (conn.bucket) subtitleParts.push(conn.bucket);
   const subtitle = subtitleParts.join(" · ");
 
-  const env = host.environment && isEnvironmentValue(host.environment) ? host.environment : null;
+  const env = conn.environment && isEnvironmentValue(conn.environment) ? conn.environment : null;
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -87,39 +54,10 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
     setContextMenu({ x: e.clientX, y: e.clientY });
   };
 
-  const contextItems = [
-    {
-      label: "Terminal",
-      icon: TerminalSquare,
-      onClick: () => onConnect(host),
-    },
-    {
-      label: "Explorer",
-      icon: FolderOpen,
-      onClick: () => onExplore(host),
-    },
-    {
-      label: "Edit",
-      icon: Pencil,
-      onClick: () => onEdit(host.id),
-    },
-    {
-      label: "Duplicate",
-      icon: Copy,
-      onClick: () => onDuplicate(host),
-    },
-    {
-      label: "Delete",
-      icon: Trash2,
-      danger: true,
-      onClick: () => onDelete(host.id),
-    },
-  ];
-
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      onConnect(host);
+      onConnect(conn);
     }
   };
 
@@ -128,12 +66,19 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
     fn();
   };
 
+  const contextItems = [
+    { label: "Explore", icon: FolderOpen, onClick: () => onConnect(conn) },
+    { label: "Edit", icon: Pencil, onClick: () => onEdit(conn) },
+    { label: "Duplicate", icon: Copy, onClick: () => onDuplicate(conn) },
+    { label: "Delete", icon: Trash2, danger: true, separator: true, onClick: () => onDelete(conn) },
+  ];
+
   return (
     <>
       <div
         role="button"
         tabIndex={0}
-        onClick={() => onConnect(host)}
+        onClick={() => onConnect(conn)}
         onKeyDown={handleKeyDown}
         onContextMenu={handleContextMenu}
         title={`Connect to ${displayName}`}
@@ -150,7 +95,7 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
         <div
           className="absolute inset-0 pointer-events-none -z-10 opacity-70 group-hover:opacity-100 transition-opacity duration-[var(--duration-fast)]"
           style={{
-            background: `radial-gradient(circle at top left, ${avatarColor}33, transparent 60%)`,
+            background: `radial-gradient(circle at top left, ${accentColor}33, transparent 60%)`,
           }}
           aria-hidden="true"
         />
@@ -159,30 +104,7 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
         <div className="absolute top-2 right-2 flex items-center gap-0.5">
           <button
             type="button"
-            onClick={stopAnd(() => onConnect(host))}
-            title="Open Terminal"
-            aria-label={`Open terminal for ${displayName}`}
-            className={[
-              "group/btn flex items-center h-8 px-2 rounded-md",
-              "text-text-muted hover:text-text-primary hover:bg-bg-overlay",
-              "transition-[background-color,color] duration-[var(--duration-fast)]",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            ].join(" ")}
-          >
-            <TerminalSquare size={16} strokeWidth={2} aria-hidden="true" className="shrink-0" />
-            <span
-              className={[
-                "overflow-hidden whitespace-nowrap text-[length:var(--text-xs)] font-medium",
-                "max-w-0 ml-0 group-hover/btn:max-w-[70px] group-hover/btn:ml-1",
-                "transition-[max-width,margin-left] duration-200 ease-out",
-              ].join(" ")}
-            >
-              Terminal
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={stopAnd(() => onExplore(host))}
+            onClick={stopAnd(() => onConnect(conn))}
             title="Open Explorer"
             aria-label={`Open explorer for ${displayName}`}
             className={[
@@ -200,25 +122,24 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
                 "transition-[max-width,margin-left] duration-200 ease-out",
               ].join(" ")}
             >
-              Explorer
+              Explore
             </span>
           </button>
         </div>
 
         {/* Avatar circle */}
         <div
-          className="flex items-center justify-center w-9 h-9 rounded-full shrink-0 font-semibold text-[length:var(--text-sm)] select-none"
+          className="flex items-center justify-center w-9 h-9 rounded-full shrink-0 select-none"
           style={{
-            backgroundColor: `${avatarColor}25`,
-            color: avatarColor,
-            fontFamily: "var(--font-sans)",
+            backgroundColor: `${accentColor}25`,
+            color: accentColor,
           }}
           aria-hidden="true"
         >
-          {initial}
+          <Cloud size={16} strokeWidth={2} />
         </div>
 
-        {/* Host info */}
+        {/* Connection info */}
         <div className="min-w-0">
           <p className="text-[length:var(--text-sm)] font-medium text-text-primary truncate leading-tight pr-5">
             {displayName}
@@ -239,7 +160,6 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
             )}
           </div>
         </div>
-
       </div>
 
       {contextMenu && (
