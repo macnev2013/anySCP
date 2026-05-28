@@ -5,16 +5,33 @@ use dashmap::DashMap;
 use russh::client;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
+use tokio::sync::Mutex;
 use tracing::info;
 
 use super::handler::SshClientHandler;
 use super::session::SshSession;
 
+/// Authenticated SSH handle plus any upstream jump handles that must outlive it.
+/// The jump_chain entries each hold a russh `Handle` that owns the transport
+/// the next inner connection is layered on. Drop them and the inner channel dies.
+struct AuthenticatedHandle {
+    handle: client::Handle<SshClientHandler>,
+    jump_chain: Vec<Arc<Mutex<client::Handle<SshClientHandler>>>>,
+}
+
+/// Bare (no-PTY) SSH connection used by SFTP. Keeps the jump chain alive
+/// alongside the target handle so the underlying transport stays open.
+struct BareHandle {
+    handle: Arc<Mutex<client::Handle<SshClientHandler>>>,
+    #[allow(dead_code)]
+    jump_chain: Vec<Arc<Mutex<client::Handle<SshClientHandler>>>>,
+}
+
 /// Manages all active SSH sessions. Stored as Tauri managed state.
 pub struct SshManager {
     sessions: DashMap<String, SshSession>,
     /// Bare SSH handles for SFTP-only connections (no PTY).
-    bare_handles: DashMap<String, Arc<tokio::sync::Mutex<client::Handle<super::handler::SshClientHandler>>>>,
+    bare_handles: DashMap<String, BareHandle>,
 }
 
 impl SshManager {
@@ -52,68 +69,14 @@ impl SshManager {
             ..Default::default()
         });
 
-        let addr = format!("{}:{}", config.host, config.port);
-        let handler = SshClientHandler;
-        let mut handle = client::connect(russh_config, &addr, handler)
-            .await
-            .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
+        let host_for_log = config.host.clone();
+        let default_shell = config.default_shell.clone();
+        let startup_command = config.startup_command.clone();
 
-        let authenticated = match &config.auth_method {
-            AuthMethod::Password { password } => handle
-                .authenticate_password(&config.username, password)
-                .await
-                .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?,
-            AuthMethod::PrivateKey {
-                key_path,
-                passphrase,
-            } => {
-                let key_data = tokio::fs::read_to_string(key_path)
-                    .await
-                    .map_err(|e| SshError::IoError(e.to_string()))?;
+        let AuthenticatedHandle { handle, jump_chain } =
+            open_authenticated_handle(config, russh_config).await?;
 
-                // Auto-convert PPK to OpenSSH if detected
-                let key_data = if super::keys::is_ppk_format(&key_data) {
-                    let kp = key_path.clone();
-                    let pp = passphrase.clone();
-                    tokio::task::spawn_blocking(move || {
-                        super::keys::convert_ppk_to_openssh(&kp, pp.as_deref())
-                    })
-                    .await
-                    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
-                    ?
-                } else {
-                    key_data
-                };
-
-                Self::auth_with_key_data(
-                    &mut handle,
-                    &config.username,
-                    &key_data,
-                    passphrase.as_deref(),
-                )
-                .await?
-            }
-            AuthMethod::PrivateKeyData {
-                key_data,
-                passphrase,
-            } => {
-                Self::auth_with_key_data(
-                    &mut handle,
-                    &config.username,
-                    key_data,
-                    passphrase.as_deref(),
-                )
-                .await?
-            }
-        };
-
-        if !authenticated {
-            return Err(SshError::AuthenticationFailed(
-                "server rejected credentials".to_string(),
-            ));
-        }
-
-        info!(session_id = %sid, host = %config.host, "SSH authenticated");
+        info!(session_id = %sid, host = %host_for_log, "SSH authenticated");
 
         let session = SshSession::open_pty(
             handle,
@@ -121,8 +84,9 @@ impl SshManager {
             80,
             24,
             app_handle,
-            config.default_shell.clone(),
-            config.startup_command.clone(),
+            default_shell,
+            startup_command,
+            jump_chain,
         )
         .await?;
 
@@ -146,72 +110,18 @@ impl SshManager {
             ..Default::default()
         });
 
-        let addr = format!("{}:{}", config.host, config.port);
-        let handler = SshClientHandler;
-        let mut handle = client::connect(russh_config, &addr, handler)
-            .await
-            .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
+        let host_for_log = config.host.clone();
+        let AuthenticatedHandle { handle, jump_chain } =
+            open_authenticated_handle(config, russh_config).await?;
 
-        let authenticated = match &config.auth_method {
-            AuthMethod::Password { password } => handle
-                .authenticate_password(&config.username, password)
-                .await
-                .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?,
-            AuthMethod::PrivateKey {
-                key_path,
-                passphrase,
-            } => {
-                let key_data = tokio::fs::read_to_string(key_path)
-                    .await
-                    .map_err(|e| SshError::IoError(e.to_string()))?;
-
-                // Auto-convert PPK to OpenSSH if detected
-                let key_data = if super::keys::is_ppk_format(&key_data) {
-                    let kp = key_path.clone();
-                    let pp = passphrase.clone();
-                    tokio::task::spawn_blocking(move || {
-                        super::keys::convert_ppk_to_openssh(&kp, pp.as_deref())
-                    })
-                    .await
-                    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
-                    ?
-                } else {
-                    key_data
-                };
-
-                Self::auth_with_key_data(
-                    &mut handle,
-                    &config.username,
-                    &key_data,
-                    passphrase.as_deref(),
-                )
-                .await?
-            }
-            AuthMethod::PrivateKeyData {
-                key_data,
-                passphrase,
-            } => {
-                Self::auth_with_key_data(
-                    &mut handle,
-                    &config.username,
-                    key_data,
-                    passphrase.as_deref(),
-                )
-                .await?
-            }
-        };
-
-        if !authenticated {
-            return Err(SshError::AuthenticationFailed(
-                "server rejected credentials".to_string(),
-            ));
-        }
-
-        info!(session_id = %sid, host = %config.host, "SSH authenticated (no PTY, for SFTP)");
+        info!(session_id = %sid, host = %host_for_log, "SSH authenticated (no PTY, for SFTP)");
 
         self.bare_handles.insert(
             sid.clone(),
-            Arc::new(tokio::sync::Mutex::new(handle)),
+            BareHandle {
+                handle: Arc::new(Mutex::new(handle)),
+                jump_chain,
+            },
         );
 
         Ok(session_id)
@@ -247,7 +157,7 @@ impl SshManager {
             return Ok(entry.value().ssh_handle());
         }
         if let Some(entry) = self.bare_handles.get(session_id) {
-            return Ok(entry.value().clone());
+            return Ok(entry.value().handle.clone());
         }
         Err(SshError::SessionNotFound(session_id.to_string()))
     }
@@ -337,5 +247,277 @@ impl SshManager {
 
         info!(session_id = %session_id, "SSH disconnected");
         Ok(())
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Proxy-aware connection helper
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Build the SSH transport (direct TCP, ProxyCommand subprocess, or ProxyJump
+/// channel) and authenticate. Returns the authenticated handle along with any
+/// upstream jump handles that must outlive it.
+///
+/// Precedence matches OpenSSH: if both `proxy_command` and `proxy_jump` are
+/// set on the config, `proxy_command` wins.
+///
+/// Returns a `BoxFuture` because the ProxyJump branch recurses into itself —
+/// async fn recursion requires a heap-allocated future with a fixed size.
+fn open_authenticated_handle(
+    config: HostConfig,
+    russh_cfg: Arc<client::Config>,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<AuthenticatedHandle, SshError>> + Send>,
+> {
+    Box::pin(open_authenticated_handle_inner(config, russh_cfg))
+}
+
+async fn open_authenticated_handle_inner(
+    config: HostConfig,
+    russh_cfg: Arc<client::Config>,
+) -> Result<AuthenticatedHandle, SshError> {
+    let mut jump_chain: Vec<Arc<Mutex<client::Handle<SshClientHandler>>>> = Vec::new();
+
+    let mut handle = if let Some(cmd) = config.proxy_command.as_ref() {
+        // ── ProxyCommand: spawn subprocess via shell, pipe stdio to russh ──
+        let expanded = expand_proxy_command_tokens(
+            cmd.trim(),
+            &config.host,
+            config.port,
+            &config.username,
+        );
+        if expanded.is_empty() {
+            return Err(SshError::ConnectionFailed(
+                "ProxyCommand is empty after token expansion".to_string(),
+            ));
+        }
+        #[cfg(not(windows))]
+        let (shell, flag): (&str, &str) = ("sh", "-c");
+        #[cfg(windows)]
+        let (shell, flag): (&str, &str) = ("cmd", "/C");
+
+        let stream = russh_config::Stream::proxy_command(shell, &[flag, expanded.as_str()])
+            .await
+            .map_err(|e| {
+                SshError::ConnectionFailed(format!("ProxyCommand failed to spawn: {e}"))
+            })?;
+        client::connect_stream(russh_cfg.clone(), stream, SshClientHandler)
+            .await
+            .map_err(|e| SshError::ConnectionFailed(e.to_string()))?
+    } else if let Some(jump_str) = config.proxy_jump.as_ref() {
+        // ── ProxyJump (single-hop): SSH to bastion, then direct-tcpip to target ──
+        if jump_str.contains(',') {
+            return Err(SshError::ConnectionFailed(
+                "Multi-hop ProxyJump is not supported in v1. Express the chain via ProxyCommand (e.g. `ssh -J a,b -W %h:%p`) instead.".to_string(),
+            ));
+        }
+        let (jump_user, jump_host, jump_port) =
+            parse_proxy_jump(jump_str.trim(), &config.username);
+        let jump_config = HostConfig {
+            host: jump_host,
+            port: jump_port,
+            username: jump_user,
+            auth_method: config.auth_method.clone(),
+            label: None,
+            keep_alive_interval: None,
+            default_shell: None,
+            startup_command: None,
+            proxy_jump: None,
+            proxy_command: None,
+        };
+
+        // Recurse to authenticate the jump host (this call is itself boxed
+        // by the outer `open_authenticated_handle` indirection).
+        let jump_auth: AuthenticatedHandle =
+            open_authenticated_handle(jump_config, russh_cfg.clone()).await?;
+
+        let channel = jump_auth
+            .handle
+            .channel_open_direct_tcpip(
+                config.host.clone(),
+                config.port as u32,
+                "127.0.0.1",
+                0,
+            )
+            .await
+            .map_err(|e| {
+                SshError::ConnectionFailed(format!(
+                    "ProxyJump: failed to open direct-tcpip channel: {e}"
+                ))
+            })?;
+        let stream = channel.into_stream();
+
+        // Anchor the jump handle (and its own jumps, transitively) so they
+        // outlive the target session — dropping them would kill the transport.
+        let mut chain = jump_auth.jump_chain;
+        chain.push(Arc::new(Mutex::new(jump_auth.handle)));
+        jump_chain = chain;
+
+        client::connect_stream(russh_cfg.clone(), stream, SshClientHandler)
+            .await
+            .map_err(|e| SshError::ConnectionFailed(e.to_string()))?
+    } else {
+        // ── No proxy: plain TCP (the original code path) ──
+        let addr = format!("{}:{}", config.host, config.port);
+        client::connect(russh_cfg.clone(), &addr, SshClientHandler)
+            .await
+            .map_err(|e| SshError::ConnectionFailed(e.to_string()))?
+    };
+
+    let authenticated = match &config.auth_method {
+        AuthMethod::Password { password } => handle
+            .authenticate_password(&config.username, password)
+            .await
+            .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?,
+        AuthMethod::PrivateKey {
+            key_path,
+            passphrase,
+        } => {
+            let key_data = tokio::fs::read_to_string(key_path)
+                .await
+                .map_err(|e| SshError::IoError(e.to_string()))?;
+
+            // Auto-convert PPK to OpenSSH if detected
+            let key_data = if super::keys::is_ppk_format(&key_data) {
+                let kp = key_path.clone();
+                let pp = passphrase.clone();
+                tokio::task::spawn_blocking(move || {
+                    super::keys::convert_ppk_to_openssh(&kp, pp.as_deref())
+                })
+                .await
+                .map_err(|e| SshError::IoError(format!("task panicked: {e}")))??
+            } else {
+                key_data
+            };
+
+            SshManager::auth_with_key_data(
+                &mut handle,
+                &config.username,
+                &key_data,
+                passphrase.as_deref(),
+            )
+            .await?
+        }
+        AuthMethod::PrivateKeyData {
+            key_data,
+            passphrase,
+        } => {
+            SshManager::auth_with_key_data(
+                &mut handle,
+                &config.username,
+                key_data,
+                passphrase.as_deref(),
+            )
+            .await?
+        }
+    };
+
+    if !authenticated {
+        return Err(SshError::AuthenticationFailed(
+            "server rejected credentials".to_string(),
+        ));
+    }
+
+    Ok(AuthenticatedHandle { handle, jump_chain })
+}
+
+/// Expand OpenSSH ProxyCommand tokens: `%h` → host, `%p` → port, `%r` →
+/// remote user, `%%` → literal `%`. Unknown `%X` sequences pass through
+/// unchanged (matches OpenSSH).
+fn expand_proxy_command_tokens(cmd: &str, host: &str, port: u16, user: &str) -> String {
+    let mut out = String::with_capacity(cmd.len());
+    let mut chars = cmd.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('h') => out.push_str(host),
+            Some('p') => {
+                out.push_str(&port.to_string());
+            }
+            Some('r') => out.push_str(user),
+            Some('%') => out.push('%'),
+            Some(other) => {
+                out.push('%');
+                out.push(other);
+            }
+            None => out.push('%'),
+        }
+    }
+    out
+}
+
+/// Parse a ProxyJump value `[user@]host[:port]` into (user, host, port).
+/// Falls back to the default user and port 22 when omitted.
+fn parse_proxy_jump(s: &str, default_user: &str) -> (String, String, u16) {
+    let (user, hostport) = match s.split_once('@') {
+        Some((u, h)) if !u.is_empty() => (u.to_string(), h),
+        _ => (default_user.to_string(), s),
+    };
+    // Use rsplit_once so IPv6 brackets / hostnames containing ':' aren't an
+    // issue for the common case `host:port` written by users and ssh-config.
+    let (host, port) = match hostport.rsplit_once(':') {
+        Some((h, p)) => {
+            let parsed = p.trim().parse::<u16>().unwrap_or(22);
+            (h.trim().to_string(), parsed)
+        }
+        None => (hostport.trim().to_string(), 22u16),
+    };
+    (user, host, port)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_tokens_basic() {
+        assert_eq!(
+            expand_proxy_command_tokens("nc %h %p", "example.com", 22, "alice"),
+            "nc example.com 22"
+        );
+    }
+
+    #[test]
+    fn expand_tokens_user_and_literal_percent() {
+        assert_eq!(
+            expand_proxy_command_tokens("ssh -l %r %h:%p && echo 100%%", "h", 2222, "bob"),
+            "ssh -l bob h:2222 && echo 100%"
+        );
+    }
+
+    #[test]
+    fn expand_tokens_unknown_passthrough() {
+        // OpenSSH leaves unknown tokens alone.
+        assert_eq!(
+            expand_proxy_command_tokens("echo %x %h", "host", 22, "u"),
+            "echo %x host"
+        );
+    }
+
+    #[test]
+    fn parse_jump_full() {
+        let (u, h, p) = parse_proxy_jump("alice@bastion.example.com:2222", "fallback");
+        assert_eq!((u.as_str(), h.as_str(), p), ("alice", "bastion.example.com", 2222));
+    }
+
+    #[test]
+    fn parse_jump_host_only() {
+        let (u, h, p) = parse_proxy_jump("bastion", "fallback");
+        assert_eq!((u.as_str(), h.as_str(), p), ("fallback", "bastion", 22));
+    }
+
+    #[test]
+    fn parse_jump_user_only() {
+        let (u, h, p) = parse_proxy_jump("alice@bastion", "fallback");
+        assert_eq!((u.as_str(), h.as_str(), p), ("alice", "bastion", 22));
+    }
+
+    #[test]
+    fn parse_jump_host_port() {
+        let (u, h, p) = parse_proxy_jump("bastion:2222", "fallback");
+        assert_eq!((u.as_str(), h.as_str(), p), ("fallback", "bastion", 2222));
     }
 }

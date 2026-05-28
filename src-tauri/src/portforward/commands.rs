@@ -185,6 +185,8 @@ pub async fn pf_start_tunnel(
         keep_alive_interval: None,
         default_shell: None,
         startup_command: None,
+        proxy_jump: saved_host.proxy_jump,
+        proxy_command: saved_host.proxy_command,
     };
 
     let session_id = ssh_manager.connect_no_pty(config).await?;

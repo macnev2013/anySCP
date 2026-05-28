@@ -86,6 +86,7 @@ export function ImportSshConfigModal({ onClose, onImported }: ImportSshConfigMod
           port: e.port ?? 22,
           identity_file: e.identity_file,
           proxy_jump: e.proxy_jump,
+          proxy_command: e.proxy_command,
           keep_alive_interval: e.keep_alive_interval,
         }));
 

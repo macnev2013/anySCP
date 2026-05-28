@@ -103,8 +103,10 @@ pub struct SavedHost {
     // Connection behaviour
     /// Shell command to execute automatically after the shell opens.
     pub startup_command: Option<String>,
-    /// ProxyJump / bastion host in `user@host:port` form.
+    /// ProxyJump / bastion host in `[user@]host[:port]` form (single-hop).
     pub proxy_jump: Option<String>,
+    /// OpenSSH-style ProxyCommand. Tokens %h/%p/%r are expanded at connect time.
+    pub proxy_command: Option<String>,
     /// Seconds between SSH keepalive pings (0 = disabled).
     pub keep_alive_interval: Option<u32>,
     /// Default login shell, e.g. "/bin/zsh".
@@ -447,6 +449,15 @@ impl HostDb {
             tracing::info!("migration 10→11 applied: ensured color, environment, notes on s3_connections");
         }
 
+        if version < 12 {
+            conn.execute("ALTER TABLE saved_hosts ADD COLUMN proxy_command TEXT", [])?;
+            conn.execute(
+                "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '12')",
+                [],
+            )?;
+            tracing::info!("migration 11→12 applied: added proxy_command to saved_hosts");
+        }
+
         Ok(())
     }
 
@@ -463,14 +474,14 @@ impl HostDb {
             "INSERT INTO saved_hosts (
                  id, label, host, port, username, auth_type, group_id, created_at, updated_at,
                  key_path, color, notes, environment, os_type,
-                 startup_command, proxy_jump, keep_alive_interval, default_shell,
+                 startup_command, proxy_jump, proxy_command, keep_alive_interval, default_shell,
                  font_size, last_connected_at, connection_count
              )
              VALUES (
                  ?1,  ?2,  ?3,  ?4,  ?5,  ?6,  ?7,  ?8,  ?9,
                  ?10, ?11, ?12, ?13, ?14,
-                 ?15, ?16, ?17, ?18,
-                 ?19, ?20, ?21
+                 ?15, ?16, ?17, ?18, ?19,
+                 ?20, ?21, ?22
              )
              ON CONFLICT(id) DO UPDATE SET
                  label                = excluded.label,
@@ -487,6 +498,7 @@ impl HostDb {
                  os_type              = excluded.os_type,
                  startup_command      = excluded.startup_command,
                  proxy_jump           = excluded.proxy_jump,
+                 proxy_command        = excluded.proxy_command,
                  keep_alive_interval  = excluded.keep_alive_interval,
                  default_shell        = excluded.default_shell,
                  font_size            = excluded.font_size,
@@ -509,6 +521,7 @@ impl HostDb {
                 host.os_type,
                 host.startup_command,
                 host.proxy_jump,
+                host.proxy_command,
                 host.keep_alive_interval,
                 host.default_shell,
                 host.font_size,
@@ -526,7 +539,7 @@ impl HostDb {
         let mut stmt = conn.prepare(
             "SELECT id, label, host, port, username, auth_type, group_id, created_at, updated_at,
                     key_path, color, notes, environment, os_type,
-                    startup_command, proxy_jump, keep_alive_interval, default_shell,
+                    startup_command, proxy_jump, proxy_command, keep_alive_interval, default_shell,
                     font_size, last_connected_at, connection_count
              FROM saved_hosts
              ORDER BY label ASC",
@@ -550,11 +563,12 @@ impl HostDb {
                 os_type: row.get(13)?,
                 startup_command: row.get(14)?,
                 proxy_jump: row.get(15)?,
-                keep_alive_interval: row.get(16)?,
-                default_shell: row.get(17)?,
-                font_size: row.get(18)?,
-                last_connected_at: row.get(19)?,
-                connection_count: row.get(20)?,
+                proxy_command: row.get(16)?,
+                keep_alive_interval: row.get(17)?,
+                default_shell: row.get(18)?,
+                font_size: row.get(19)?,
+                last_connected_at: row.get(20)?,
+                connection_count: row.get(21)?,
             })
         })?;
 
@@ -581,7 +595,7 @@ impl HostDb {
         let mut stmt = conn.prepare(
             "SELECT id, label, host, port, username, auth_type, group_id, created_at, updated_at,
                     key_path, color, notes, environment, os_type,
-                    startup_command, proxy_jump, keep_alive_interval, default_shell,
+                    startup_command, proxy_jump, proxy_command, keep_alive_interval, default_shell,
                     font_size, last_connected_at, connection_count
              FROM saved_hosts
              WHERE id = ?1",
@@ -605,11 +619,12 @@ impl HostDb {
                 os_type: row.get(13)?,
                 startup_command: row.get(14)?,
                 proxy_jump: row.get(15)?,
-                keep_alive_interval: row.get(16)?,
-                default_shell: row.get(17)?,
-                font_size: row.get(18)?,
-                last_connected_at: row.get(19)?,
-                connection_count: row.get(20)?,
+                proxy_command: row.get(16)?,
+                keep_alive_interval: row.get(17)?,
+                default_shell: row.get(18)?,
+                font_size: row.get(19)?,
+                last_connected_at: row.get(20)?,
+                connection_count: row.get(21)?,
             })
         })?;
 
@@ -1340,6 +1355,7 @@ mod tests {
             os_type: None,
             startup_command: None,
             proxy_jump: None,
+            proxy_command: None,
             keep_alive_interval: None,
             default_shell: None,
             font_size: None,

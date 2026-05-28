@@ -14,6 +14,8 @@ export interface HostConfig {
   keep_alive_interval?: number;
   default_shell?: string;
   startup_command?: string;
+  proxy_jump?: string;
+  proxy_command?: string;
 }
 
 export type ConnectionStatus =
@@ -70,6 +72,7 @@ export interface SavedHost {
   os_type: string | null;              // "linux" | "macos" | "windows" | "freebsd"
   startup_command: string | null;
   proxy_jump: string | null;
+  proxy_command: string | null;
   keep_alive_interval: number | null;
   default_shell: string | null;
   font_size: number | null;
@@ -113,6 +116,7 @@ export interface SshConfigEntry {
   port: number | null;
   identity_file: string | null;
   proxy_jump: string | null;
+  proxy_command: string | null;
   keep_alive_interval: number | null;
   is_pattern: boolean;
   already_exists: boolean;

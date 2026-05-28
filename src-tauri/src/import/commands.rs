@@ -71,6 +71,7 @@ pub async fn import_save_ssh_hosts(
                 os_type: None,
                 startup_command: None,
                 proxy_jump: entry.proxy_jump.clone(),
+                proxy_command: entry.proxy_command.clone(),
                 keep_alive_interval: entry.keep_alive_interval,
                 default_shell: None,
                 font_size: None,
