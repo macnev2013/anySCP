@@ -154,13 +154,22 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
             title="Open Terminal"
             aria-label={`Open terminal for ${displayName}`}
             className={[
-              "flex items-center justify-center w-7 h-7 rounded-md",
+              "group/btn flex items-center h-8 px-2 rounded-md",
               "text-text-muted hover:text-text-primary hover:bg-bg-overlay",
-              "transition-colors duration-[var(--duration-fast)]",
+              "transition-[background-color,color] duration-[var(--duration-fast)]",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             ].join(" ")}
           >
-            <TerminalSquare size={14} strokeWidth={2} aria-hidden="true" />
+            <TerminalSquare size={16} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+            <span
+              className={[
+                "overflow-hidden whitespace-nowrap text-[length:var(--text-xs)] font-medium",
+                "max-w-0 ml-0 group-hover/btn:max-w-[70px] group-hover/btn:ml-1",
+                "transition-[max-width,margin-left] duration-200 ease-out",
+              ].join(" ")}
+            >
+              Terminal
+            </span>
           </button>
           <button
             type="button"
@@ -168,13 +177,22 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
             title="Open Explorer"
             aria-label={`Open explorer for ${displayName}`}
             className={[
-              "flex items-center justify-center w-7 h-7 rounded-md",
+              "group/btn flex items-center h-8 px-2 rounded-md",
               "text-text-muted hover:text-text-primary hover:bg-bg-overlay",
-              "transition-colors duration-[var(--duration-fast)]",
+              "transition-[background-color,color] duration-[var(--duration-fast)]",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             ].join(" ")}
           >
-            <FolderOpen size={14} strokeWidth={2} aria-hidden="true" />
+            <FolderOpen size={16} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+            <span
+              className={[
+                "overflow-hidden whitespace-nowrap text-[length:var(--text-xs)] font-medium",
+                "max-w-0 ml-0 group-hover/btn:max-w-[70px] group-hover/btn:ml-1",
+                "transition-[max-width,margin-left] duration-200 ease-out",
+              ].join(" ")}
+            >
+              Explorer
+            </span>
           </button>
         </div>
 
