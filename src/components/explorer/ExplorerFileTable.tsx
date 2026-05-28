@@ -664,6 +664,9 @@ export function ExplorerFileTable({
                   key={entry.id}
                   role="listitem"
                   data-entry-row="true"
+                  data-entry-name={entry.name}
+                  data-entry-type={entry.entryType}
+                  data-testid={`explorer-entry-${entry.name}`}
                   tabIndex={0}
                   onClick={(e) => handleRowClick(entry, e)}
                   onDoubleClick={() => handleDoubleClick(entry)}

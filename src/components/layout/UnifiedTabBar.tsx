@@ -118,6 +118,9 @@ export function UnifiedTabBar() {
           return (
             <button
               key={tabId}
+              data-testid={`tab-${tabId}`}
+              data-tab-type={tab.type}
+              data-tab-label={tab.label}
               onClick={() => setActiveTab(tabId)}
               title={tab.label + (paneCount > 1 ? ` (${paneCount} panes)` : "")}
               className={[
@@ -175,6 +178,7 @@ export function UnifiedTabBar() {
               {/* Close button */}
               {closeable && (
                 <button
+                  data-testid={`tab-${tabId}-close`}
                   onClick={(e) => void handleClose(tabId, tab, e)}
                   className={[
                     "ml-auto p-0.5 -mr-1 rounded-lg shrink-0",

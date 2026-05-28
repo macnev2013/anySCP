@@ -97,6 +97,15 @@ export function Terminal({ sessionId }: TerminalProps) {
       terminalRef.current = terminal;
       fitAddonRef.current = fitAddon;
 
+      // E2E test hook — exposes the xterm instance so tests can read the buffer
+      // without poking at canvas/DOM internals. Stripped trivially by minifiers
+      // if anyone ever cares about prod bundle size.
+      if (typeof window !== "undefined") {
+        const reg = ((window as unknown as { __e2eTerminals?: Map<string, XTerm> }).__e2eTerminals ??=
+          new Map<string, XTerm>());
+        reg.set(sessionId, terminal);
+      }
+
       // Load search addon
       import("@xterm/addon-search")
         .then(({ SearchAddon }) => {
@@ -157,6 +166,10 @@ export function Terminal({ sessionId }: TerminalProps) {
       disposed = true;
       observer?.disconnect();
       unregisterSearchAddon(sessionId);
+      if (typeof window !== "undefined") {
+        (window as unknown as { __e2eTerminals?: Map<string, XTerm> })
+          .__e2eTerminals?.delete(sessionId);
+      }
       if (terminalRef.current) {
         terminalRef.current.dispose();
         terminalRef.current = null;
@@ -168,6 +181,8 @@ export function Terminal({ sessionId }: TerminalProps) {
   return (
     <div
       ref={containerRef}
+      data-testid={`terminal-${sessionId}`}
+      data-session-id={sessionId}
       className="h-full w-full bg-bg-base p-2"
       onKeyDown={(e) => {
         if (e.metaKey && (e.key === "d" || e.key === "D")) {

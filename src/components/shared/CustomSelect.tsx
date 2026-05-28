@@ -16,6 +16,7 @@ interface CustomSelectProps {
   className?: string;
   id?: string;
   "aria-label"?: string;
+  "data-testid"?: string;
 }
 
 export function CustomSelect({
@@ -27,6 +28,7 @@ export function CustomSelect({
   className,
   id,
   "aria-label": ariaLabel,
+  "data-testid": testid,
 }: CustomSelectProps) {
   const [open, setOpen] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(-1);
@@ -120,6 +122,7 @@ export function CustomSelect({
         aria-expanded={open}
         aria-haspopup="listbox"
         aria-label={ariaLabel}
+        data-testid={testid}
         disabled={disabled}
         onClick={() => {
           if (!disabled) {
@@ -179,6 +182,7 @@ export function CustomSelect({
                 type="button"
                 role="option"
                 aria-selected={isSelected}
+                data-testid={testid ? `${testid}-option-${option.value}` : undefined}
                 onClick={() => {
                   onChange(option.value);
                   setOpen(false);

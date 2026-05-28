@@ -2,7 +2,8 @@
         connect-ssh-pass connect-ssh-key \
         logs-ssh-pass logs-ssh-key \
         shell-ssh-pass shell-ssh-key \
-        ssh-keygen ssh-status ssh-clean ssh-clean-keys
+        ssh-keygen ssh-status ssh-clean ssh-clean-keys \
+        e2e e2e-build e2e-shell e2e-logs e2e-clean
 
 # Test SSH servers (linuxserver/openssh-server) for local development.
 # Two independent containers — password-auth and key-auth — can run in parallel.
@@ -127,3 +128,49 @@ ssh-clean:
 
 ssh-clean-keys:
 	@rm -rf $(SSH_KEY_DIR) && echo "Removed $(SSH_KEY_DIR)"
+
+# ─── E2E tests (containerised) ────────────────────────────────────────────────
+# Full UI E2E suite under WebKitWebDriver + xvfb inside Docker. The runner
+# image bakes in tauri-driver, the webkit2gtk driver, and a build toolchain
+# so the same setup works on dev machines (incl. Arch) and CI.
+
+E2E_COMPOSE := docker compose -f tests/e2e/docker-compose.yml -p anyscp-e2e
+# Stamp file — make rebuilds the image whenever any of its source inputs
+# change (Dockerfile, entrypoint, or harness package.json).
+E2E_IMAGE_STAMP := tests/e2e/.image-stamp
+E2E_IMAGE_SRC   := tests/e2e/Dockerfile tests/e2e/entrypoint.sh tests/e2e/package.json
+
+# (Re)build the runner image whenever any source input is newer than the stamp.
+$(E2E_IMAGE_STAMP): $(E2E_IMAGE_SRC)
+	@echo "  building anyscp-e2e-runner:latest (sources changed)"
+	@cd tests/e2e && docker build -t anyscp-e2e-runner:latest .
+	@touch $@
+
+# Explicit rebuild target (alias).
+e2e-build: $(E2E_IMAGE_STAMP)
+
+# Run the full suite. Brings up the SSH targets + runner, runs WDIO, then
+# tears containers down — but KEEPS volumes (rust-target, cargo-cache,
+# node-modules) so the next run does an incremental compile (~5s instead
+# of ~80s). Use `make e2e-clean` to wipe volumes when you want a fresh start.
+e2e: $(E2E_IMAGE_STAMP)
+	@$(E2E_COMPOSE) up --abort-on-container-exit --exit-code-from e2e e2e; \
+		ec=$$?; \
+		$(E2E_COMPOSE) down --remove-orphans >/dev/null 2>&1; \
+		exit $$ec
+
+# Drop into an interactive shell in the runner with the SSH targets up
+# (useful when debugging a failing spec).
+e2e-shell:
+	@$(E2E_COMPOSE) up -d sshd-pass sshd-key keygen
+	@$(E2E_COMPOSE) run --rm --entrypoint /bin/bash e2e
+
+# Tail logs from the runner.
+e2e-logs:
+	@$(E2E_COMPOSE) logs -f e2e
+
+# Tear down everything and remove cached volumes (forces a clean next run).
+e2e-clean:
+	@$(E2E_COMPOSE) down -v --remove-orphans
+	@docker rmi anyscp-e2e-runner:latest 2>/dev/null || true
+	@rm -f $(E2E_IMAGE_STAMP)

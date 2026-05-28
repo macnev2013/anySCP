@@ -448,6 +448,8 @@ export function HostEditModal() {
       `}
     >
       <div
+        data-testid="host-modal"
+        data-host-modal-mode={isNewHost ? "new" : "edit"}
         className={`
           w-full max-w-lg rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)]
           flex flex-col max-h-[84vh]
@@ -495,6 +497,7 @@ export function HostEditModal() {
                 </label>
                 <input
                   id="hem-label"
+                  data-testid="host-modal-label"
                   type="text"
                   value={form.label}
                   onChange={(e) => setField("label", e.target.value)}
@@ -513,6 +516,7 @@ export function HostEditModal() {
                   <input
                     ref={hostInputRef}
                     id="hem-host"
+                    data-testid="host-modal-host"
                     type="text"
                     value={form.host}
                     onChange={(e) => setField("host", e.target.value)}
@@ -527,6 +531,7 @@ export function HostEditModal() {
                   </label>
                   <input
                     id="hem-port"
+                    data-testid="host-modal-port"
                     type="number"
                     min={1}
                     max={65535}
@@ -545,6 +550,7 @@ export function HostEditModal() {
                 </label>
                 <input
                   id="hem-username"
+                  data-testid="host-modal-username"
                   type="text"
                   value={form.username}
                   onChange={(e) => setField("username", e.target.value)}
@@ -562,6 +568,7 @@ export function HostEditModal() {
                   </label>
                   <CustomSelect
                     id="hem-auth"
+                    data-testid="host-modal-auth"
                     value={form.authType}
                     onChange={(v) => setField("authType", v as AuthType)}
                     disabled={isBusy}
@@ -595,6 +602,7 @@ export function HostEditModal() {
                   </label>
                   <input
                     id="hem-password"
+                    data-testid="host-modal-password"
                     type="password"
                     value={form.password}
                     onChange={(e) => setField("password", e.target.value)}
@@ -623,6 +631,7 @@ export function HostEditModal() {
                         {sshKeys.length > 0 ? (
                           <CustomSelect
                             id="hem-keypath"
+                            data-testid="host-modal-keypath-select"
                             value={form.keyPath}
                             onChange={(v) => setField("keyPath", v)}
                             disabled={isBusy}
@@ -635,6 +644,7 @@ export function HostEditModal() {
                         ) : (
                           <input
                             id="hem-keypath"
+                            data-testid="host-modal-keypath"
                             type="text"
                             value={form.keyPath}
                             onChange={(e) => setField("keyPath", e.target.value)}
@@ -893,6 +903,7 @@ export function HostEditModal() {
               {error && (
                 <p
                   role="alert"
+                  data-testid="host-modal-error"
                   className="text-[length:var(--text-sm)] text-status-error bg-status-error/10 rounded-lg px-3 py-2"
                 >
                   {error}
@@ -917,6 +928,7 @@ export function HostEditModal() {
             ) : (
               <button
                 type="button"
+                data-testid="host-modal-delete"
                 onClick={() => setDeleteConfirm(true)}
                 disabled={isBusy || loadingHost}
                 className="px-3 py-2 text-[length:var(--text-sm)] text-status-error hover:bg-status-error/10 rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -931,6 +943,7 @@ export function HostEditModal() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                data-testid="host-modal-cancel"
                 onClick={close}
                 disabled={isBusy}
                 className="px-4 py-2 text-[length:var(--text-sm)] text-text-secondary hover:text-text-primary rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -939,6 +952,7 @@ export function HostEditModal() {
               </button>
               <button
                 type="button"
+                data-testid="host-modal-save"
                 onClick={handleSave}
                 disabled={isBusy || loadingHost}
                 className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-text-secondary hover:text-text-primary bg-bg-subtle hover:bg-bg-muted disabled:opacity-50 rounded-lg border border-border transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -947,6 +961,7 @@ export function HostEditModal() {
               </button>
               <button
                 type="button"
+                data-testid="host-modal-connect"
                 onClick={handleConnect}
                 disabled={isBusy || loadingHost}
                 className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-text-inverse bg-accent hover:bg-accent-hover disabled:opacity-50 rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg-overlay"
@@ -1086,6 +1101,7 @@ function DeleteConfirmRow({ onCancel, onConfirm, busy }: DeleteConfirmRowProps) 
       </button>
       <button
         type="button"
+        data-testid="host-modal-delete-confirm"
         onClick={onConfirm}
         disabled={busy}
         autoFocus

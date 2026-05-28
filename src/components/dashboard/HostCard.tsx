@@ -131,6 +131,9 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
   return (
     <>
       <div
+        data-testid={`host-card-${host.id}`}
+        data-host-id={host.id}
+        data-host-label={displayName}
         role="button"
         tabIndex={0}
         onClick={() => onConnect(host)}
@@ -159,6 +162,7 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
         <div className="absolute top-2 right-2 flex items-center gap-0.5">
           <button
             type="button"
+            data-testid={`host-card-${host.id}-terminal`}
             onClick={stopAnd(() => onConnect(host))}
             title="Open Terminal"
             aria-label={`Open terminal for ${displayName}`}
@@ -182,6 +186,7 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
           </button>
           <button
             type="button"
+            data-testid={`host-card-${host.id}-explorer`}
             onClick={stopAnd(() => onExplore(host))}
             title="Open Explorer"
             aria-label={`Open explorer for ${displayName}`}

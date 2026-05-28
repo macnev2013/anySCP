@@ -413,6 +413,7 @@ export function HostsDashboard() {
           {/* ── Action buttons ── */}
           <div className="flex gap-2">
             <button
+              data-testid="new-host-button"
               onClick={() => setEditingHostId("__new__")}
               className={[
                 "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium uppercase tracking-wide",

@@ -1,0 +1,118 @@
+# E2E test stack: two sshd targets (password + key auth) plus the test runner.
+# Run from repo root with: `make e2e`  (which calls `docker compose -f tests/e2e/docker-compose.yml ...`).
+
+services:
+  # ─── Test SSH targets ───────────────────────────────────────────────────────
+  sshd-pass:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: anyscp-e2e-sshd-pass
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      USER_NAME: testuser
+      USER_PASSWORD: testpass
+      PASSWORD_ACCESS: "true"
+      SUDO_ACCESS: "true"
+    networks: [e2e]
+
+  sshd-key:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: anyscp-e2e-sshd-key
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      USER_NAME: testuser
+      PASSWORD_ACCESS: "false"
+      SUDO_ACCESS: "true"
+      PUBLIC_KEY_FILE: /keys/id_ed25519.pub
+    volumes:
+      - test-ssh-keys:/keys:ro
+    networks: [e2e]
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "ss -ltn | grep -q :2222"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # One-shot keygen — produces the keypair shared by sshd-key (authorized key)
+  # and the e2e runner (private key for connecting).
+  keygen:
+    image: alpine:3.20
+    container_name: anyscp-e2e-keygen
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        if [ ! -f /keys/id_ed25519 ]; then
+          apk add --no-cache openssh-keygen >/dev/null
+          ssh-keygen -t ed25519 -f /keys/id_ed25519 -N '' -C 'anyscp-e2e'
+          chmod 600 /keys/id_ed25519
+          chmod 644 /keys/id_ed25519.pub
+        fi
+        ls -l /keys
+    volumes:
+      - test-ssh-keys:/keys
+
+  # ─── Test runner ────────────────────────────────────────────────────────────
+  e2e:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: anyscp-e2e-runner:latest
+    container_name: anyscp-e2e-runner
+    # The entrypoint's wait_for() polls TCP on each sshd before launching
+    # WDIO, so we just need the containers started, not health-checked.
+    depends_on:
+      sshd-pass:
+        condition: service_started
+      sshd-key:
+        condition: service_started
+    environment:
+      SSHD_PASS_HOST: sshd-pass
+      SSHD_PASS_PORT: "2222"
+      SSHD_KEY_HOST: sshd-key
+      SSHD_KEY_PORT: "2222"
+      SSH_USER: testuser
+      SSH_PASS: testpass
+      SSH_KEY_PATH: /keys/id_ed25519
+      # Swap anyscp's keyring backend to the Linux kernel keyring (keyutils).
+      # Sidesteps the gnome-keyring / libsecret / dbus rigmarole that's a
+      # nightmare to bootstrap in a container.
+      ANYSCP_TEST_KEYRING: keyutils
+      # Force-rebuild the binary on every run: set to 1
+      E2E_FORCE_BUILD: ""
+      # WDIO log level
+      LOG_LEVEL: warn
+    volumes:
+      - ../..:/workspace                            # repo source (rw, so we can build)
+      - cargo-cache:/root/.cargo/registry           # persist crate downloads
+      - rust-target:/workspace/src-tauri/target     # persist build artifacts
+      - node-modules:/workspace/node_modules        # persist top-level node_modules
+      - test-ssh-keys:/keys:ro                      # shared keypair
+    networks: [e2e]
+    ports:
+      - "5900:5900"   # x11vnc — connect with a VNC client to watch tests live
+    init: true
+    # tauri-driver spawns WebKitWebDriver; SYS_ADMIN avoids sandbox/seccomp issues.
+    cap_add: [SYS_ADMIN]
+    # Disable seccomp so the kernel keyring syscalls (keyctl, add_key,
+    # request_key) the keyutils backend needs aren't filtered. Docker's
+    # default profile blocks `keyctl_join_session_keyring` regardless of
+    # capabilities. This is a test-only container — security trade-off is fine.
+    security_opt:
+      - seccomp:unconfined
+
+networks:
+  e2e:
+
+volumes:
+  cargo-cache:
+  rust-target:
+  node-modules:
+  test-ssh-keys:
