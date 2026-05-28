@@ -116,14 +116,29 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
     },
   ];
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onConnect(host);
+    }
+  };
+
+  const stopAnd = (fn: () => void) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    fn();
+  };
+
   return (
     <>
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => onConnect(host)}
+        onKeyDown={handleKeyDown}
         onContextMenu={handleContextMenu}
         title={`Connect to ${displayName}`}
         className={[
-          "group relative flex flex-col gap-2.5 p-3.5 rounded-xl text-left w-full",
+          "group relative flex flex-col gap-2.5 p-3.5 rounded-xl text-left w-full cursor-pointer",
           "bg-bg-surface border border-border",
           "hover:border-border-focus hover:bg-bg-overlay",
           "transition-all duration-[var(--duration-fast)]",
@@ -165,7 +180,44 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
             )}
           </div>
         </div>
-      </button>
+
+        {/* Action buttons (bottom) */}
+        <div className="flex items-stretch gap-1 -mt-1 pt-1 px-3.5 -mx-3.5 -mb-2 border-t border-border/60">
+          <button
+            type="button"
+            onClick={stopAnd(() => onConnect(host))}
+            title="Open Terminal"
+            aria-label={`Open terminal for ${displayName}`}
+            className={[
+              "flex items-center justify-center gap-1.5 flex-1 h-[30px] rounded-md",
+              "text-[length:var(--text-sm)] text-text-muted",
+              "hover:text-text-primary hover:bg-bg-overlay",
+              "transition-colors duration-[var(--duration-fast)]",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            ].join(" ")}
+          >
+            <TerminalSquare size={14} strokeWidth={2} aria-hidden="true" />
+            Terminal
+          </button>
+          <span className="w-px bg-border/60 self-stretch -my-1" aria-hidden="true" />
+          <button
+            type="button"
+            onClick={stopAnd(() => onExplore(host))}
+            title="Open Explorer"
+            aria-label={`Open explorer for ${displayName}`}
+            className={[
+              "flex items-center justify-center gap-1.5 flex-1 h-[30px] rounded-md",
+              "text-[length:var(--text-sm)] text-text-muted",
+              "hover:text-text-primary hover:bg-bg-overlay",
+              "transition-colors duration-[var(--duration-fast)]",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            ].join(" ")}
+          >
+            <FolderOpen size={14} strokeWidth={2} aria-hidden="true" />
+            Explorer
+          </button>
+        </div>
+      </div>
 
       {contextMenu && (
         <ContextMenu
