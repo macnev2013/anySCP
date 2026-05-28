@@ -49,6 +49,7 @@ export function ExplorerToolbar({
     <div className="flex items-center h-10 px-2 border-b border-border bg-bg-surface shrink-0 gap-1 no-select">
       {/* Home button */}
       <button
+        data-testid="explorer-home"
         onClick={() => onNavigate(provider.type === "sftp" ? "/" : "")}
         disabled={loading || isAtRoot}
         title={`Go to ${provider.rootLabel()}`}
@@ -113,6 +114,7 @@ export function ExplorerToolbar({
       {/* Upload */}
       {caps.canUpload && (
         <button
+          data-testid="explorer-upload"
           onClick={onUpload}
           disabled={loading}
           title="Upload file"
@@ -126,6 +128,7 @@ export function ExplorerToolbar({
       {/* New file */}
       {caps.canCreateFile && (
         <button
+          data-testid="explorer-new-file"
           onClick={onNewFile}
           disabled={loading}
           title="New file"
@@ -139,6 +142,7 @@ export function ExplorerToolbar({
       {/* New folder */}
       {caps.canCreateFolder && (
         <button
+          data-testid="explorer-new-folder"
           onClick={onNewFolder}
           disabled={loading}
           title="New folder"
@@ -151,6 +155,7 @@ export function ExplorerToolbar({
 
       {/* Refresh */}
       <button
+        data-testid="explorer-refresh"
         onClick={onRefresh}
         disabled={loading}
         title="Refresh"

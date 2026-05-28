@@ -9,6 +9,7 @@ interface HostsState {
 
   loadHosts: () => Promise<void>;
   saveHost: (host: SavedHost) => Promise<void>;
+  duplicateHost: (id: string) => Promise<void>;
   deleteHost: (id: string) => Promise<void>;
   loadRecent: () => Promise<void>;
   recordConnection: (hostId: string) => Promise<void>;
@@ -42,6 +43,26 @@ export const useHostsStore = create<HostsState>((set) => ({
     await invoke("save_host", { host });
     const hosts = await invoke<SavedHost[]>("list_hosts");
     set({ hosts });
+  },
+
+  duplicateHost: async (id) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const hosts = await invoke<SavedHost[]>("list_hosts");
+    const orig = hosts.find((h) => h.id === id);
+    if (!orig) throw new Error(`host not found: ${id}`);
+    const now = new Date().toISOString();
+    const duplicate: SavedHost = {
+      ...orig,
+      id: crypto.randomUUID(),
+      label: `${orig.label || orig.host} (copy)`,
+      created_at: now,
+      updated_at: now,
+      last_connected_at: null,
+      connection_count: null,
+    };
+    await invoke("save_host", { host: duplicate });
+    const updated = await invoke<SavedHost[]>("list_hosts");
+    set({ hosts: updated });
   },
 
   deleteHost: async (id) => {
@@ -79,3 +100,11 @@ export const useHostsStore = create<HostsState>((set) => ({
     }
   },
 }));
+
+// E2E test hook — lets WebDriver tests invoke duplicate without driving the
+// right-click context menu (which is flaky in WebKitWebDriver). No production
+// code reads this.
+if (typeof window !== "undefined") {
+  (window as unknown as { __e2eDuplicateHost?: (id: string) => Promise<void> })
+    .__e2eDuplicateHost = (id) => useHostsStore.getState().duplicateHost(id);
+}

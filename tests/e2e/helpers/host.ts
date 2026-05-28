@@ -155,3 +155,15 @@ export async function getHostId(label: string): Promise<string> {
     if (!id) throw new Error(`host card '${label}' missing data-host-id`);
     return id;
 }
+
+/** Duplicate a host via the store hook (avoids right-click context menu). */
+export async function duplicateHost(label: string): Promise<void> {
+    const hostId = await getHostId(label);
+    await browser.execute(async (id: string) => {
+        const fn = (window as unknown as {
+            __e2eDuplicateHost?: (id: string) => Promise<void>;
+        }).__e2eDuplicateHost;
+        if (!fn) throw new Error("__e2eDuplicateHost not registered");
+        await fn(id);
+    }, hostId);
+}

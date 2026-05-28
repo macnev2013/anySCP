@@ -176,4 +176,4 @@ e2e-clean:
 	@rm -f $(E2E_IMAGE_STAMP)
 
 e2e-clean-artifacts:
-	@rm -rf ./tests/e2e/{screenshots,videos,.image-stamp}
+	@rm -rf ./tests/e2e/{screenshots,videos,junit,report.md,.test-records.ndjson,.image-stamp}

@@ -385,6 +385,7 @@ export function HostsDashboard() {
             />
             <input
               ref={searchInputRef}
+              data-testid="host-search"
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}

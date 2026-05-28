@@ -16,6 +16,19 @@ make e2e-logs       # tail runner logs while a run is in progress
 make e2e-clean      # wipe image + cached build volumes
 ```
 
+## Test report (Markdown)
+
+After every run, **`tests/e2e/report.md`** is written. It contains:
+
+- A summary of `passed/total` for the whole run and per spec file
+- For each failure: the error message, stack trace, video path, HTML dump
+  path, and the URL the webview was on at the time
+- A list of passing tests at the bottom
+
+Designed to be pasted as-is into a chat / issue. Per-test data is also
+kept as NDJSON at `tests/e2e/.test-records.ndjson` if you want to
+post-process it yourself.
+
 ## Video recordings
 
 Every spec records an mp4 of the Xvfb display under `tests/e2e/videos/`
@@ -137,6 +150,22 @@ E2E_FORCE_BUILD=1 make e2e
 If you need a fully clean slate (volumes wiped, image deleted), use
 `make e2e-clean` — but that throws away the cargo crate cache and forces
 the next run back to a full build.
+
+## Follow-up: S3 coverage
+
+S3 specs are intentionally deferred — driving them needs:
+
+1. A MinIO sidecar in `docker-compose.yml` (image: `minio/minio:latest`,
+   command: `server /data --console-address ":9001"`, fixed root creds).
+2. A `keygen`-style one-shot service that creates a bucket and seeds it
+   with a couple of test objects.
+3. A test helper to add an S3 connection via the UI's `+ New S3` dialog
+   pointing at `http://minio:9000` with `path_style: true`.
+4. Reusing the existing explorer helpers — the `data-entry-name` / toolbar
+   testids work the same for S3 sessions as for SFTP.
+
+The Rust backend (`s3::commands::s3_*`) is the same code path either way,
+so the SFTP suite already exercises ~80% of the explorer surface.
 
 ## Known caveats
 

@@ -42,6 +42,9 @@ export function RecentConnections({
             <button
               key={`${conn.host_id}-${conn.connected_at}`}
               role="listitem"
+              data-testid={`recent-connection-${conn.host_id}`}
+              data-recent-host-id={conn.host_id}
+              data-recent-label={displayName}
               onClick={() => onConnect(conn)}
               title={`Reconnect to ${displayName} (${conn.username}@${conn.host}:${conn.port})`}
               className={[

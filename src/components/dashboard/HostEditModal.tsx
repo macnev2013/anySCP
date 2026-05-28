@@ -401,6 +401,10 @@ export function HostEditModal() {
       addSession(sessionId, hostConfig);
       const label = hostConfig.label || `${hostConfig.username}@${hostConfig.host}`;
       useTabStore.getState().addTab({ type: "terminal", id: sessionId, label });
+      // Mirror the recordConnection() call made by HostsDashboard's
+      // card-click and recent-click flows — otherwise hosts connected via
+      // this modal are missing from the recent list and history.
+      void useHostsStore.getState().recordConnection(host.id);
       close();
     } catch (err) {
       setError(extractError(err, "Connection failed"));

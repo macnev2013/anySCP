@@ -125,6 +125,7 @@ function RenameRow({
     <input
       ref={inputRef}
       autoFocus
+      data-testid="explorer-rename-input"
       type="text"
       value={value}
       onChange={(e) => setValue(e.target.value)}
@@ -172,6 +173,7 @@ function NewFolderRow({
       </span>
       <input
         ref={inputRef}
+        data-testid="explorer-new-folder-input"
         type="text"
         value={value}
         onChange={(e) => setValue(e.target.value)}
@@ -221,6 +223,7 @@ function NewFileRow({
       </span>
       <input
         ref={inputRef}
+        data-testid="explorer-new-file-input"
         type="text"
         value={value}
         onChange={(e) => setValue(e.target.value)}
@@ -317,6 +320,33 @@ export function ExplorerFileTable({
       onSortChange(col, true);
     }
   };
+
+  // E2E test hook — drives rename programmatically. Two modes:
+  //   - hook(name)          opens the inline rename input (UI flow)
+  //   - hook(name, newName) calls onRename directly (bypasses the inline
+  //                          input whose autoFocus + onBlur cancel races
+  //                          with WebDriver's setValue). Exercises the
+  //                          same backend invoke + listing update path.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const hook = (name: string, newName?: string) => {
+      const entry = sortedEntries.find((e) => e.name === name);
+      if (!entry) return;
+      if (newName != null && newName !== entry.name && onRename) {
+        void onRename(entry, newName);
+      } else {
+        setRenamingId(entry.id);
+      }
+    };
+    (window as unknown as {
+      __e2eExplorerStartRename?: (n: string, newName?: string) => void;
+    }).__e2eExplorerStartRename = hook;
+    return () => {
+      (window as unknown as {
+        __e2eExplorerStartRename?: ((n: string, newName?: string) => void) | null;
+      }).__e2eExplorerStartRename = null;
+    };
+  }, [sortedEntries, onRename]);
 
   // ─── Selection ───────────────────────────────────────────────────────────
 
@@ -677,6 +707,10 @@ export function ExplorerFileTable({
                   onKeyDown={(e) => {
                     const isInput = (e.target as Element).tagName === "INPUT";
                     if (e.key === "Enter" && !isInput) handleDoubleClick(entry);
+                    if (e.key === "F2" && caps.canRename && !isInput) {
+                      e.preventDefault();
+                      setRenamingId(entry.id);
+                    }
                     if ((e.key === "Delete" || e.key === "Backspace") && caps.canDelete && !isInput) {
                       if (selectedIds.size > 0) setConfirmDelete(selectedEntries);
                     }
@@ -843,6 +877,7 @@ function DeleteConfirmDialog({
 
   return (
     <div
+      data-testid="explorer-delete-confirm"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onCancel()}
     >
@@ -872,12 +907,14 @@ function DeleteConfirmDialog({
 
         <div className="flex justify-end gap-2">
           <button
+            data-testid="explorer-delete-cancel"
             onClick={onCancel}
             className="px-4 py-2 text-[length:var(--text-sm)] text-text-secondary hover:text-text-primary rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             Cancel
           </button>
           <button
+            data-testid="explorer-delete-confirm-button"
             onClick={onConfirm}
             className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-white bg-status-error hover:opacity-90 rounded-lg transition-[opacity] duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >

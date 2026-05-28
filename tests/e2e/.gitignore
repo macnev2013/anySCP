@@ -2,5 +2,8 @@ node_modules/
 .wdio-logs/
 screenshots/
 videos/
+junit/
+report.md
+.test-records.ndjson
 .image-stamp
 *.log
