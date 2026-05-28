@@ -348,6 +348,29 @@ export function ExplorerFileTable({
     };
   }, [sortedEntries, onRename]);
 
+  // E2E test hook — select a specific set of entries by name. Multi-select
+  // via Ctrl-click is awkward to drive in WebDriver because the row needs
+  // keyboard focus AND modifier-key chord handling at the same time.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const hook = (names: string[]) => {
+      const ids = new Set(
+        names
+          .map((n) => sortedEntries.find((e) => e.name === n)?.id)
+          .filter((id): id is string => typeof id === "string"),
+      );
+      setSelectedIds(ids);
+    };
+    (window as unknown as {
+      __e2eExplorerSetSelection?: (names: string[]) => void;
+    }).__e2eExplorerSetSelection = hook;
+    return () => {
+      (window as unknown as {
+        __e2eExplorerSetSelection?: ((names: string[]) => void) | null;
+      }).__e2eExplorerSetSelection = null;
+    };
+  }, [sortedEntries]);
+
   // ─── Selection ───────────────────────────────────────────────────────────
 
   const handleRowClick = (entry: ExplorerEntry, e: React.MouseEvent) => {
@@ -604,6 +627,7 @@ export function ExplorerFileTable({
           <span className="w-5 shrink-0" />
 
           <button
+            data-testid="explorer-sort-name"
             className={`flex-1 ${thClass("name")}`}
             onClick={() => handleSortClick("name")}
             aria-sort={sortBy === "name" ? (sortAsc ? "ascending" : "descending") : "none"}
@@ -612,6 +636,7 @@ export function ExplorerFileTable({
           </button>
 
           <button
+            data-testid="explorer-sort-size"
             className={`w-20 text-right ${thClass("size")}`}
             onClick={() => handleSortClick("size")}
             aria-sort={sortBy === "size" ? (sortAsc ? "ascending" : "descending") : "none"}
@@ -620,6 +645,7 @@ export function ExplorerFileTable({
           </button>
 
           <button
+            data-testid="explorer-sort-modified"
             className={`w-32 ${thClass("modified")}`}
             onClick={() => handleSortClick("modified")}
             aria-sort={sortBy === "modified" ? (sortAsc ? "ascending" : "descending") : "none"}

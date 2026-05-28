@@ -113,3 +113,47 @@ export const useSftpStore = create<SftpState>((set) => ({
   setClipboard: (clipboard) =>
     set({ clipboard }),
 }));
+
+// E2E test hooks — wrap the backend transfer commands so specs can drive
+// upload/download/copy/move without going through the (un-driveable) Tauri
+// file picker dialog. Each is a thin invoke() wrapper that takes session id
+// + paths and returns whatever the backend returns.
+if (typeof window !== "undefined") {
+  const w = window as unknown as {
+    __e2eSftpUpload?: (sessionId: string, localPath: string, remotePath: string) => Promise<string>;
+    __e2eSftpDownload?: (sessionId: string, remotePath: string, localPath: string) => Promise<string>;
+    __e2eSftpEnqueueUpload?: (sessionId: string, localPaths: string[], remoteDir: string) => Promise<string[]>;
+    __e2eSftpCopy?: (sessionId: string, sourcePaths: string[], targetDir: string) => Promise<string[]>;
+    __e2eSftpMove?: (sessionId: string, sourcePaths: string[], targetDir: string) => Promise<string[]>;
+  };
+  w.__e2eSftpUpload = async (sessionId, localPath, remotePath) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string>("sftp_upload", {
+      sftpSessionId: sessionId, localPath, remotePath,
+    });
+  };
+  w.__e2eSftpDownload = async (sessionId, remotePath, localPath) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string>("sftp_download", {
+      sftpSessionId: sessionId, remotePath, localPath,
+    });
+  };
+  w.__e2eSftpEnqueueUpload = async (sessionId, localPaths, remoteDir) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string[]>("sftp_enqueue_upload", {
+      sftpSessionId: sessionId, localPaths, remoteDir,
+    });
+  };
+  w.__e2eSftpCopy = async (sessionId, sourcePaths, targetDir) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string[]>("sftp_copy_entries", {
+      sftpSessionId: sessionId, sourcePaths, targetDir,
+    });
+  };
+  w.__e2eSftpMove = async (sessionId, sourcePaths, targetDir) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string[]>("sftp_move_entries", {
+      sftpSessionId: sessionId, sourcePaths, targetDir,
+    });
+  };
+}

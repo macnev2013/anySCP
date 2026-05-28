@@ -85,6 +85,9 @@ export function SnippetCard({ snippet, onEdit, onDelete, onDuplicate }: SnippetC
   return (
     <>
       <div
+        data-testid={`snippet-card-${snippet.id}`}
+        data-snippet-id={snippet.id}
+        data-snippet-name={snippet.name}
         onContextMenu={handleContextMenu}
         className={[
           "group flex flex-col gap-2 p-4 rounded-xl",

@@ -145,6 +145,7 @@ export function PortForwardingPage() {
           {/* ── Action buttons ── */}
           <div className="flex gap-2">
             <button
+              data-testid="new-rule-button"
               onClick={() => setShowForm(true)}
               className={[
                 "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium uppercase tracking-wide",
@@ -189,6 +190,10 @@ export function PortForwardingPage() {
                       return (
                         <div
                           key={rule.id}
+                          data-testid={`rule-card-${rule.id}`}
+                          data-rule-id={rule.id}
+                          data-rule-label={rule.label || `Port ${rule.local_port}`}
+                          data-rule-active={isActive}
                           onContextMenu={(e) => handleContextMenu(e, rule)}
                           className={[
                             "group flex flex-col gap-2 px-4 py-3 rounded-lg",
@@ -442,6 +447,7 @@ function RuleDialog({
       <form
         onSubmit={handleSubmit}
         role="dialog"
+        data-testid="rule-dialog"
         aria-label={isEdit ? "Edit forwarding rule" : "New forwarding rule"}
         className="w-full max-w-lg rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)] flex flex-col max-h-[84vh] animate-[fadeIn_120ms_var(--ease-expo-out)_both]"
       >
@@ -472,6 +478,7 @@ function RuleDialog({
             {hosts.length > 0 ? (
               <CustomSelect
                 id="pf-host"
+                data-testid="rule-host-select"
                 value={hostId}
                 onChange={setHostId}
                 options={hosts.map((h) => ({
@@ -494,6 +501,7 @@ function RuleDialog({
             </label>
             <input
               id="pf-label"
+              data-testid="rule-label-input"
               type="text"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
@@ -548,6 +556,7 @@ function RuleDialog({
               <label htmlFor="pf-local-port" className={labelClass}>Local Port</label>
               <input
                 id="pf-local-port"
+                data-testid="rule-local-port"
                 type="number"
                 value={localPort}
                 onChange={(e) => setLocalPort(e.target.value)}
@@ -564,6 +573,7 @@ function RuleDialog({
               <label htmlFor="pf-remote-port" className={labelClass}>Remote Port</label>
               <input
                 id="pf-remote-port"
+                data-testid="rule-remote-port"
                 type="number"
                 value={remotePort}
                 onChange={(e) => setRemotePort(e.target.value)}
@@ -629,6 +639,7 @@ function RuleDialog({
           </button>
           <button
             type="submit"
+            data-testid="rule-dialog-save"
             disabled={!canSubmit}
             className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-text-inverse bg-accent hover:bg-accent-hover disabled:opacity-50 rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >

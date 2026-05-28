@@ -123,6 +123,7 @@ export function CustomSelect({
         aria-haspopup="listbox"
         aria-label={ariaLabel}
         data-testid={testid}
+        data-value={value}
         disabled={disabled}
         onClick={() => {
           if (!disabled) {

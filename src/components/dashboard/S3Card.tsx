@@ -76,6 +76,9 @@ export function S3Card({ conn, onConnect, onEdit, onDuplicate, onDelete }: S3Car
   return (
     <>
       <div
+        data-testid={`s3-card-${conn.id}`}
+        data-s3-id={conn.id}
+        data-s3-label={displayName}
         role="button"
         tabIndex={0}
         onClick={() => onConnect(conn)}
@@ -104,6 +107,7 @@ export function S3Card({ conn, onConnect, onEdit, onDuplicate, onDelete }: S3Car
         <div className="absolute top-2 right-2 flex items-center gap-0.5">
           <button
             type="button"
+            data-testid={`s3-card-${conn.id}-explorer`}
             onClick={stopAnd(() => onConnect(conn))}
             title="Open Explorer"
             aria-label={`Open explorer for ${displayName}`}

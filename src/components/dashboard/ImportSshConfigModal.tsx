@@ -297,6 +297,7 @@ export function ImportSshConfigModal({ onClose, onImported }: ImportSshConfigMod
                 Cancel
               </button>
               <button
+                data-testid="import-ssh-config-submit"
                 onClick={() => void handleImport()}
                 disabled={importing || importableCount === 0}
                 className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-text-inverse bg-accent hover:bg-accent-hover disabled:opacity-50 rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

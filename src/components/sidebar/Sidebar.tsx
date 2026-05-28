@@ -171,6 +171,8 @@ export function Sidebar() {
   return (
     <>
       <nav
+        data-testid="sidebar"
+        data-sidebar-expanded={expanded}
         aria-label="Main navigation"
         className={[
           "no-select flex flex-col shrink-0 h-full py-3",

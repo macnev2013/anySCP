@@ -238,6 +238,9 @@ export function HistoryPage() {
                       return (
                         <div
                           key={entry.id}
+                          data-testid={`history-entry-${entry.id}`}
+                          data-history-host-id={entry.host_id}
+                          data-history-host-label={entry.host_label || entry.host}
                           onContextMenu={(e) => handleContextMenu(e, entry)}
                           onDoubleClick={() => void handleTerminal(entry)}
                           className={[

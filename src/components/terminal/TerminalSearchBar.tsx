@@ -164,6 +164,8 @@ export function TerminalSearchBar({ sessionId }: TerminalSearchBarProps) {
 
   return (
     <div
+      data-testid="terminal-search"
+      data-match-text={matchText}
       className={[
         "absolute top-2 right-3 z-20",
         "flex items-center gap-1 px-2 py-1.5",
@@ -176,6 +178,7 @@ export function TerminalSearchBar({ sessionId }: TerminalSearchBarProps) {
       {/* Search input */}
       <input
         ref={inputRef}
+        data-testid="terminal-search-input"
         type="text"
         value={query}
         onChange={(e) => handleInput(e.target.value)}

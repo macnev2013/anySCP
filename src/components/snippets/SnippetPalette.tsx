@@ -182,6 +182,7 @@ export function SnippetPalette() {
 
       {/* Palette */}
       <div
+        data-testid="snippet-palette"
         className="relative z-10 w-full max-w-[480px] mx-4 rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)] overflow-hidden animate-[paletteIn_150ms_var(--ease-expo-out)_both]"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={handleKeyDown}
@@ -193,6 +194,7 @@ export function SnippetPalette() {
               <Search size={16} strokeWidth={2} className="text-text-muted shrink-0" />
               <input
                 ref={searchRef}
+                data-testid="snippet-palette-search"
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -212,6 +214,8 @@ export function SnippetPalette() {
                 filtered.map((snippet, i) => (
                   <button
                     key={snippet.id}
+                    data-testid={`snippet-palette-item-${snippet.id}`}
+                    data-snippet-name={snippet.name}
                     onClick={() => enterVariablePhase(snippet)}
                     onMouseEnter={() => setSelectedIndex(i)}
                     className={[
@@ -276,6 +280,7 @@ export function SnippetPalette() {
               )}
               <button
                 type="submit"
+                data-testid="snippet-palette-run"
                 disabled={hasUnmetRequired}
                 className="flex items-center gap-1.5 h-7 px-3 text-[11px] font-medium rounded-lg text-text-inverse bg-accent hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
               >
@@ -323,6 +328,7 @@ export function SnippetPalette() {
                     ) : (
                       <input
                         ref={isFirst ? (el) => { firstVarRef.current = el; } : undefined}
+                        data-testid={`snippet-palette-var-${name}`}
                         type="text"
                         value={varValues[name] ?? ""}
                         onChange={(e) => setVarValues((prev) => ({ ...prev, [name]: e.target.value }))}

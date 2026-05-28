@@ -17,7 +17,14 @@ static TX: OnceLock<mpsc::UnboundedSender<(String, Value)>> = OnceLock::new();
 /// Initialize the telemetry background worker.
 /// Safe to call from `.setup()` — the worker is spawned on a background thread
 /// with its own Tokio runtime, so it does not require an active reactor.
+///
+/// No-op when `ANYSCP_DISABLE_TELEMETRY` is set (used by the e2e container
+/// so test runs don't pollute the real analytics stream).
 pub fn init() {
+    if std::env::var_os("ANYSCP_DISABLE_TELEMETRY").is_some() {
+        return;
+    }
+
     let (tx, mut rx) = mpsc::unbounded_channel::<(String, Value)>();
     if TX.set(tx).is_err() {
         return;

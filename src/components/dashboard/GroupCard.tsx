@@ -35,6 +35,9 @@ export function GroupCard({ group, hostCount, isSelected, onSelect, onDelete }: 
   return (
     <>
       <button
+        data-testid={`group-card-${group.id}`}
+        data-group-id={group.id}
+        data-group-name={group.name}
         onClick={() => onSelect(group.id)}
         onContextMenu={handleContextMenu}
         title={group.name}

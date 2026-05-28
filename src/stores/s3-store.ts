@@ -123,3 +123,32 @@ export const useS3Store = create<S3State>((set) => ({
   setClipboard: (clipboard) =>
     set({ clipboard }),
 }));
+
+// E2E test hooks — connection delete + transfer command wrappers so specs
+// can drive upload/download without going through the file picker dialog.
+if (typeof window !== "undefined") {
+  const w = window as unknown as {
+    __e2eDeleteS3Connection?: (id: string) => Promise<void>;
+    __e2eS3Upload?: (sessionId: string, localPath: string, key: string) => Promise<void>;
+    __e2eS3Download?: (sessionId: string, key: string, localPath: string) => Promise<void>;
+    __e2eS3UploadFiles?: (sessionId: string, localPaths: string[], prefix: string) => Promise<number>;
+  };
+  w.__e2eDeleteS3Connection = async (id) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("s3_delete_connection", { id });
+  };
+  w.__e2eS3Upload = async (sessionId, localPath, key) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("s3_upload_file", { s3SessionId: sessionId, localPath, key });
+  };
+  w.__e2eS3Download = async (sessionId, key, localPath) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("s3_download_file", { s3SessionId: sessionId, key, localPath });
+  };
+  w.__e2eS3UploadFiles = async (sessionId, localPaths, prefix) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<number>("s3_upload_files", {
+      s3SessionId: sessionId, localPaths, prefix,
+    });
+  };
+}

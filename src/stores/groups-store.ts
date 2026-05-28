@@ -55,3 +55,9 @@ export const useGroupsStore = create<GroupsState>((set) => ({
     set({ groups });
   },
 }));
+
+// E2E test hook — drives group delete (UI flow uses right-click context menu).
+if (typeof window !== "undefined") {
+  (window as unknown as { __e2eDeleteGroup?: (id: string) => Promise<void> })
+    .__e2eDeleteGroup = (id) => useGroupsStore.getState().deleteGroup(id);
+}

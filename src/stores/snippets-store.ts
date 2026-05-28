@@ -103,3 +103,10 @@ export const useSnippetsStore = create<SnippetsState>((set, get) => ({
     set({ searchQuery: "", searchResults: [] });
   },
 }));
+
+// E2E test hook — drives snippet delete (UI flow uses right-click context
+// menu only, flaky in WebKitWebDriver). No production code reads this.
+if (typeof window !== "undefined") {
+  (window as unknown as { __e2eDeleteSnippet?: (id: string) => Promise<void> })
+    .__e2eDeleteSnippet = (id) => useSnippetsStore.getState().deleteSnippet(id);
+}

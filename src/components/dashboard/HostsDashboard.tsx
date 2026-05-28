@@ -120,6 +120,20 @@ export function HostsDashboard() {
     void loadS3Connections();
   }, [loadHosts, loadGroups, loadRecent]);
 
+  // E2E test hook — lets tests trigger a reload of the local S3 connection
+  // list after invoking s3_delete_connection out-of-band. The s3-store
+  // doesn't own this list (HostsDashboard manages it in component state),
+  // so without this the dashboard wouldn't notice the deletion.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    (window as unknown as { __e2eReloadS3Connections?: () => Promise<void> })
+      .__e2eReloadS3Connections = async () => { await loadS3Connections(); };
+    return () => {
+      (window as unknown as { __e2eReloadS3Connections?: (() => Promise<void>) | null })
+        .__e2eReloadS3Connections = null;
+    };
+  }, []);
+
 
   // ─── Derived data ─────────────────────────────────────────────────────────
 
@@ -430,6 +444,7 @@ export function HostsDashboard() {
             </button>
 
             <button
+              data-testid="new-s3-button"
               onClick={() => setS3DialogOpen(true)}
               className={[
                 "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium uppercase tracking-wide",
@@ -445,6 +460,7 @@ export function HostsDashboard() {
             </button>
 
             <button
+              data-testid="new-group-button"
               onClick={() => setGroupModalOpen(true)}
               className={[
                 "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium uppercase tracking-wide",
@@ -460,6 +476,7 @@ export function HostsDashboard() {
             </button>
 
             <button
+              data-testid="import-ssh-config-button"
               onClick={() => setImportModalOpen(true)}
               className={[
                 "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium uppercase tracking-wide",

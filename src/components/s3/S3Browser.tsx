@@ -148,9 +148,13 @@ export function S3Browser({ sessionId }: S3BrowserProps) {
   }, [sessionId, setCurrentBucket, loadObjects, setError]);
 
   useEffect(() => {
-    if (!session?.currentBucket) void loadBuckets();
+    // If a bucket was already selected (e.g. set by the card-click flow that
+    // restores a saved connection's default bucket), load its objects.
+    // Otherwise show the bucket picker.
+    if (session?.currentBucket) void loadObjects("");
+    else void loadBuckets();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [sessionId, session?.currentBucket]);
 
   // ─── Auto-refresh on upload completion ────────────────────────────────────
 

@@ -166,3 +166,9 @@ export const usePortForwardStore = create<PortForwardState>((set, get) => ({
     } catch { /* best-effort */ }
   },
 }));
+
+// E2E test hook — drives rule delete (UI flow uses right-click context menu).
+if (typeof window !== "undefined") {
+  (window as unknown as { __e2eDeleteRule?: (id: string) => Promise<void> })
+    .__e2eDeleteRule = (id) => usePortForwardStore.getState().deleteRule(id);
+}

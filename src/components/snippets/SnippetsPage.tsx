@@ -273,6 +273,7 @@ export function SnippetsPage() {
           {/* Action buttons */}
           <div className="flex gap-2">
             <button
+              data-testid="new-snippet-button"
               onClick={() => setEditingSnippet("__new__")}
               className={[
                 "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium uppercase tracking-wide",

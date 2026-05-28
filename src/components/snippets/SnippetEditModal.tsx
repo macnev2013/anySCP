@@ -283,6 +283,7 @@ export function SnippetEditModal({
       ].join(" ")}
     >
       <div
+        data-testid="snippet-modal"
         className={[
           "w-full max-w-xl rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)]",
           "flex flex-col max-h-[84vh]",
@@ -321,6 +322,7 @@ export function SnippetEditModal({
             </label>
             <input
               ref={nameRef}
+              data-testid="snippet-modal-name"
               type="text"
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
@@ -337,6 +339,7 @@ export function SnippetEditModal({
               Command <span className="text-status-error">*</span>
             </label>
             <textarea
+              data-testid="snippet-modal-command"
               value={form.command}
               onChange={(e) => handleCommandChange(e.target.value)}
               placeholder="e.g., sudo systemctl restart {{service}}"
@@ -488,6 +491,7 @@ export function SnippetEditModal({
             </button>
             <button
               type="submit"
+              data-testid="snippet-modal-save"
               disabled={saving || !form.name.trim() || !form.command.trim()}
               className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-text-inverse bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg-overlay"
             >

@@ -139,6 +139,7 @@ export function GroupModal({ open, onClose, onSave, initial }: GroupModalProps) 
       `}
     >
       <div
+        data-testid="group-modal"
         className={`
           w-full max-w-sm rounded-xl bg-bg-overlay border border-border p-6 shadow-[var(--shadow-lg)]
           transition-[opacity,transform] duration-[var(--duration-slow)] ease-[var(--ease-expo-out)]
@@ -166,6 +167,7 @@ export function GroupModal({ open, onClose, onSave, initial }: GroupModalProps) 
             </label>
             <input
               ref={nameRef}
+              data-testid="group-modal-name"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -256,6 +258,7 @@ export function GroupModal({ open, onClose, onSave, initial }: GroupModalProps) 
             </button>
             <button
               type="submit"
+              data-testid="group-modal-save"
               disabled={saving || !name.trim()}
               className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-text-inverse bg-accent hover:bg-accent-hover disabled:opacity-50 rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg-overlay"
             >

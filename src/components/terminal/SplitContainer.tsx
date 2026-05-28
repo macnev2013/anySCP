@@ -40,6 +40,9 @@ export function SplitContainer({ node, path, tabId }: SplitContainerProps) {
   return (
     <div
       ref={containerRef}
+      data-testid="split-container"
+      data-split-direction={node.direction}
+      data-zoomed={isZoomed}
       className={`flex h-full w-full gap-0.5 overflow-visible ${isHorizontal ? "flex-row" : "flex-col"}`}
     >
       <div style={{ flex: `${node.ratio} 1 0%` }} className="min-w-0 min-h-0 overflow-hidden">

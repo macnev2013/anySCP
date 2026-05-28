@@ -779,6 +779,7 @@ export function HostEditModal() {
                 </label>
                 <input
                   id="hem-startup"
+                  data-testid="host-modal-startup-command"
                   type="text"
                   value={form.startupCommand}
                   onChange={(e) => setField("startupCommand", e.target.value)}

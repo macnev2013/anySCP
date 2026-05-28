@@ -173,7 +173,7 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
       style={{ backgroundColor: "oklch(0 0 0 / 0.5)", backdropFilter: "blur(4px)" }}
       onClick={(e) => e.target === e.currentTarget && !connecting && onClose()}
     >
-      <div className="w-full max-w-lg rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)] flex flex-col max-h-[84vh] animate-[fadeIn_120ms_var(--ease-expo-out)_both]">
+      <div data-testid="s3-dialog" className="w-full max-w-lg rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)] flex flex-col max-h-[84vh] animate-[fadeIn_120ms_var(--ease-expo-out)_both]">
         {/* Header */}
         <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border shrink-0">
           <h2 className="text-[length:var(--text-lg)] font-semibold text-text-primary">
@@ -198,6 +198,7 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
           <div>
             <label className={labelClass}>Service</label>
             <CustomSelect
+              data-testid="s3-dialog-provider"
               value={provider}
               onChange={(v) => setProvider(v as S3Provider)}
               options={S3_PROVIDERS.map((p) => ({ value: p.id, label: p.label }))}
@@ -210,6 +211,7 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
               <span className="ml-1 text-text-muted font-normal">(optional)</span>
             </label>
             <input
+              data-testid="s3-dialog-label"
               type="text"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
@@ -229,6 +231,7 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
           <div>
             <label className={labelClass}>Access Key ID</label>
             <input
+              data-testid="s3-dialog-access-key"
               type="text"
               value={accessKey}
               onChange={(e) => setAccessKey(e.target.value)}
@@ -241,6 +244,7 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
           <div>
             <label className={labelClass}>Secret Access Key</label>
             <input
+              data-testid="s3-dialog-secret-key"
               type="password"
               value={secretKey}
               onChange={(e) => setSecretKey(e.target.value)}
@@ -255,6 +259,7 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
             <div className="flex-1">
               <label className={labelClass}>Region</label>
               <input
+                data-testid="s3-dialog-region"
                 type="text"
                 value={region}
                 onChange={(e) => setRegion(e.target.value)}
@@ -265,6 +270,7 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
             <div className="flex-1">
               <label className={labelClass}>Bucket</label>
               <input
+                data-testid="s3-dialog-bucket"
                 type="text"
                 value={bucket}
                 onChange={(e) => setBucket(e.target.value)}
@@ -278,6 +284,7 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
             <div>
               <label className={labelClass}>Endpoint URL</label>
               <input
+                data-testid="s3-dialog-endpoint"
                 type="text"
                 value={endpoint}
                 onChange={(e) => setEndpoint(e.target.value)}
@@ -385,6 +392,7 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
           ) : (
             <>
               <button
+                data-testid="s3-dialog-save"
                 onClick={() => void handleSave()}
                 disabled={saving || connecting || !canSubmit}
                 className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-text-secondary hover:text-text-primary bg-bg-subtle hover:bg-bg-muted disabled:opacity-50 rounded-lg border border-border transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -392,6 +400,7 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
                 {saving ? "Saving…" : "Save"}
               </button>
               <button
+                data-testid="s3-dialog-connect"
                 onClick={() => void handleConnect()}
                 disabled={connecting || saving || !canSubmit}
                 className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-text-inverse bg-accent hover:bg-accent-hover disabled:opacity-50 rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

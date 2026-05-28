@@ -393,6 +393,7 @@ function NumberSetting({ id, value, min, max, step, onChange }: {
   return (
     <input
       id={id}
+      data-testid={id}
       type="text"
       inputMode="decimal"
       value={local}

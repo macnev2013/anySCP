@@ -39,6 +39,38 @@ services:
       timeout: 2s
       retries: 30
 
+  # ─── S3-compatible storage (MinIO) ──────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: anyscp-e2e-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    networks: [e2e]
+
+  # One-shot bucket seed — creates the test bucket and uploads two objects
+  # so the S3 explorer specs have something to render.
+  minio-seed:
+    image: minio/mc:latest
+    container_name: anyscp-e2e-minio-seed
+    depends_on:
+      minio:
+        condition: service_started
+    networks: [e2e]
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        until mc alias set m http://minio:9000 minioadmin minioadmin >/dev/null 2>&1; do
+          echo "waiting for minio..."; sleep 1
+        done
+        mc mb --ignore-existing m/anyscp-test >/dev/null
+        echo "hello from minio" | mc pipe m/anyscp-test/hello.txt >/dev/null
+        echo "{\"k\": 1}"        | mc pipe m/anyscp-test/data.json >/dev/null
+        echo "minio seeded"
+
   # One-shot keygen — produces the keypair shared by sshd-key (authorized key)
   # and the e2e runner (private key for connecting).
   keygen:
@@ -73,6 +105,8 @@ services:
         condition: service_started
       sshd-key:
         condition: service_started
+      minio-seed:
+        condition: service_completed_successfully
     environment:
       SSHD_PASS_HOST: sshd-pass
       SSHD_PASS_PORT: "2222"
@@ -81,6 +115,14 @@ services:
       SSH_USER: testuser
       SSH_PASS: testpass
       SSH_KEY_PATH: /keys/id_ed25519
+      # MinIO sidecar — S3-compatible target seeded by minio-seed.
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_BUCKET: anyscp-test
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      # Don't ship test-run noise to PostHog. Read by src-tauri/src/telemetry.rs;
+      # `init()` is a no-op when this is set, so no events are emitted.
+      ANYSCP_DISABLE_TELEMETRY: "1"
       # Force-rebuild the binary on every run: set to 1
       E2E_FORCE_BUILD: ""
       # WDIO log level
