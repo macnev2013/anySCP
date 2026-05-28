@@ -26,10 +26,6 @@ pub fn run() {
         .with_env_filter("anyscp=debug,russh=info")
         .init();
 
-    // Optionally swap the keyring backend (e.g. to kernel `keyutils` for the
-    // e2e container). No-op when ANYSCP_TEST_KEYRING is unset.
-    vault::init_backend();
-
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())

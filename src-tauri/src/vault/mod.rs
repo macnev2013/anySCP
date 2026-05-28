@@ -10,27 +10,6 @@ use tracing::instrument;
 const SERVICE_NAME: &str = "com.anyscp.credentials";
 
 // ---------------------------------------------------------------------------
-// Backend selection
-// ---------------------------------------------------------------------------
-
-/// Optionally swap the `keyring` crate's default backend. Required for
-/// container test environments where libsecret/gnome-keyring isn't trivial
-/// to bring up — we fall back to the Linux kernel keyring (`keyutils`),
-/// which works with zero setup inside an unprivileged container.
-///
-/// Set `ANYSCP_TEST_KEYRING=keyutils` in the environment to opt in.
-/// Anything else (including unset) leaves the platform default in place.
-pub fn init_backend() {
-    #[cfg(target_os = "linux")]
-    if std::env::var("ANYSCP_TEST_KEYRING").as_deref() == Ok("keyutils") {
-        keyring::set_default_credential_builder(
-            keyring::keyutils::default_credential_builder(),
-        );
-        tracing::info!("keyring backend: keyutils (kernel)");
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
 

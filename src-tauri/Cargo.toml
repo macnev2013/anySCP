@@ -60,11 +60,12 @@ tokio-util = { version = "0.7" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# OS credential store (macOS Keychain, Windows DPAPI, Linux libsecret/kwallet).
-# `linux-keyutils` is bundled as an opt-in fallback that the kernel provides
-# (no dbus/secret-service required). The e2e container switches to it via the
-# ANYSCP_TEST_KEYRING env var; production keeps the default (libsecret).
-keyring = { version = "3", features = ["apple-native", "linux-native", "linux-keyutils", "windows-native"] }
+# OS credential store: macOS Keychain (apple-native), Windows DPAPI
+# (windows-native), Linux kernel keyutils (linux-native — name is misleading;
+# it's the keyutils backend, not libsecret). On Linux, PAM normally sets up
+# a session keyring on login; in containers you need `keyctl session` + a
+# non-default seccomp profile.
+keyring = { version = "3", features = ["apple-native", "linux-native", "windows-native"] }
 tauri-plugin-dialog = "2.6.0"
 tauri-plugin-updater = "2"
 ssh2-config = "0.7.0"

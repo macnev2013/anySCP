@@ -41,7 +41,21 @@ rm -rf tests/e2e/node_modules tests/e2e/pnpm-lock.yaml tests/e2e/package-lock.js
 ln -sfn /opt/e2e/node_modules tests/e2e/node_modules
 
 # ── 3. Build Tauri binary if missing or source changed ───────────────────────
-if [[ ! -x "$ANYSCP_BIN" || -n "${E2E_FORCE_BUILD:-}" ]]; then
+# Rebuild if: binary is missing, OR E2E_FORCE_BUILD is set, OR any tracked
+# source file is newer than the binary (otherwise frontend changes silently
+# go missing because Tauri embeds dist/ at compile time).
+needs_build=0
+if [[ ! -x "$ANYSCP_BIN" ]]; then
+    needs_build=1
+elif [[ -n "${E2E_FORCE_BUILD:-}" ]]; then
+    needs_build=1
+elif find src src-tauri/src src-tauri/Cargo.toml src-tauri/tauri.conf.json \
+        index.html vite.config.ts \
+        -newer "$ANYSCP_BIN" -print -quit 2>/dev/null | grep -q .; then
+    needs_build=1
+fi
+
+if [[ $needs_build -eq 1 ]]; then
     echo "[entrypoint] building anyscp (debug, frontend embedded)"
     # Use `tauri build --debug --no-bundle`, NOT `cargo build`:
     #   - `cargo build` alone produces a binary that expects the frontend at
@@ -53,7 +67,7 @@ if [[ ! -x "$ANYSCP_BIN" || -n "${E2E_FORCE_BUILD:-}" ]]; then
     #   - `--no-bundle` skips the installer/AppImage step we don't need.
     pnpm tauri build --debug --no-bundle
 else
-    echo "[entrypoint] reusing existing binary at $ANYSCP_BIN"
+    echo "[entrypoint] reusing existing binary at $ANYSCP_BIN (sources unchanged)"
 fi
 
 # ── 4. Start Xvfb + x11vnc, then run WDIO ─────────────────────────────────────

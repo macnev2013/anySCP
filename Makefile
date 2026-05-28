@@ -174,3 +174,6 @@ e2e-clean:
 	@$(E2E_COMPOSE) down -v --remove-orphans
 	@docker rmi anyscp-e2e-runner:latest 2>/dev/null || true
 	@rm -f $(E2E_IMAGE_STAMP)
+
+e2e-clean-artifacts:
+	@rm -rf ./tests/e2e/{screenshots,videos,.image-stamp}

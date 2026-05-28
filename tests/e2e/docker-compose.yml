@@ -81,10 +81,6 @@ services:
       SSH_USER: testuser
       SSH_PASS: testpass
       SSH_KEY_PATH: /keys/id_ed25519
-      # Swap anyscp's keyring backend to the Linux kernel keyring (keyutils).
-      # Sidesteps the gnome-keyring / libsecret / dbus rigmarole that's a
-      # nightmare to bootstrap in a container.
-      ANYSCP_TEST_KEYRING: keyutils
       # Force-rebuild the binary on every run: set to 1
       E2E_FORCE_BUILD: ""
       # WDIO log level
