@@ -3,6 +3,10 @@
         logs-ssh-pass logs-ssh-key \
         shell-ssh-pass shell-ssh-key \
         ssh-keygen ssh-status ssh-clean ssh-clean-keys \
+        scp-build start-scp-pass start-scp-key stop-scp-pass stop-scp-key \
+        connect-scp-pass connect-scp-key \
+        logs-scp-pass logs-scp-key \
+        shell-scp-pass shell-scp-key scp-clean-image \
         e2e e2e-build e2e-shell e2e-logs e2e-clean
 
 # Test SSH servers (linuxserver/openssh-server) for local development.
@@ -23,6 +27,19 @@ SSH_KEY_PORT       := 2223
 SSH_KEY_DIR        := .test-ssh
 SSH_KEY            := $(SSH_KEY_DIR)/id_ed25519
 SSH_PUB_KEY        := $(SSH_KEY).pub
+
+# SCP-only test server (extends linuxserver/openssh-server with SFTP stripped).
+SCP_IMAGE          := anyscp-test-scp-only:latest
+SCP_IMAGE_STAMP    := tests/scp-server/.image-stamp
+SCP_IMAGE_SRC      := tests/scp-server/Dockerfile tests/scp-server/disable-sftp.sh
+
+# SCP-only password container
+SSH_SCP_PASS_CONTAINER := anyscp-test-scp-pass
+SSH_SCP_PASS_PORT      := 2224
+
+# SCP-only key container
+SSH_SCP_KEY_CONTAINER  := anyscp-test-scp-key
+SSH_SCP_KEY_PORT       := 2225
 
 # ─── Keypair ──────────────────────────────────────────────────────────────────
 
@@ -117,14 +134,120 @@ logs-ssh-key:
 shell-ssh-key:
 	@docker exec -it $(SSH_KEY_CONTAINER) /bin/sh
 
+# ─── SCP-only image ───────────────────────────────────────────────────────────
+# Built from tests/scp-server/. Rebuilt automatically whenever the Dockerfile
+# or the init script change.
+
+$(SCP_IMAGE_STAMP): $(SCP_IMAGE_SRC)
+	@echo "  building $(SCP_IMAGE) (sources changed)"
+	@cd tests/scp-server && docker build -t $(SCP_IMAGE) .
+	@touch $@
+
+scp-build: $(SCP_IMAGE_STAMP)
+
+# ─── SCP-only password container ──────────────────────────────────────────────
+
+start-scp-pass: $(SCP_IMAGE_STAMP)
+	@if [ "$$(docker ps -aq -f name=^/$(SSH_SCP_PASS_CONTAINER)$$)" ]; then \
+		echo "Starting existing container $(SSH_SCP_PASS_CONTAINER)..."; \
+		docker start $(SSH_SCP_PASS_CONTAINER) >/dev/null; \
+	else \
+		echo "Creating container $(SSH_SCP_PASS_CONTAINER) on port $(SSH_SCP_PASS_PORT)..."; \
+		docker run -d \
+			--name $(SSH_SCP_PASS_CONTAINER) \
+			-p $(SSH_SCP_PASS_PORT):2222 \
+			-e PUID=1000 \
+			-e PGID=1000 \
+			-e TZ=Etc/UTC \
+			-e USER_NAME=$(SSH_USER) \
+			-e USER_PASSWORD=$(SSH_PASSWORD) \
+			-e PASSWORD_ACCESS=true \
+			-e SUDO_ACCESS=true \
+			$(SCP_IMAGE) >/dev/null; \
+	fi
+	@echo ""
+	@echo "  SCP-only (password) server running at:"
+	@echo "    Host:     localhost"
+	@echo "    Port:     $(SSH_SCP_PASS_PORT)"
+	@echo "    User:     $(SSH_USER)"
+	@echo "    Password: $(SSH_PASSWORD)"
+	@echo "    SFTP:     disabled (Subsystem stripped)"
+	@echo ""
+	@echo "  SCP (legacy proto): scp -O -P $(SSH_SCP_PASS_PORT) FILE $(SSH_USER)@localhost:"
+	@echo "  SFTP (should fail): sftp -P $(SSH_SCP_PASS_PORT) $(SSH_USER)@localhost"
+
+stop-scp-pass:
+	@docker stop $(SSH_SCP_PASS_CONTAINER) >/dev/null 2>&1 && echo "Stopped $(SSH_SCP_PASS_CONTAINER)" || echo "$(SSH_SCP_PASS_CONTAINER) not running"
+
+connect-scp-pass:
+	@ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $(SSH_SCP_PASS_PORT) $(SSH_USER)@localhost
+
+logs-scp-pass:
+	@docker logs -f $(SSH_SCP_PASS_CONTAINER)
+
+shell-scp-pass:
+	@docker exec -it $(SSH_SCP_PASS_CONTAINER) /bin/sh
+
+# ─── SCP-only key container ───────────────────────────────────────────────────
+
+start-scp-key: $(SCP_IMAGE_STAMP) $(SSH_KEY)
+	@if [ "$$(docker ps -aq -f name=^/$(SSH_SCP_KEY_CONTAINER)$$)" ]; then \
+		echo "Starting existing container $(SSH_SCP_KEY_CONTAINER)..."; \
+		docker start $(SSH_SCP_KEY_CONTAINER) >/dev/null; \
+	else \
+		echo "Creating container $(SSH_SCP_KEY_CONTAINER) on port $(SSH_SCP_KEY_PORT)..."; \
+		docker run -d \
+			--name $(SSH_SCP_KEY_CONTAINER) \
+			-p $(SSH_SCP_KEY_PORT):2222 \
+			-e PUID=1000 \
+			-e PGID=1000 \
+			-e TZ=Etc/UTC \
+			-e USER_NAME=$(SSH_USER) \
+			-e PASSWORD_ACCESS=false \
+			-e SUDO_ACCESS=true \
+			-e PUBLIC_KEY="$$(cat $(SSH_PUB_KEY))" \
+			$(SCP_IMAGE) >/dev/null; \
+	fi
+	@echo ""
+	@echo "  SCP-only (key) server running at:"
+	@echo "    Host: localhost"
+	@echo "    Port: $(SSH_SCP_KEY_PORT)"
+	@echo "    User: $(SSH_USER)"
+	@echo "    Key:  $(SSH_KEY)"
+	@echo "    SFTP: disabled (Subsystem stripped)"
+	@echo ""
+	@echo "  SCP (legacy proto): scp -O -i $(SSH_KEY) -P $(SSH_SCP_KEY_PORT) FILE $(SSH_USER)@localhost:"
+
+stop-scp-key:
+	@docker stop $(SSH_SCP_KEY_CONTAINER) >/dev/null 2>&1 && echo "Stopped $(SSH_SCP_KEY_CONTAINER)" || echo "$(SSH_SCP_KEY_CONTAINER) not running"
+
+connect-scp-key: $(SSH_KEY)
+	@ssh -i $(SSH_KEY) -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $(SSH_SCP_KEY_PORT) $(SSH_USER)@localhost
+
+logs-scp-key:
+	@docker logs -f $(SSH_SCP_KEY_CONTAINER)
+
+shell-scp-key:
+	@docker exec -it $(SSH_SCP_KEY_CONTAINER) /bin/sh
+
 # ─── Combined status / cleanup ────────────────────────────────────────────────
 
 ssh-status:
-	@docker ps -a -f name=^/$(SSH_PASS_CONTAINER)$$ -f name=^/$(SSH_KEY_CONTAINER)$$
+	@docker ps -a \
+		-f name=^/$(SSH_PASS_CONTAINER)$$ \
+		-f name=^/$(SSH_KEY_CONTAINER)$$ \
+		-f name=^/$(SSH_SCP_PASS_CONTAINER)$$ \
+		-f name=^/$(SSH_SCP_KEY_CONTAINER)$$
 
 ssh-clean:
-	@docker rm -f $(SSH_PASS_CONTAINER) >/dev/null 2>&1 && echo "Removed $(SSH_PASS_CONTAINER)" || echo "$(SSH_PASS_CONTAINER) not present"
-	@docker rm -f $(SSH_KEY_CONTAINER)  >/dev/null 2>&1 && echo "Removed $(SSH_KEY_CONTAINER)"  || echo "$(SSH_KEY_CONTAINER) not present"
+	@docker rm -f $(SSH_PASS_CONTAINER)     >/dev/null 2>&1 && echo "Removed $(SSH_PASS_CONTAINER)"     || echo "$(SSH_PASS_CONTAINER) not present"
+	@docker rm -f $(SSH_KEY_CONTAINER)      >/dev/null 2>&1 && echo "Removed $(SSH_KEY_CONTAINER)"      || echo "$(SSH_KEY_CONTAINER) not present"
+	@docker rm -f $(SSH_SCP_PASS_CONTAINER) >/dev/null 2>&1 && echo "Removed $(SSH_SCP_PASS_CONTAINER)" || echo "$(SSH_SCP_PASS_CONTAINER) not present"
+	@docker rm -f $(SSH_SCP_KEY_CONTAINER)  >/dev/null 2>&1 && echo "Removed $(SSH_SCP_KEY_CONTAINER)"  || echo "$(SSH_SCP_KEY_CONTAINER) not present"
+
+scp-clean-image:
+	@docker rmi $(SCP_IMAGE) 2>/dev/null && echo "Removed $(SCP_IMAGE)" || echo "$(SCP_IMAGE) not present"
+	@rm -f $(SCP_IMAGE_STAMP)
 
 ssh-clean-keys:
 	@rm -rf $(SSH_KEY_DIR) && echo "Removed $(SSH_KEY_DIR)"
