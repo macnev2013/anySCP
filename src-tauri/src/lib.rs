@@ -53,8 +53,7 @@ pub fn run() {
                 Ok(Some(v)) if v == "light" => "light",
                 _ => "dark",
             };
-            let theme_script =
-                format!("document.documentElement.dataset.theme = {theme:?};");
+            let theme_script = format!("document.documentElement.dataset.theme = {theme:?};");
 
             WebviewWindowBuilder::new(app.handle(), "main", WebviewUrl::App("index.html".into()))
                 .title("anySCP")
