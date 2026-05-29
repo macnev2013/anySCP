@@ -18,7 +18,6 @@ import { fileURLToPath } from "node:url";
 import { resetApp } from "../helpers/reset.js";
 import { waitForDashboard } from "../helpers/dashboard.js";
 import {
-    clickConnect,
     clickSave,
     fillPasswordHostForm,
     getHostId,
@@ -134,6 +133,40 @@ describe("screenshots", () => {
         await fillRuleAndSave({ label: "Locally Debug App", hostId: localTestingId, localPort: 8080, remotePort: 8080 });
         await openNewRuleDialog();
         await fillRuleAndSave({ label: "Database", hostId: localTestingId, localPort: 27017, remotePort: 27017 });
+
+        // ── Open a few sessions ──────────────────────────────────────────────
+        // Populates the dashboard's Recent section and gives the terminal/
+        // explorer captures live tabs to shoot (so they don't create sessions).
+        await (await $("[aria-label='Hosts']")).click();
+        await waitForDashboard();
+        const appId = await getHostId("App");
+        const databaseId = await getHostId("Database");
+
+        // Explorer (SFTP) on Database.
+        await (await $(`[data-testid='host-card-${databaseId}-explorer']`)).click();
+        await waitForExplorer();
+
+        // Terminal on App — type a few commands. Best-effort: the output is
+        // only for the screenshot, so we don't assert on it (passing "" as the
+        // expected text means runCommand types + Enters without waiting/flaking).
+        await (await $("[aria-label='Hosts']")).click();
+        await waitForDashboard();
+        await (await $(`[data-testid='host-card-${appId}-terminal']`)).click();
+        const termSid = await waitForAnyTerminal();
+        await waitForTerminalText(termSid, ":~$", { timeoutMs: 20_000 }).catch(() => {});
+        for (const cmd of ["pwd", "whoami", "ls"]) {
+            try {
+                await runCommand(termSid, cmd, "", 6_000);
+            } catch {
+                /* best-effort */
+            }
+        }
+
+        // Terminal on Local Testing — a third recent entry.
+        await (await $("[aria-label='Hosts']")).click();
+        await waitForDashboard();
+        await (await $(`[data-testid='host-card-${localTestingId}-terminal']`)).click();
+        await waitForAnyTerminal();
     });
 
     it("captures the hosts dashboard", async () => {
@@ -156,37 +189,15 @@ describe("screenshots", () => {
     });
 
     it("captures a terminal session", async () => {
-        // new-host-button only exists on the hosts dashboard; the previous
-        // test leaves us on Tunnels, so navigate back first.
-        await (await $("[aria-label='Hosts']")).click();
-        await waitForDashboard();
-        await openNewHostModal();
-        await fillPasswordHostForm({
-            label: "term",
-            host: SSHD_PASS_HOST,
-            port: SSHD_PASS_PORT,
-            username: SSH_USER,
-            password: SSH_PASS,
-        });
-        await clickConnect();
-        await waitForModalClosed();
-        const sid = await waitForAnyTerminal();
-        await waitForTerminalText(sid, ":~$", { timeoutMs: 20_000 });
-        await runCommand(sid, "pwd", "/", 8_000);
-        await runCommand(sid, "whoami", SSH_USER, 8_000);
-        await runCommand(sid, "ls", "", 8_000);
-        await browser.pause(500);
+        // Switch to the App terminal opened in before() (commands already typed).
+        await (await $("[data-tab-type='terminal']")).click();
+        await browser.pause(600);
         await snap("terminal");
     });
 
     it("captures the file explorer with a context menu", async () => {
-        // The card's explorer button only exists on the hosts dashboard, so
-        // navigate there first, then act on the host captured in before().
-        await (await $("[aria-label='Hosts']")).click();
-        await waitForDashboard();
-        const explorerBtn = await $(`[data-testid='host-card-${localTestingId}-explorer']`);
-        await explorerBtn.waitForClickable({ timeout: 10_000 });
-        await explorerBtn.click();
+        // Switch to the Database explorer opened in before().
+        await (await $("[data-tab-type='sftp']")).click();
         await waitForExplorer();
         await browser.pause(800);
 
