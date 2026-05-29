@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend (typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # `pnpm build` runs `tsc` (strict typecheck) then `vite build` (bundle).
+      - name: Typecheck and build
+        run: pnpm build
+
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libsoup-3.0-dev \
+            javascriptcoregtk-4.1-dev
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      # tauri-build (build.rs) reads `frontendDist: "../dist"`, so the bundle
+      # must exist before any cargo command compiles the crate.
+      - name: Build frontend (provides dist for tauri-build)
+        run: pnpm build
+
+      - name: Check formatting
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+
+      - name: Clippy (deny warnings)
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test
+
+  e2e:
+    name: E2E (WebdriverIO + Docker)
+    runs-on: ubuntu-latest
+    # Only spend the (expensive) E2E run once the cheap checks are green.
+    needs: [frontend, rust]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # Brings up the SSH/SCP/MinIO target containers, builds the runner image,
+      # compiles the Tauri debug binary in-container, then runs the WDIO suite.
+      - name: Run E2E suite
+        run: make e2e
+
+      - name: Upload E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts
+          path: |
+            tests/e2e/screenshots
+            tests/e2e/videos
+            tests/e2e/junit
+            tests/e2e/report.md
+            tests/e2e/.test-records.ndjson
+          if-no-files-found: ignore
+          retention-days: 7
