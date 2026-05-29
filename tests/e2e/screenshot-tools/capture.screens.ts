@@ -23,6 +23,7 @@ import {
     fillPasswordHostForm,
     getHostId,
     openNewHostModal,
+    selectHostGroup,
     waitForModalClosed,
 } from "../helpers/host.js";
 import { fillGroupAndSave, openNewGroupModal } from "../helpers/groups.js";
@@ -54,7 +55,7 @@ async function snap(name: string): Promise<void> {
     console.log(`[capture] saved ${name}.png`);
 }
 
-async function addHost(label: string): Promise<void> {
+async function addHost(label: string, group?: string): Promise<void> {
     await openNewHostModal();
     await fillPasswordHostForm({
         label,
@@ -63,6 +64,7 @@ async function addHost(label: string): Promise<void> {
         username: SSH_USER,
         password: SSH_PASS,
     });
+    if (group) await selectHostGroup(group);
     await clickSave();
     await waitForModalClosed();
 }
@@ -96,9 +98,9 @@ describe("screenshots", () => {
         await fillGroupAndSave("Production");
         await openNewGroupModal();
         await fillGroupAndSave("Testing");
-        await addHost("App");
-        await addHost("Database");
-        await addHost("Local Testing");
+        await addHost("App", "Production");
+        await addHost("Database", "Production");
+        await addHost("Local Testing", "Testing");
 
         // Cloud storage (S3) connections — saved against the MinIO sidecar.
         await addS3("Prod Artifacts");

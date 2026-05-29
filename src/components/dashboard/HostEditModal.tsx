@@ -1008,6 +1008,7 @@ function GroupSelect({ id, value, onChange, groups, disabled }: GroupSelectProps
       onChange={onChange}
       disabled={disabled}
       placeholder="No group"
+      data-testid="host-modal-group"
       options={[
         { value: "", label: "No group" },
         ...groups.map((g) => ({
