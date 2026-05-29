@@ -10,6 +10,8 @@
 //
 // Usage: node frame.mjs <input.png> <output.png>
 import sharp from "sharp";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const [, , inPath, outPath] = process.argv;
 if (!inPath || !outPath) {
@@ -27,9 +29,12 @@ const SHADOW_DY = 12; // shadow vertical offset
 const SHADOW_SIGMA = 14; // shadow blur
 const BAR_BG = "#1b1b1d";
 const TITLE = "anySCP";
-const WALL_TOP = "#7c3aed"; // violet
-const WALL_BOT = "#1d4ed8"; // blue
+const WALL_TOP = "#7c3aed"; // violet — gradient fallback
+const WALL_BOT = "#1d4ed8"; // blue   — gradient fallback
 const FONT = process.env.FRAME_FONT ?? "DejaVu Sans, sans-serif";
+// Background photo, cover-cropped behind the window. Override with FRAME_BG;
+// falls back to the violet→blue gradient if the file is missing.
+const BG_PATH = process.env.FRAME_BG ?? fileURLToPath(new URL("./wallpaper.jpg", import.meta.url));
 
 const svg = (s) => Buffer.from(s);
 
@@ -98,7 +103,15 @@ const shadowed = await sharp({
 // ── 5. Composite onto the wallpaper ─────────────────────────────────────────
 const CW = W + MARGIN * 2;
 const CH = WH + MARGIN + MARGIN_BOTTOM;
-const wallSvg = svg(`
+
+// Background: a bundled photo (cover-cropped to the canvas), or — if absent —
+// the violet→blue gradient.
+let background;
+if (existsSync(BG_PATH)) {
+    background = sharp(BG_PATH).resize(CW, CH, { fit: "cover", position: "centre" });
+} else {
+    background = sharp(
+        svg(`
 <svg width="${CW}" height="${CH}" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
@@ -107,11 +120,14 @@ const wallSvg = svg(`
     </linearGradient>
   </defs>
   <rect width="100%" height="100%" fill="url(#g)"/>
-</svg>`);
+</svg>`),
+    );
+}
 
-await sharp(wallSvg)
+await background
     .composite([{ input: shadowed, top: MARGIN - PAD, left: MARGIN - PAD }])
     .png()
     .toFile(outPath);
 
-console.log(`framed: ${outPath} (${CW}x${CH})`);
+const bgKind = existsSync(BG_PATH) ? "photo" : "gradient";
+console.log(`framed: ${outPath} (${CW}x${CH}, ${bgKind} bg)`);

@@ -60,6 +60,10 @@ async function addHost(label: string): Promise<void> {
 }
 
 describe("screenshots", () => {
+    // Captured on the dashboard in before(); reused later (host ids are stable)
+    // so we never call getHostId from a page where host cards aren't mounted.
+    let localTestingId = "";
+
     before(async function () {
         this.timeout(120_000);
         await mkdir(rawDir, { recursive: true });
@@ -75,6 +79,10 @@ describe("screenshots", () => {
         await addHost("Database");
         await addHost("Local Testing");
 
+        // Grab the host id now, while host cards are mounted on the dashboard
+        // (they don't exist on the Snippets/Tunnels pages).
+        localTestingId = await getHostId("Local Testing");
+
         // Snippets.
         await gotoSnippetsPage();
         await openNewSnippetModal();
@@ -88,13 +96,12 @@ describe("screenshots", () => {
             command: "lsof -i :{{port}}",
         });
 
-        // Tunnels (need a host id to attach the rule to).
-        const hostId = await getHostId("Local Testing");
+        // Tunnels (attached to the host id captured above).
         await gotoPortForwardingPage();
         await openNewRuleDialog();
-        await fillRuleAndSave({ label: "Locally Debug App", hostId, localPort: 8080, remotePort: 8080 });
+        await fillRuleAndSave({ label: "Locally Debug App", hostId: localTestingId, localPort: 8080, remotePort: 8080 });
         await openNewRuleDialog();
-        await fillRuleAndSave({ label: "Database", hostId, localPort: 27017, remotePort: 27017 });
+        await fillRuleAndSave({ label: "Database", hostId: localTestingId, localPort: 27017, remotePort: 27017 });
     });
 
     it("captures the hosts dashboard", async () => {
@@ -137,11 +144,11 @@ describe("screenshots", () => {
     });
 
     it("captures the file explorer with a context menu", async () => {
-        const hostId = await getHostId("Local Testing");
-        const explorerBtn = await $(`[data-testid='host-card-${hostId}-explorer']`);
-        // The card's explorer button only appears on the hosts dashboard.
+        // The card's explorer button only exists on the hosts dashboard, so
+        // navigate there first, then act on the host captured in before().
         await (await $("[aria-label='Hosts']")).click();
         await waitForDashboard();
+        const explorerBtn = await $(`[data-testid='host-card-${localTestingId}-explorer']`);
         await explorerBtn.waitForClickable({ timeout: 10_000 });
         await explorerBtn.click();
         await waitForExplorer();
