@@ -157,6 +157,17 @@ async function terminalSids(): Promise<string[]> {
     })) as string[];
 }
 
+/** Type a command into a terminal character-by-character (so it reads like real
+ *  typing in the gif), then run it with Enter. */
+async function typeCommand(sid: string, text: string, perChar = 70): Promise<void> {
+    for (const ch of text) {
+        await typeIntoTerminal(sid, ch);
+        await browser.pause(perChar);
+    }
+    await browser.pause(280);
+    await typeIntoTerminal(sid, "\n");
+}
+
 /** Run a split shortcut, find the newly-created pane, wait for its prompt, and
  *  type a command into it. `badge` flashes the shortcut on screen. */
 async function splitAndType(doSplit: () => Promise<void>, command: string, badge: string): Promise<void> {
@@ -174,8 +185,8 @@ async function splitAndType(doSplit: () => Promise<void>, command: string, badge
     );
     await waitForTerminalText(newSid as string, ":~$", { timeoutMs: 15_000 }).catch(() => {});
     await browser.pause(500);
-    await typeIntoTerminal(newSid as string, `${command}\n`);
-    await browser.pause(1100);
+    await typeCommand(newSid as string, command);
+    await browser.pause(900);
 }
 
 /** Save the current webview to <rawDir>/<name>.png. */
@@ -346,6 +357,11 @@ describe("screenshots", () => {
         // Keep the cursor where the right-click left it so the context menu
         // stays open (don't move the mouse away here).
         await snap("explorer", { moveAway: false });
+
+        // Close every tab HERE — this test's video is discarded, so the tour
+        // test that follows starts on a clean Hosts page and its recording (the
+        // gif source) never shows tabs being closed.
+        await closeAllTabs();
     });
 
     // Recorded (one mp4 via the harness's per-test recording) and converted to
@@ -357,7 +373,9 @@ describe("screenshots", () => {
     it("tours the app", async function () {
         this.timeout(150_000);
 
-        // 0. Clean slate: close leftover tabs, start on Hosts.
+        // 0. Tabs were already closed at the end of the previous (explorer)
+        //    test — whose video is discarded — so this recording starts clean.
+        //    Defensive no-op close in case that didn't run.
         await closeAllTabs();
         await rippleClick("[aria-label='Hosts']");
         await waitForDashboard();
@@ -368,8 +386,8 @@ describe("screenshots", () => {
         const sid = await waitForAnyTerminal();
         await waitForTerminalText(sid, ":~$", { timeoutMs: 20_000 }).catch(() => {});
         await browser.pause(500);
-        await typeIntoTerminal(sid, "touch terminal-test\n");
-        await browser.pause(1200);
+        await typeCommand(sid, "touch terminal-test");
+        await browser.pause(1100);
 
         // 2. Split vertically (⌘D, side-by-side) → whoami.
         await splitAndType(() => cmd("d"), "whoami", "⌘ D  ·  Split right");
