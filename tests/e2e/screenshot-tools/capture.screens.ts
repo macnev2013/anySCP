@@ -47,8 +47,20 @@ const MINIO_BUCKET = process.env.MINIO_BUCKET ?? "anyscp-test";
 const MINIO_ACCESS_KEY = process.env.MINIO_ACCESS_KEY ?? "minioadmin";
 const MINIO_SECRET_KEY = process.env.MINIO_SECRET_KEY ?? "minioadmin";
 
+/** Move the cursor off any nav item to a neutral spot in the page heading
+ *  area, so its hover tooltip isn't captured in the screenshot. */
+async function moveMouseAway(): Promise<void> {
+    try {
+        await browser.action("pointer").move({ x: 480, y: 170, duration: 0 }).perform();
+        await browser.pause(250); // let the tooltip fade out
+    } catch {
+        /* pointer actions unsupported — ignore */
+    }
+}
+
 /** Save the current webview to <rawDir>/<name>.png. */
-async function snap(name: string): Promise<void> {
+async function snap(name: string, opts: { moveAway?: boolean } = {}): Promise<void> {
+    if (opts.moveAway !== false) await moveMouseAway();
     await browser.saveScreenshot(path.join(rawDir, `${name}.png`));
     // eslint-disable-next-line no-console
     console.log(`[capture] saved ${name}.png`);
@@ -210,7 +222,9 @@ describe("screenshots", () => {
         } catch {
             // No entry / menu — capture the listing as-is.
         }
-        await snap("explorer");
+        // Keep the cursor where the right-click left it so the context menu
+        // stays open (don't move the mouse away here).
+        await snap("explorer", { moveAway: false });
     });
 
     // Recorded (one mp4 via the harness's per-test recording) and converted to

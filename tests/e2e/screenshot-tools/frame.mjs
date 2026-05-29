@@ -38,8 +38,37 @@ const BG_PATH = process.env.FRAME_BG ?? fileURLToPath(new URL("./wallpaper.jpg",
 
 const svg = (s) => Buffer.from(s);
 
-const capture = sharp(inPath);
-const { width: W, height: H } = await capture.metadata();
+/** Height of the capture after trimming the empty page background at the
+ *  bottom. Short pages (Tunnels, Snippets) leave a large void below their
+ *  content; scan the content region (right of the sidebar) bottom-up for the
+ *  last non-background row, then keep a little padding. The terminal/explorer
+ *  panes use a different dark than the page bg, so they read as content and
+ *  are preserved at full height. */
+async function trimmedHeight(file) {
+    const { data, info } = await sharp(file).raw().toBuffer({ resolveWithObject: true });
+    const { width, height, channels } = info;
+    const at = (x, y) => {
+        const i = (y * width + x) * channels;
+        return [data[i], data[i + 1], data[i + 2]];
+    };
+    const bg = at(Math.floor(width * 0.6), height - 1);
+    const THRESH = 14;
+    const SIDEBAR = 80; // skip the full-height sidebar
+    const PAD_BOTTOM = 28;
+    for (let y = height - 1; y >= 0; y--) {
+        for (let x = SIDEBAR; x < width; x += 6) {
+            const [r, g, b] = at(x, y);
+            if (Math.abs(r - bg[0]) > THRESH || Math.abs(g - bg[1]) > THRESH || Math.abs(b - bg[2]) > THRESH) {
+                return Math.min(height, y + PAD_BOTTOM);
+            }
+        }
+    }
+    return height;
+}
+
+const W = (await sharp(inPath).metadata()).width;
+const H = await trimmedHeight(inPath);
+const captureBuf = await sharp(inPath).extract({ left: 0, top: 0, width: W, height: H }).toBuffer();
 const WH = H + TITLEBAR_H;
 
 // Sample the app's own top-edge colour (a couple of px in from the top-centre)
@@ -76,7 +105,7 @@ const windowBuf = await sharp({
 })
     .composite([
         { input: barSvg, top: 0, left: 0 },
-        { input: await capture.toBuffer(), top: TITLEBAR_H, left: 0 },
+        { input: captureBuf, top: TITLEBAR_H, left: 0 },
     ])
     .png()
     .toBuffer();
