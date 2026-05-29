@@ -18,7 +18,11 @@ const APP_DATA_DIR = join(
  * Call this in a `beforeEach` so tests get full isolation.
  */
 export async function resetApp(): Promise<void> {
-    await rm(APP_DATA_DIR, { recursive: true, force: true });
+    // The app process is still alive here and keeps writing to the DB dir
+    // (SQLite WAL/journal), so a child file can reappear between rm's unlink
+    // pass and the final rmdir → ENOTEMPTY. maxRetries makes rm retry the
+    // rmdir with a linear backoff until the writes settle.
+    await rm(APP_DATA_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 });
     await browser.reloadSession();
 }
 
