@@ -46,6 +46,7 @@ export function Terminal({ sessionId }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const themeMode = useSettingsStore((s) => s.themeMode);
 
   const settings = useSettingsStore.getState();
 
@@ -177,6 +178,12 @@ export function Terminal({ sessionId }: TerminalProps) {
       }
     };
   }, [sessionId, debouncedResize]);
+
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.options.theme = getTerminalTheme();
+    }
+  }, [themeMode]);
 
   return (
     <div
