@@ -29,8 +29,14 @@ import { fillGroupAndSave, getGroupId, openNewGroupModal } from "../helpers/grou
 import { fillSnippetAndSave, gotoSnippetsPage, openNewSnippetModal } from "../helpers/snippets.js";
 import { fillRuleAndSave, gotoPortForwardingPage, openNewRuleDialog } from "../helpers/port-forwards.js";
 import { runCommand, typeIntoTerminal, waitForAnyTerminal, waitForTerminalText } from "../helpers/terminal.js";
-import { cmd } from "../helpers/keyboard.js";
-import { waitForExplorer } from "../helpers/sftp-ops.js";
+import { cmd, cmdShift } from "../helpers/keyboard.js";
+import {
+    createFile,
+    deleteEntry,
+    refreshExplorer,
+    renameEntry,
+    waitForExplorer,
+} from "../helpers/sftp-ops.js";
 import { clickS3Save, fillS3Form, openNewS3Dialog } from "../helpers/s3.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -59,8 +65,6 @@ async function moveMouseAway(): Promise<void> {
     }
 }
 
-/** Glide the cursor to an element's centre over ~0.65s so the recorded mouse
- *  movement looks fluid (x11grab captures the cursor). Returns the element. */
 // The gif recording hides the OS cursor (-draw_mouse 0), so clicks are shown
 // with an injected ripple at the click point instead. These helpers run JS in
 // the webview to draw the ripple / key badge — they survive React re-renders
@@ -127,6 +131,51 @@ async function keyBadge(text: string): Promise<void> {
         document.body.appendChild(d);
         setTimeout(() => d.remove(), 1150);
     }, text);
+}
+
+/** Close every closeable tab (the Hosts page tab can't be closed), so the gif
+ *  starts from a clean slate. Close buttons are hover-gated; moveTo reveals them. */
+async function closeAllTabs(): Promise<void> {
+    for (let i = 0; i < 15; i++) {
+        const closers = await $$("[data-testid^='tab-'][data-testid$='-close']");
+        if (!closers.length) break;
+        try {
+            await closers[0].moveTo();
+            await closers[0].click();
+        } catch {
+            break;
+        }
+        await browser.pause(180);
+    }
+}
+
+/** Current terminal session ids (xterm instances registered by the app). */
+async function terminalSids(): Promise<string[]> {
+    return (await browser.execute(() => {
+        const reg = (window as unknown as { __e2eTerminals?: Map<string, unknown> }).__e2eTerminals;
+        return reg ? Array.from(reg.keys()) : [];
+    })) as string[];
+}
+
+/** Run a split shortcut, find the newly-created pane, wait for its prompt, and
+ *  type a command into it. `badge` flashes the shortcut on screen. */
+async function splitAndType(doSplit: () => Promise<void>, command: string, badge: string): Promise<void> {
+    const before = await terminalSids();
+    await keyBadge(badge);
+    await browser.pause(450);
+    await doSplit();
+    let newSid: string | undefined;
+    await browser.waitUntil(
+        async () => {
+            newSid = (await terminalSids()).find((s) => !before.includes(s));
+            return Boolean(newSid);
+        },
+        { timeout: 15_000, timeoutMsg: "split pane never appeared" },
+    );
+    await waitForTerminalText(newSid as string, ":~$", { timeoutMs: 15_000 }).catch(() => {});
+    await browser.pause(500);
+    await typeIntoTerminal(newSid as string, `${command}\n`);
+    await browser.pause(1100);
 }
 
 /** Save the current webview to <rawDir>/<name>.png. */
@@ -306,35 +355,47 @@ describe("screenshots", () => {
     // glides between targets, opens the Explorer, opens a Terminal, types a
     // command, and splits the pane (Cmd+D). Recorded as one mp4 by the harness.
     it("tours the app", async function () {
-        this.timeout(60_000);
+        this.timeout(150_000);
 
-        // 1. Hosts dashboard — let the list settle in view.
+        // 0. Clean slate: close leftover tabs, start on Hosts.
+        await closeAllTabs();
         await rippleClick("[aria-label='Hosts']");
         await waitForDashboard();
-        await browser.pause(1100);
+        await browser.pause(900);
 
-        // 2. Open the file Explorer on a host.
-        await rippleClick(`[data-testid='host-card-${localTestingId}-explorer']`);
-        await waitForExplorer();
-        await browser.pause(1600);
-
-        // 3. Back to Hosts, then open a Terminal on another host.
-        await rippleClick("[aria-label='Hosts']");
-        await waitForDashboard();
-        await browser.pause(700);
+        // 1. Connect a terminal and create a file from the shell.
         await rippleClick(`[data-testid='host-card-${databaseId}-terminal']`);
         const sid = await waitForAnyTerminal();
         await waitForTerminalText(sid, ":~$", { timeoutMs: 20_000 }).catch(() => {});
-        await browser.pause(600);
-        await typeIntoTerminal(sid, "ls -la\n");
-        await browser.pause(1300);
+        await browser.pause(500);
+        await typeIntoTerminal(sid, "touch terminal-test\n");
+        await browser.pause(1200);
 
-        // 4. Split the terminal into two panes (show the shortcut as a badge).
-        await keyBadge("⌘ D  ·  Split");
-        await browser.pause(450);
-        await cmd("d");
-        await browser.pause(900);
-        await typeIntoTerminal(sid, "uname -a\n");
-        await browser.pause(1800);
+        // 2. Split vertically (⌘D, side-by-side) → whoami.
+        await splitAndType(() => cmd("d"), "whoami", "⌘ D  ·  Split right");
+        // 3. Split horizontally (⇧⌘D, stacked) → pwd.
+        await splitAndType(() => cmdShift("d"), "pwd", "⇧ ⌘ D  ·  Split down");
+        await browser.pause(1200);
+
+        // 4. Hosts → open the Explorer on the SAME host (so it shows the file
+        //    the terminal just created).
+        await rippleClick("[aria-label='Hosts']");
+        await waitForDashboard();
+        await browser.pause(600);
+        await rippleClick(`[data-testid='host-card-${databaseId}-explorer']`);
+        await waitForExplorer();
+        await browser.pause(1200);
+
+        // 5. Create a file, then rename it.
+        await createFile("anysp.txt");
+        await browser.pause(1000);
+        await renameEntry("anysp.txt", "anyscp.txt");
+        await browser.pause(1000);
+
+        // 6. Delete the file created earlier from the terminal.
+        await refreshExplorer();
+        await browser.pause(500);
+        await deleteEntry("terminal-test");
+        await browser.pause(1600);
     });
 });
