@@ -238,11 +238,18 @@ async function renameDemo(oldName: string, newName: string): Promise<void> {
     const input = await $("[data-testid='explorer-rename-input']");
     await input.waitForDisplayed({ timeout: 5_000 });
     await browser.pause(400);
-    // The input is pre-filled with the old name — select all and clear it first.
+    // The input is pre-filled with the old name. A Ctrl+A select-all chord is
+    // unreliable in WebKitWebDriver (it appended instead of replacing), so move
+    // to the end and backspace each character — also reads nicely in the gif.
     await input.click();
-    await browser.keys(["Control", "a"]);
-    await browser.keys(["Delete"]);
-    await browser.pause(300);
+    await browser.keys(["End"]);
+    // Backspace past the old name (+ margin; extra backspaces on an empty field
+    // are no-ops), so the new name fully replaces it.
+    for (let i = 0; i < oldName.length + 2; i++) {
+        await browser.keys(["Backspace"]);
+        await browser.pause(45);
+    }
+    await browser.pause(250);
     await slowTypeInput(input, newName);
     await browser.pause(500);
     await browser.keys(["Enter"]);
