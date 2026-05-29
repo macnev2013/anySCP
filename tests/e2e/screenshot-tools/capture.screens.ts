@@ -28,7 +28,8 @@ import {
 import { fillGroupAndSave, getGroupId, openNewGroupModal } from "../helpers/groups.js";
 import { fillSnippetAndSave, gotoSnippetsPage, openNewSnippetModal } from "../helpers/snippets.js";
 import { fillRuleAndSave, gotoPortForwardingPage, openNewRuleDialog } from "../helpers/port-forwards.js";
-import { runCommand, waitForAnyTerminal, waitForTerminalText } from "../helpers/terminal.js";
+import { runCommand, typeIntoTerminal, waitForAnyTerminal, waitForTerminalText } from "../helpers/terminal.js";
+import { cmd } from "../helpers/keyboard.js";
 import { waitForExplorer } from "../helpers/sftp-ops.js";
 import { clickS3Save, fillS3Form, openNewS3Dialog } from "../helpers/s3.js";
 
@@ -56,6 +57,34 @@ async function moveMouseAway(): Promise<void> {
     } catch {
         /* pointer actions unsupported — ignore */
     }
+}
+
+/** Glide the cursor to an element's centre over ~0.65s so the recorded mouse
+ *  movement looks fluid (x11grab captures the cursor). Returns the element. */
+async function glide(selector: string): Promise<WebdriverIO.Element> {
+    const el = await $(selector);
+    await el.waitForClickable({ timeout: 10_000 });
+    try {
+        const loc = await el.getLocation();
+        const size = await el.getSize();
+        await browser
+            .action("pointer", { parameters: { pointerType: "mouse" } })
+            .move({
+                origin: "viewport",
+                x: Math.round(loc.x + size.width / 2),
+                y: Math.round(loc.y + size.height / 2),
+                duration: 650,
+            })
+            .pause(150)
+            .perform();
+    } catch {
+        try {
+            await el.moveTo();
+        } catch {
+            /* pointer actions unsupported — ignore */
+        }
+    }
+    return el;
 }
 
 /** Save the current webview to <rawDir>/<name>.png. */
@@ -97,6 +126,7 @@ describe("screenshots", () => {
     // Captured on the dashboard in before(); reused later (host ids are stable)
     // so we never call getHostId from a page where host cards aren't mounted.
     let localTestingId = "";
+    let databaseId = ""; // reused by the fluid tour (gif)
 
     before(async function () {
         this.timeout(120_000);
@@ -152,7 +182,7 @@ describe("screenshots", () => {
         await (await $("[aria-label='Hosts']")).click();
         await waitForDashboard();
         const appId = await getHostId("App");
-        const databaseId = await getHostId("Database");
+        databaseId = await getHostId("Database");
 
         // Explorer (SFTP) on Database.
         await (await $(`[data-testid='host-card-${databaseId}-explorer']`)).click();
@@ -230,31 +260,37 @@ describe("screenshots", () => {
     // Recorded (one mp4 via the harness's per-test recording) and converted to
     // screens/anyscp.gif by build-assets.sh. Runs last so the terminal + sftp
     // tabs opened above are present to walk through.
-    it("tours the app", async () => {
-        const stops: Array<[string, string]> = [
-            ["Hosts", "[aria-label='Hosts']"],
-            ["Snippets", "[aria-label='Snippets']"],
-            ["Tunnels", "[aria-label='Tunnels']"],
-        ];
-        for (const [, sel] of stops) {
-            try {
-                await (await $(sel)).click();
-                await browser.pause(1200);
-            } catch {
-                /* nav item missing — skip */
-            }
-        }
-        // Walk the open session tabs (terminal, then explorer) for the demo.
-        for (const sel of ["[data-tab-type='terminal']", "[data-tab-type='sftp']"]) {
-            try {
-                const tab = await $(sel);
-                if (await tab.isExisting()) {
-                    await tab.click();
-                    await browser.pause(1500);
-                }
-            } catch {
-                /* tab missing — skip */
-            }
-        }
+    // A fluid product demo — the source for screens/anyscp.gif. The cursor
+    // glides between targets, opens the Explorer, opens a Terminal, types a
+    // command, and splits the pane (Cmd+D). Recorded as one mp4 by the harness.
+    it("tours the app", async function () {
+        this.timeout(60_000);
+
+        // 1. Hosts dashboard — let the list settle in view.
+        await (await glide("[aria-label='Hosts']")).click();
+        await waitForDashboard();
+        await browser.pause(1100);
+
+        // 2. Open the file Explorer on a host.
+        await (await glide(`[data-testid='host-card-${localTestingId}-explorer']`)).click();
+        await waitForExplorer();
+        await browser.pause(1600);
+
+        // 3. Back to Hosts, then open a Terminal on another host.
+        await (await glide("[aria-label='Hosts']")).click();
+        await waitForDashboard();
+        await browser.pause(700);
+        await (await glide(`[data-testid='host-card-${databaseId}-terminal']`)).click();
+        const sid = await waitForAnyTerminal();
+        await waitForTerminalText(sid, ":~$", { timeoutMs: 20_000 }).catch(() => {});
+        await browser.pause(600);
+        await typeIntoTerminal(sid, "ls -la\n");
+        await browser.pause(1300);
+
+        // 4. Split the terminal into two panes.
+        await cmd("d");
+        await browser.pause(900);
+        await typeIntoTerminal(sid, "uname -a\n");
+        await browser.pause(1800);
     });
 });

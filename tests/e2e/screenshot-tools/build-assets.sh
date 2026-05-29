@@ -46,11 +46,13 @@ fi
 if [[ -n "$tour_mp4" && -f "$tour_mp4" ]]; then
     echo "[build-assets] building gif from $(basename "$tour_mp4")"
     pal=$(mktemp --suffix=.png)
-    # Two-pass palette for clean colors; 12fps / 900px wide keeps the gif small.
+    # Two-pass palette for clean colors. 15fps matches the x11grab capture
+    # framerate (smoothest from this source); 1000px wide keeps it crisp but
+    # reasonably small.
     ffmpeg -y -loglevel error -i "$tour_mp4" \
-        -vf "fps=12,scale=900:-1:flags=lanczos,palettegen=stats_mode=diff" "$pal"
+        -vf "fps=15,scale=1000:-1:flags=lanczos,palettegen=stats_mode=diff" "$pal"
     ffmpeg -y -loglevel error -i "$tour_mp4" -i "$pal" \
-        -lavfi "fps=12,scale=900:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer" \
+        -lavfi "fps=15,scale=1000:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer" \
         "$screens/anyscp.gif"
     rm -f "$pal"
     echo "[build-assets] wrote $screens/anyscp.gif"
