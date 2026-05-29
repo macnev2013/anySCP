@@ -10,15 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "anySCP",
-        "width": 1200,
-        "height": 800,
-        "minWidth": 800,
-        "minHeight": 500
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

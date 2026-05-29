@@ -21,7 +21,7 @@ use sftp::transfer_manager::TransferManager;
 use sftp::SftpManager;
 use ssh::manager::SshManager;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -41,6 +41,28 @@ pub fn run() {
 
             let host_db = HostDb::new(&app_data_dir)
                 .map_err(|e| format!("failed to initialise database: {e}"))?;
+
+            // Resolve the persisted theme up-front and inject it onto <html>
+            // *before* the page loads, so the very first paint already carries
+            // the correct theme — no dark→light flash on startup. SQLite stays
+            // the single source of truth; the frontend store seeds itself from
+            // this attribute (see settings-store.ts). The window is created here
+            // (rather than declaratively in tauri.conf.json) specifically so we
+            // can attach this initialization script before first paint.
+            let theme = match host_db.get_setting("app_theme") {
+                Ok(Some(v)) if v == "light" => "light",
+                _ => "dark",
+            };
+            let theme_script =
+                format!("document.documentElement.dataset.theme = {theme:?};");
+
+            WebviewWindowBuilder::new(app.handle(), "main", WebviewUrl::App("index.html".into()))
+                .title("anySCP")
+                .inner_size(1200.0, 800.0)
+                .min_inner_size(800.0, 500.0)
+                .initialization_script(&theme_script)
+                .build()
+                .map_err(|e| format!("failed to create main window: {e}"))?;
 
             app.manage(Arc::new(host_db));
 

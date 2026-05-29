@@ -1,6 +1,6 @@
 pub mod commands;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tracing::instrument;
@@ -1208,6 +1208,22 @@ impl HostDb {
             params![key, value],
         )?;
         Ok(())
+    }
+
+    /// Fetch a single setting by key. Returns `None` if the key is not present.
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let value = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(value)
     }
 
     // -----------------------------------------------------------------------

@@ -45,6 +45,20 @@ const DEFAULTS = {
   transferConcurrency: 3,
 };
 
+/**
+ * The Rust setup() hook injects the persisted theme onto <html> before the page
+ * paints (see src-tauri/src/lib.rs). Seed the store from that attribute so the
+ * initial render matches it — otherwise the default below would briefly override
+ * the injected theme and re-introduce the startup flash. Falls back to the
+ * default when the attribute is absent (e.g. a plain web/dev context).
+ */
+function initialThemeMode(): ThemeMode {
+  if (typeof document !== "undefined" && document.documentElement.dataset.theme === "light") {
+    return "light";
+  }
+  return DEFAULTS.themeMode;
+}
+
 /** Persist a single setting to the backend. Fire-and-forget. */
 function persist(key: string, value: string) {
   void (async () => {
@@ -57,6 +71,7 @@ function persist(key: string, value: string) {
 
 export const useSettingsStore = create<SettingsState>((set) => ({
   ...DEFAULTS,
+  themeMode: initialThemeMode(),
   loaded: false,
 
   setThemeMode: (mode) => {
