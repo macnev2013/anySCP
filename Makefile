@@ -7,7 +7,7 @@
         connect-scp-pass connect-scp-key \
         logs-scp-pass logs-scp-key \
         shell-scp-pass shell-scp-key scp-clean-image \
-        e2e e2e-build e2e-shell e2e-logs e2e-clean
+        e2e e2e-build e2e-shell e2e-logs e2e-clean screenshots
 
 # Test SSH servers (linuxserver/openssh-server) for local development.
 # Two independent containers — password-auth and key-auth — can run in parallel.
@@ -300,3 +300,25 @@ e2e-clean:
 
 e2e-clean-artifacts:
 	@rm -rf ./tests/e2e/{screenshots,videos,junit,report.md,.test-records.ndjson,.image-stamp}
+
+# ─── Marketing screenshots (containerised) ────────────────────────────────────
+# Regenerate the README screenshots + demo gif from the real app — no manual
+# capture. Reuses the e2e runner image (it bakes ImageMagick + ffmpeg + a font),
+# so the whole pipeline is deterministic and needs no host tooling:
+#   1. drive the app to each view, save raw WebKit captures
+#   2. frame them (titlebar + rounded corners + shadow + wallpaper)
+#   3. convert the recorded tour to screens/anyscp.gif
+# Note: screens/header.png is a hand-made marketing banner and is NOT regenerated.
+SCREENSHOT_SPEC := ./screenshot-tools/capture.screens.ts
+SCREENSHOT_BUILD := /workspace/tests/e2e/screenshot-tools/build-assets.sh
+
+screenshots: $(E2E_IMAGE_STAMP)
+	@echo "  [1/2] capturing raw screenshots + tour video"
+	@$(E2E_COMPOSE) run --rm -e WDIO_SPEC=$(SCREENSHOT_SPEC) e2e; \
+		ec=$$?; \
+		if [ $$ec -ne 0 ]; then $(E2E_COMPOSE) down --remove-orphans >/dev/null 2>&1; exit $$ec; fi
+	@echo "  [2/2] framing screenshots + building gif → screens/"
+	@$(E2E_COMPOSE) run --rm --no-deps --entrypoint bash e2e $(SCREENSHOT_BUILD); \
+		ec=$$?; \
+		$(E2E_COMPOSE) down --remove-orphans >/dev/null 2>&1; \
+		exit $$ec

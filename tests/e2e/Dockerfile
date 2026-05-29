@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libnss3 libatk1.0-0 libatk-bridge2.0-0 libgbm1 \
         keyutils \
         openssh-client \
+        imagemagick fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Sanity check: WebKitWebDriver must be on PATH (provided by webkit2gtk-driver).

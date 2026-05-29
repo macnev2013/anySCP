@@ -12,5 +12,5 @@
     "baseUrl": ".",
     "noEmit": true
   },
-  "include": ["wdio.conf.ts", "specs/**/*.ts", "helpers/**/*.ts"]
+  "include": ["wdio.conf.ts", "specs/**/*.ts", "helpers/**/*.ts", "screenshot-tools/**/*.ts"]
 }

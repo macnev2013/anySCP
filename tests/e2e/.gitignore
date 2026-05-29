@@ -1,6 +1,7 @@
 node_modules/
 .wdio-logs/
 screenshots/
+screenshot-tools/raw/
 videos/
 junit/
 report.md

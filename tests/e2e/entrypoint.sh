@@ -97,7 +97,14 @@ echo "[entrypoint] >>> VNC ready — connect to localhost:5900 to watch <<<"
 
 echo "[entrypoint] running webdriverio (inside a fresh kernel keyring session)"
 cd tests/e2e
+# Optional spec override — `make screenshots` sets WDIO_SPEC to run only the
+# capture driver instead of the full suite.
+wdio_args=()
+if [[ -n "${WDIO_SPEC:-}" ]]; then
+    echo "[entrypoint] WDIO_SPEC=$WDIO_SPEC"
+    wdio_args+=(--spec "$WDIO_SPEC")
+fi
 # Wrap the test process in `keyctl session -` so the Tauri app's keyutils
 # keyring backend has a session keyring to write to. Without it, every
 # keyctl syscall returns EACCES → "PermissionDenied" from anyscp's vault.
-exec keyctl session - ./node_modules/.bin/wdio run wdio.conf.ts
+exec keyctl session - ./node_modules/.bin/wdio run wdio.conf.ts "${wdio_args[@]}"

@@ -14,7 +14,34 @@ make e2e            # full suite — first run builds the image (~5–10 min)
 make e2e-shell      # interactive shell in the runner (debug a failing spec)
 make e2e-logs       # tail runner logs while a run is in progress
 make e2e-clean      # wipe image + cached build volumes
+make screenshots    # regenerate README screenshots + demo gif (see below)
 ```
+
+## Screenshots (`make screenshots`)
+
+The marketing screenshots in `screens/` are generated from the real app — no
+manual capture. The whole pipeline runs in the e2e container (which bakes
+ImageMagick + ffmpeg + a font), so output is deterministic and needs no host
+tooling:
+
+1. **Capture** — `screenshot-tools/capture.screens.ts` (a WDIO driver, *not* a
+   `*.spec.ts`, so the normal suite skips it; `make screenshots` runs it via
+   `--spec`). It seeds representative data and drives the app to each view —
+   hosts, snippets, tunnels, terminal, explorer — saving the raw WebKit capture
+   to `screenshot-tools/raw/` (gitignored). A final `tours the app` test walks
+   the UI and is recorded to one mp4.
+2. **Frame** — `screenshot-tools/frame.sh` composites each raw capture into the
+   finished look: a macOS-style titlebar (traffic lights + `anySCP`), rounded
+   corners, drop shadow, and a violet→blue wallpaper → `screens/<view>.png`.
+3. **Gif** — `screenshot-tools/build-assets.sh` converts the tour mp4 to
+   `screens/anyscp.gif` (ffmpeg, two-pass palette).
+
+Seeding is *representative*, not a pixel replica of the originals — the point is
+assets that regenerate and stay current. Tunables (wallpaper colors, corner
+radius, margins) live at the top of `frame.sh`.
+
+**Not regenerated:** `screens/header.png` is a hand-made marketing banner (logo
++ tagline on a grid), not an app capture — leave it as-is.
 
 ## Test report (Markdown)
 
