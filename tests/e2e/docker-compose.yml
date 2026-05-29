@@ -39,6 +39,25 @@ services:
       timeout: 2s
       retries: 30
 
+  # SCP-only target — SFTP subsystem stripped (see tests/scp-server). Exercises
+  # the transparent SFTP→SCP fallback: sftp_open fails here, the app retries
+  # over SCP on the same connection.
+  sshd-scp:
+    build:
+      context: ../scp-server
+      dockerfile: Dockerfile
+    image: anyscp-test-scp-only:latest
+    container_name: anyscp-e2e-sshd-scp
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      USER_NAME: testuser
+      USER_PASSWORD: testpass
+      PASSWORD_ACCESS: "true"
+      SUDO_ACCESS: "true"
+    networks: [e2e]
+
   # ─── S3-compatible storage (MinIO) ──────────────────────────────────────────
   minio:
     image: minio/minio:latest
@@ -105,6 +124,8 @@ services:
         condition: service_started
       sshd-key:
         condition: service_started
+      sshd-scp:
+        condition: service_started
       minio-seed:
         condition: service_completed_successfully
     environment:
@@ -112,6 +133,8 @@ services:
       SSHD_PASS_PORT: "2222"
       SSHD_KEY_HOST: sshd-key
       SSHD_KEY_PORT: "2222"
+      SSHD_SCP_HOST: sshd-scp
+      SSHD_SCP_PORT: "2222"
       SSH_USER: testuser
       SSH_PASS: testpass
       SSH_KEY_PATH: /keys/id_ed25519

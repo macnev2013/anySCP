@@ -116,6 +116,48 @@ export async function sftpMove(
     );
 }
 
+// ─── SCP transfer wrappers ───────────────────────────────────────────────────
+// SCP sessions live in the same tab type ("sftp") and store as SFTP, so
+// activeSftpSessionId() returns the SCP session id too.
+
+export async function scpUpload(
+    sessionId: string,
+    localPath: string,
+    remotePath: string,
+): Promise<string> {
+    return await browser.execute(
+        async (sid: string, lp: string, rp: string) => {
+            const fn = (window as unknown as {
+                __e2eScpUpload?: (s: string, l: string, r: string) => Promise<string>;
+            }).__e2eScpUpload;
+            if (!fn) throw new Error("__e2eScpUpload not registered");
+            return await fn(sid, lp, rp);
+        },
+        sessionId,
+        localPath,
+        remotePath,
+    );
+}
+
+export async function scpDownload(
+    sessionId: string,
+    remotePath: string,
+    localPath: string,
+): Promise<string> {
+    return await browser.execute(
+        async (sid: string, rp: string, lp: string) => {
+            const fn = (window as unknown as {
+                __e2eScpDownload?: (s: string, r: string, l: string) => Promise<string>;
+            }).__e2eScpDownload;
+            if (!fn) throw new Error("__e2eScpDownload not registered");
+            return await fn(sid, rp, lp);
+        },
+        sessionId,
+        remotePath,
+        localPath,
+    );
+}
+
 // ─── S3 transfer wrappers ────────────────────────────────────────────────────
 
 export async function s3Upload(

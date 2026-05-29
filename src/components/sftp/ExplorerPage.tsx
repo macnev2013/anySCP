@@ -36,7 +36,10 @@ export function ExplorerPage({ sftpSessionId, transport = "sftp", s3SessionId }:
         </div>
 
         {/* Browser content */}
-        <div className="flex-1 min-h-0 bg-bg-base">
+        <div
+          className="flex-1 min-h-0 bg-bg-base"
+          data-explorer-transport={sftpSessionId ? transport : s3SessionId ? "s3" : undefined}
+        >
           {sftpSessionId && <ExplorerView sessionId={sftpSessionId} transport={transport} />}
           {s3SessionId && <S3Browser sessionId={s3SessionId} />}
         </div>

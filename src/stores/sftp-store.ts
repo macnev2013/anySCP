@@ -156,4 +156,30 @@ if (typeof window !== "undefined") {
       sftpSessionId: sessionId, sourcePaths, targetDir,
     });
   };
+
+  // SCP equivalents — same surface, scp_* commands + scpSessionId key. Used by
+  // the SCP fallback E2E spec to drive the wire-protocol transfers.
+  const wScp = window as unknown as {
+    __e2eScpUpload?: (sessionId: string, localPath: string, remotePath: string) => Promise<string>;
+    __e2eScpDownload?: (sessionId: string, remotePath: string, localPath: string) => Promise<string>;
+    __e2eScpEnqueueUpload?: (sessionId: string, localPaths: string[], remoteDir: string) => Promise<string[]>;
+  };
+  wScp.__e2eScpUpload = async (sessionId, localPath, remotePath) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string>("scp_upload", {
+      scpSessionId: sessionId, localPath, remotePath,
+    });
+  };
+  wScp.__e2eScpDownload = async (sessionId, remotePath, localPath) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string>("scp_download", {
+      scpSessionId: sessionId, remotePath, localPath,
+    });
+  };
+  wScp.__e2eScpEnqueueUpload = async (sessionId, localPaths, remoteDir) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string[]>("scp_enqueue_upload", {
+      scpSessionId: sessionId, localPaths, remoteDir,
+    });
+  };
 }

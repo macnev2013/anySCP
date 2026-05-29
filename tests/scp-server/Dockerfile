@@ -10,5 +10,11 @@
 # `make start-scp-key`).
 FROM lscr.io/linuxserver/openssh-server:latest
 
+# The base image is Alpine, whose busybox `find`/`stat` lack the GNU flags
+# (`find -printf`, `stat -c`) the SCP backend uses for directory listings.
+# Install GNU coreutils + findutils so this fixture behaves like a typical
+# GNU/Linux server — the documented target for SCP-mode browsing.
+RUN apk add --no-cache coreutils findutils
+
 COPY disable-sftp.sh /custom-cont-init.d/disable-sftp.sh
 RUN chmod +x /custom-cont-init.d/disable-sftp.sh

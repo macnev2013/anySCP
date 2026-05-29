@@ -29,6 +29,7 @@ wait_for() {
 
 wait_for "${SSHD_PASS_HOST:-sshd-pass}" "${SSHD_PASS_PORT:-2222}" sshd-pass
 wait_for "${SSHD_KEY_HOST:-sshd-key}"   "${SSHD_KEY_PORT:-2222}"   sshd-key
+wait_for "${SSHD_SCP_HOST:-sshd-scp}"   "${SSHD_SCP_PORT:-2222}"   sshd-scp
 
 # ── 2. Install JS deps ────────────────────────────────────────────────────────
 echo "[entrypoint] installing app deps"
