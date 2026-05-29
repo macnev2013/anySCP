@@ -70,8 +70,19 @@ unauthenticated (`-nopw`) because the port is only exposed on localhost.
 | `05-persistence` | SQLite DB survives an app restart. |
 | `06-error-bad-creds` | Auth-failure path surfaces an error banner in the modal. |
 | `07-sftp-flow` | `vault_save_credential` → keychain → Explorer button → `sftp_open` → `sftp_list_dir`. |
+| `52-scp-flow` | SFTP→SCP fallback against SFTP-disabled targets, run as a matrix over GNU and busybox userlands: lists, create/delete, and a `scp -t`/`-f` upload+download round-trip. |
 
 ## How it's wired together
+
+SSH targets (all on port 2222 inside the compose network):
+
+- **sshd-pass / sshd-key** — linuxserver/openssh, full SFTP. Password and key auth.
+- **sshd-scp** — linuxserver/openssh with the SFTP subsystem stripped (GNU
+  userland). Forces the SCP fallback; exercises the GNU `find -printf` listing.
+- **sshd-scp-busybox** — bare Alpine (busybox only, no GNU coreutils/findutils),
+  SFTP stripped. Exercises the busybox `find -exec stat -c` listing path.
+  (BSD/macOS — the third listing flavor — can't run as a Linux container, so
+  it's covered by `scp/listing.rs` unit tests + manual checks.)
 
 ```
 ┌──────────────────────────┐         ┌───────────────────────────┐
@@ -79,7 +90,8 @@ unauthenticated (`-nopw`) because the port is only exposed on localhost.
 │ linuxserver/openssh:2222 │         │ linuxserver/openssh:2222  │
 │ testuser / testpass      │         │ testuser / ssh key        │
 └──────────┬───────────────┘         └───────────┬───────────────┘
-           │                                     │
+           │   sshd-scp (GNU, no SFTP)            │
+           │   sshd-scp-busybox (busybox, no SFTP)│
            │       docker compose network        │
            └─────────────────┬───────────────────┘
                              │

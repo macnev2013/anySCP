@@ -58,6 +58,17 @@ services:
       SUDO_ACCESS: "true"
     networks: [e2e]
 
+  # Pure-busybox SCP-only target (no GNU coreutils/findutils). Exercises the
+  # busybox listing path (find -exec stat -c, since busybox find has no
+  # -printf). Home is /home/testuser (vs /config on the linuxserver target).
+  sshd-scp-busybox:
+    build:
+      context: ../scp-server-busybox
+      dockerfile: Dockerfile
+    image: anyscp-test-scp-busybox:latest
+    container_name: anyscp-e2e-sshd-scp-busybox
+    networks: [e2e]
+
   # ─── S3-compatible storage (MinIO) ──────────────────────────────────────────
   minio:
     image: minio/minio:latest
@@ -126,6 +137,8 @@ services:
         condition: service_started
       sshd-scp:
         condition: service_started
+      sshd-scp-busybox:
+        condition: service_started
       minio-seed:
         condition: service_completed_successfully
     environment:
@@ -135,6 +148,8 @@ services:
       SSHD_KEY_PORT: "2222"
       SSHD_SCP_HOST: sshd-scp
       SSHD_SCP_PORT: "2222"
+      SSHD_SCP_BUSYBOX_HOST: sshd-scp-busybox
+      SSHD_SCP_BUSYBOX_PORT: "2222"
       SSH_USER: testuser
       SSH_PASS: testpass
       SSH_KEY_PATH: /keys/id_ed25519
