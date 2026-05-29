@@ -23,6 +23,8 @@ export interface TransferEvent {
   transfer_id: string;
   /** Present for SFTP transfers */
   sftp_session_id?: string;
+  /** Present for SCP transfers */
+  scp_session_id?: string;
   /** Present for S3 transfers */
   s3_session_id?: string;
   name: string;

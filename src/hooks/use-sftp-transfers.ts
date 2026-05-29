@@ -30,6 +30,12 @@ export function useSftpTransfers() {
           hydrate(items);
         } catch { /* Backend may not have this command yet */ }
 
+        // Hydrate SCP transfers
+        try {
+          const scpItems = await invoke<TransferEvent[]>("scp_list_transfers");
+          hydrate(scpItems);
+        } catch { /* Backend may not have this command yet */ }
+
         // Hydrate S3 transfers
         try {
           const s3Items = await invoke<TransferEvent[]>("s3_list_transfers");
@@ -59,6 +65,44 @@ export function useSftpTransfers() {
             const sftpSession = useSftpStore.getState().sessions.get(transfer.sftp_session_id);
             if (sftpSession) {
               setHostLabel(transfer.sftp_session_id, sftpSession.label);
+            }
+          }
+
+          // Auto-open popover when a new transfer starts
+          if (transfer.status === "InProgress" || transfer.status === "Queued") {
+            if (!useTransferStore.getState().popoverOpen) {
+              setPopoverOpen(true);
+            }
+          }
+        });
+
+        if (aborted) { unsub(); } else { unlisten = unsub; }
+      } catch { /* Tauri API not available */ }
+    })();
+
+    return () => { aborted = true; unlisten?.(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [updateTransfer, setPopoverOpen, setHostLabel]);
+
+  // Listen for live SCP transfer events (SCP sessions share the sftp store)
+  useEffect(() => {
+    let aborted = false;
+    let unlisten: (() => void) | undefined;
+
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        if (aborted) return;
+
+        const unsub = await listen<TransferEvent>("scp:transfer", (event) => {
+          const transfer = event.payload;
+          updateTransfer(transfer);
+
+          // Cache the host label for this session
+          if (transfer.scp_session_id) {
+            const scpSession = useSftpStore.getState().sessions.get(transfer.scp_session_id);
+            if (scpSession) {
+              setHostLabel(transfer.scp_session_id, scpSession.label);
             }
           }
 

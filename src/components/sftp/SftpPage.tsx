@@ -1,5 +1,5 @@
 import { useSftpStore } from "../../stores/sftp-store";
-import { SftpBrowser } from "./SftpBrowser";
+import { ExplorerView } from "./ExplorerView";
 import { SftpSessionPicker } from "./SftpSessionPicker";
 import { SftpTabs } from "./SftpTabs";
 
@@ -16,7 +16,7 @@ export function SftpPage() {
       <SftpTabs />
       {activeSftpSessionId && (
         <div className="flex-1 min-h-0">
-          <SftpBrowser sftpSessionId={activeSftpSessionId} />
+          <ExplorerView sessionId={activeSftpSessionId} />
         </div>
       )}
     </div>

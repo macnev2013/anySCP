@@ -9,7 +9,7 @@ export type PageId = "hosts" | "snippets" | "port-forwarding" | "history" | "set
 
 export type UnifiedTab =
   | { type: "terminal"; id: string; label: string }
-  | { type: "sftp"; id: string; label: string }
+  | { type: "sftp"; id: string; label: string; transport?: "sftp" | "scp" }
   | { type: "s3"; id: string; label: string }
   | { type: "page"; id: string; label: string; page: PageId };
 

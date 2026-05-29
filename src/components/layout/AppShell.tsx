@@ -266,7 +266,7 @@ export function AppShell() {
             {activeTab && activeTab.type !== "terminal" && (
               <div className="absolute inset-0 z-10">
                 {activeTab.type === "sftp" ? (
-                  <ExplorerPage sftpSessionId={activeTab.id} />
+                  <ExplorerPage sftpSessionId={activeTab.id} transport={activeTab.transport ?? "sftp"} />
                 ) : activeTab.type === "s3" ? (
                   <ExplorerPage s3SessionId={activeTab.id} />
                 ) : activePageType === "hosts" ? (

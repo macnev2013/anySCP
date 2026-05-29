@@ -5,13 +5,21 @@ import type { SftpEntry } from "../../types";
 import type { ExplorerEntry, ExplorerClipboard } from "../../types/explorer";
 import { ExplorerToolbar, ExplorerFileTable, ExplorerDropZone } from "../explorer";
 import { createSftpProvider, toExplorerEntry } from "../../providers/sftp-provider";
+import { explorerInvoke, transferEventName, type Transport } from "../../lib/explorer-transport";
 
-interface SftpBrowserProps {
-  sftpSessionId: string;
+interface ExplorerViewProps {
+  /** The transport session id (sftp_session_id or scp_session_id). */
+  sessionId: string;
+  /**
+   * Which transport backs this view. SCP is selected automatically as a
+   * fallback when the host lacks the SFTP subsystem; SFTP and SCP share the
+   * same command surface and session store, differing only in dispatch.
+   */
+  transport?: Transport;
 }
 
-export function SftpBrowser({ sftpSessionId }: SftpBrowserProps) {
-  const session = useSftpStore((s) => s.sessions.get(sftpSessionId));
+export function ExplorerView({ sessionId, transport = "sftp" }: ExplorerViewProps) {
+  const session = useSftpStore((s) => s.sessions.get(sessionId));
   const setEntries = useSftpStore((s) => s.setEntries);
   const setLoading = useSftpStore((s) => s.setLoading);
   const setError = useSftpStore((s) => s.setError);
@@ -19,7 +27,7 @@ export function SftpBrowser({ sftpSessionId }: SftpBrowserProps) {
   const clipboard = useSftpStore((s) => s.clipboard);
   const setClipboard = useSftpStore((s) => s.setClipboard);
 
-  const provider = useMemo(() => createSftpProvider(sftpSessionId), [sftpSessionId]);
+  const provider = useMemo(() => createSftpProvider(sessionId), [sessionId]);
 
   // ─── Drag-and-drop (OS → App) ─────────────────────────────────────────────
 
@@ -68,9 +76,7 @@ export function SftpBrowser({ sftpSessionId }: SftpBrowserProps) {
 
             void (async () => {
               try {
-                const { invoke } = await import("@tauri-apps/api/core");
-                await invoke("sftp_enqueue_upload", {
-                  sftpSessionId,
+                await explorerInvoke(transport, "enqueue_upload", sessionId, {
                   localPaths: paths,
                   remoteDir,
                 });
@@ -93,7 +99,7 @@ export function SftpBrowser({ sftpSessionId }: SftpBrowserProps) {
 
     return () => { aborted = true; unlisten?.(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sftpSessionId]);
+  }, [sessionId, transport]);
 
   // ─── Auto-refresh on upload completion ────────────────────────────────────
 
@@ -106,16 +112,14 @@ export function SftpBrowser({ sftpSessionId }: SftpBrowserProps) {
         if (aborted) return;
 
         const unsub = await listen<{
-          sftp_session_id: string;
+          sftp_session_id?: string;
+          scp_session_id?: string;
           direction: string;
           status: string;
-        }>("sftp:transfer", (event) => {
-          const { sftp_session_id, direction, status } = event.payload;
-          if (
-            sftp_session_id === sftpSessionId &&
-            direction === "Upload" &&
-            status === "Completed"
-          ) {
+        }>(transferEventName(transport), (event) => {
+          const { direction, status } = event.payload;
+          const sid = transport === "scp" ? event.payload.scp_session_id : event.payload.sftp_session_id;
+          if (sid === sessionId && direction === "Upload" && status === "Completed") {
             setTimeout(() => {
               const path = currentPathRef.current;
               if (path) void loadDirectory(path);
@@ -130,44 +134,39 @@ export function SftpBrowser({ sftpSessionId }: SftpBrowserProps) {
     })();
     return () => { aborted = true; unlisten?.(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sftpSessionId]);
+  }, [sessionId, transport]);
 
   // ─── Navigation ──────────────────────────────────────────────────────────
 
   const loadDirectory = useCallback(
     async (path: string) => {
-      setLoading(sftpSessionId, true);
+      setLoading(sessionId, true);
       try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const entries = await invoke<SftpEntry[]>("sftp_list_dir", {
-          sftpSessionId,
-          path,
-        });
-        setEntries(sftpSessionId, path, entries);
+        const entries = await explorerInvoke<SftpEntry[]>(transport, "list_dir", sessionId, { path });
+        setEntries(sessionId, path, entries);
       } catch (err: unknown) {
         const msg =
           err && typeof err === "object" && "message" in err
             ? String((err as { message: string }).message)
             : "Failed to list directory";
-        setError(sftpSessionId, msg);
+        setError(sessionId, msg);
       }
     },
-    [sftpSessionId, setLoading, setEntries, setError],
+    [sessionId, transport, setLoading, setEntries, setError],
   );
 
   // On mount: resolve home dir, then load it
   useEffect(() => {
     (async () => {
       try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const homeDir = await invoke<string>("sftp_home_dir", { sftpSessionId });
+        const homeDir = await explorerInvoke<string>(transport, "home_dir", sessionId);
         await loadDirectory(homeDir);
       } catch {
         await loadDirectory("/");
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sftpSessionId]);
+  }, [sessionId, transport]);
 
   // ─── Download (enqueue) ───────────────────────────────────────────────────
 
@@ -188,16 +187,14 @@ export function SftpBrowser({ sftpSessionId }: SftpBrowserProps) {
 
       if (!localDir) return;
 
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("sftp_enqueue_download", {
-        sftpSessionId,
+      await explorerInvoke(transport, "enqueue_download", sessionId, {
         remotePaths: [entry.id],
         localDir,
       });
     } catch (err) {
       console.error("Download enqueue failed:", err);
     }
-  }, [sftpSessionId]);
+  }, [sessionId, transport]);
 
   // ─── Upload (dialog) ─────────────────────────────────────────────────────
 
@@ -220,13 +217,12 @@ export function SftpBrowser({ sftpSessionId }: SftpBrowserProps) {
         ? `${session.currentPath}${fileName}`
         : `${session.currentPath}/${fileName}`;
 
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("sftp_upload", { sftpSessionId, localPath, remotePath });
+      await explorerInvoke(transport, "upload", sessionId, { localPath, remotePath });
       void loadDirectory(session.currentPath);
     } catch {
       // Upload errors show in transfer overlay
     }
-  }, [sftpSessionId, session, loadDirectory]);
+  }, [sessionId, transport, session, loadDirectory]);
 
   // ─── New folder/file (inline) ─────────────────────────────────────────────
 
@@ -254,14 +250,13 @@ export function SftpBrowser({ sftpSessionId }: SftpBrowserProps) {
       if (!name.trim() || !session) return;
       const filePath = provider.joinPath(session.currentPath, name.trim());
       try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("sftp_create_file", { sftpSessionId, path: filePath });
+        await explorerInvoke(transport, "create_file", sessionId, { path: filePath });
         await loadDirectory(session.currentPath);
       } catch {
         // Error shown via refresh
       }
     },
-    [sftpSessionId, session, loadDirectory, provider],
+    [sessionId, transport, session, loadDirectory, provider],
   );
 
   const handleCreateFolder = useCallback(
@@ -270,24 +265,21 @@ export function SftpBrowser({ sftpSessionId }: SftpBrowserProps) {
       if (!name.trim() || !session) return;
       const dirPath = provider.joinPath(session.currentPath, name.trim());
       try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("sftp_mkdir", { sftpSessionId, path: dirPath });
+        await explorerInvoke(transport, "mkdir", sessionId, { path: dirPath });
         await loadDirectory(session.currentPath);
       } catch {
         // Error shown via refresh
       }
     },
-    [sftpSessionId, session, loadDirectory, provider],
+    [sessionId, transport, session, loadDirectory, provider],
   );
 
   // ─── Delete ──────────────────────────────────────────────────────────────
 
   const handleDelete = useCallback(async (entriesToDelete: ExplorerEntry[]) => {
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
       for (const entry of entriesToDelete) {
-        await invoke("sftp_delete", {
-          sftpSessionId,
+        await explorerInvoke(transport, "delete", sessionId, {
           path: entry.id,
           isDir: entry.entryType === "Directory",
         });
@@ -296,7 +288,7 @@ export function SftpBrowser({ sftpSessionId }: SftpBrowserProps) {
       // Partial deletes may occur
     }
     if (session) void loadDirectory(session.currentPath);
-  }, [sftpSessionId, session, loadDirectory]);
+  }, [sessionId, transport, session, loadDirectory]);
 
   // ─── Rename ──────────────────────────────────────────────────────────────
 
@@ -304,26 +296,24 @@ export function SftpBrowser({ sftpSessionId }: SftpBrowserProps) {
     const parentPath = entry.id.substring(0, entry.id.lastIndexOf("/")) || "/";
     const newPath = `${parentPath}/${newName}`;
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("sftp_rename", { sftpSessionId, oldPath: entry.id, newPath });
+      await explorerInvoke(transport, "rename", sessionId, { oldPath: entry.id, newPath });
       if (session) void loadDirectory(session.currentPath);
     } catch (err) {
       console.error("Rename failed:", err);
     }
-  }, [sftpSessionId, session, loadDirectory]);
+  }, [sessionId, transport, session, loadDirectory]);
 
   // ─── Edit in VS Code ─────────────────────────────────────────────────────
 
   const handleEditInEditor = useCallback((entry: ExplorerEntry) => {
     void (async () => {
       try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("sftp_edit_in_vscode", { sftpSessionId, remotePath: entry.id });
+        await explorerInvoke(transport, "edit_in_vscode", sessionId, { remotePath: entry.id });
       } catch {
         // VS Code may not be installed
       }
     })();
-  }, [sftpSessionId]);
+  }, [sessionId, transport]);
 
   // ─── Paste / Move / Copy ─────────────────────────────────────────────────
 
@@ -331,53 +321,50 @@ export function SftpBrowser({ sftpSessionId }: SftpBrowserProps) {
 
   const handlePaste = useCallback(async () => {
     const clip = useSftpStore.getState().clipboard;
-    if (!clip || clip.sourceSessionId !== sftpSessionId || !session) return;
+    if (!clip || clip.sourceSessionId !== sessionId || !session) return;
 
     const sourcePaths = clip.entries.map((e) => e.path);
     const targetDir = session.currentPath;
 
     setBusy(true);
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
       if (clip.operation === "cut") {
-        await invoke("sftp_move_entries", { sftpSessionId, sourcePaths, targetDir });
+        await explorerInvoke(transport, "move_entries", sessionId, { sourcePaths, targetDir });
         useSftpStore.getState().setClipboard(null);
       } else {
-        await invoke("sftp_copy_entries", { sftpSessionId, sourcePaths, targetDir });
+        await explorerInvoke(transport, "copy_entries", sessionId, { sourcePaths, targetDir });
       }
       await loadDirectory(session.currentPath);
     } catch (err) {
-      setError(sftpSessionId, err instanceof Error ? err.message : "Paste failed");
+      setError(sessionId, err instanceof Error ? err.message : "Paste failed");
     } finally {
       setBusy(false);
     }
-  }, [sftpSessionId, session, loadDirectory, setError]);
+  }, [sessionId, transport, session, loadDirectory, setError]);
 
   const handleMoveEntries = useCallback(async (sourceIds: string[], targetDir: string) => {
     setBusy(true);
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("sftp_move_entries", { sftpSessionId, sourcePaths: sourceIds, targetDir });
+      await explorerInvoke(transport, "move_entries", sessionId, { sourcePaths: sourceIds, targetDir });
       if (session) await loadDirectory(session.currentPath);
     } catch (err) {
-      setError(sftpSessionId, err instanceof Error ? err.message : "Move failed");
+      setError(sessionId, err instanceof Error ? err.message : "Move failed");
     } finally {
       setBusy(false);
     }
-  }, [sftpSessionId, session, loadDirectory, setError]);
+  }, [sessionId, transport, session, loadDirectory, setError]);
 
   const handleCopyEntries = useCallback(async (sourceIds: string[], targetDir: string) => {
     setBusy(true);
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("sftp_copy_entries", { sftpSessionId, sourcePaths: sourceIds, targetDir });
+      await explorerInvoke(transport, "copy_entries", sessionId, { sourcePaths: sourceIds, targetDir });
       if (session) await loadDirectory(session.currentPath);
     } catch (err) {
-      setError(sftpSessionId, err instanceof Error ? err.message : "Copy failed");
+      setError(sessionId, err instanceof Error ? err.message : "Copy failed");
     } finally {
       setBusy(false);
     }
-  }, [sftpSessionId, session, loadDirectory, setError]);
+  }, [sessionId, transport, session, loadDirectory, setError]);
 
   // ─── Clipboard adapter ───────────────────────────────────────────────────
   // SftpClipboard uses SftpEntry with `path`, ExplorerClipboard uses ExplorerEntry with `id`.
@@ -471,7 +458,7 @@ export function SftpBrowser({ sftpSessionId }: SftpBrowserProps) {
         entries={explorerEntries}
         sortBy={session.sortBy}
         sortAsc={session.sortAsc}
-        onSortChange={(sortBy, sortAsc) => setSort(sftpSessionId, sortBy, sortAsc)}
+        onSortChange={(sortBy, sortAsc) => setSort(sessionId, sortBy, sortAsc)}
         clipboard={explorerClipboard}
         onSetClipboard={handleSetClipboard}
         onNavigate={(path) => void loadDirectory(path)}

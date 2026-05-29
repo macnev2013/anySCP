@@ -109,7 +109,7 @@ export const TransferRow = memo(function TransferRow({
   onRetry,
   onDismiss,
 }: TransferRowProps) {
-  const sessionId = t.sftp_session_id ?? t.s3_session_id ?? "";
+  const sessionId = t.sftp_session_id ?? t.scp_session_id ?? t.s3_session_id ?? "";
   const hostLabel = useTransferStore((s) => s.hostLabels.get(sessionId));
 
   const pct = getProgressPercent(t);

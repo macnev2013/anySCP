@@ -125,10 +125,25 @@ export function HistoryPage() {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const sessionId = await invoke<string>("connect_saved_host_no_pty", { hostId: entry.host_id });
-      const sftpSessionId = await invoke<string>("sftp_open", { sessionId });
       const label = entry.host_label || `${entry.username}@${entry.host}`;
-      useSftpStore.getState().openSession(sftpSessionId, sessionId, label);
-      useTabStore.getState().addTab({ type: "sftp", id: sftpSessionId, label });
+
+      // Prefer SFTP; fall back to SCP on the same connection when the SFTP
+      // subsystem is disabled.
+      let explorerSessionId: string;
+      let transport: "sftp" | "scp" = "sftp";
+      try {
+        explorerSessionId = await invoke<string>("sftp_open", { sessionId });
+      } catch (sftpErr) {
+        try {
+          explorerSessionId = await invoke<string>("scp_open", { sessionId });
+          transport = "scp";
+        } catch {
+          throw sftpErr;
+        }
+      }
+
+      useSftpStore.getState().openSession(explorerSessionId, sessionId, label);
+      useTabStore.getState().addTab({ type: "sftp", id: explorerSessionId, label, transport });
     } catch {
       // Errors surface via SFTP page
     }

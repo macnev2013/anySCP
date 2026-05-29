@@ -82,33 +82,33 @@ export function TransferPopover({ anchorRect, onClose }: TransferPopoverProps) {
 
   // ─── Actions ────────────────────────────────────────────────────────────────
 
-  /** Determine if a transfer is S3-based (vs SFTP) */
-  const isS3Transfer = useCallback((id: string): boolean => {
+  /** Which backend owns a transfer, inferred from its session-id field. */
+  const protocolOf = useCallback((id: string): "s3" | "scp" | "sftp" => {
     const t = transfers.get(id);
-    return t ? !!t.s3_session_id : false;
+    if (t?.s3_session_id) return "s3";
+    if (t?.scp_session_id) return "scp";
+    return "sftp";
   }, [transfers]);
 
   const handleCancel = useCallback((id: string) => {
     void (async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        const cmd = isS3Transfer(id) ? "s3_cancel_transfer" : "sftp_cancel_transfer";
-        await invoke(cmd, { transferId: id });
+        await invoke(`${protocolOf(id)}_cancel_transfer`, { transferId: id });
       } catch {
         removeTransfer(id);
       }
     })();
-  }, [removeTransfer, isS3Transfer]);
+  }, [removeTransfer, protocolOf]);
 
   const handleRetry = useCallback((id: string) => {
     void (async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        const cmd = isS3Transfer(id) ? "s3_retry_transfer" : "sftp_retry_transfer";
-        await invoke(cmd, { transferId: id });
+        await invoke(`${protocolOf(id)}_retry_transfer`, { transferId: id });
       } catch { /* best-effort */ }
     })();
-  }, [isS3Transfer]);
+  }, [protocolOf]);
 
   const handleDismiss = useCallback((id: string) => {
     removeTransfer(id);
@@ -120,6 +120,7 @@ export function TransferPopover({ anchorRect, onClose }: TransferPopoverProps) {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("sftp_clear_finished_transfers");
+        await invoke("scp_clear_finished_transfers");
         await invoke("s3_clear_finished_transfers");
       } catch { /* best-effort */ }
     })();

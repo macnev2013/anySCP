@@ -258,9 +258,11 @@ export function HostsDashboard() {
     [],
   );
 
-  // Explore: connect SSH + open SFTP + switch to Files page
+  // Explore: connect SSH + open a file browser + switch to Files page.
+  // Prefers SFTP; transparently falls back to SCP on the same SSH connection
+  // when the server has the SFTP subsystem disabled — the user never picks.
   // NOTE: We don't call addSession — the SSH connection lives in Rust's SshManager
-  // but we don't need a terminal pane for SFTP-only connections.
+  // but we don't need a terminal pane for file-only connections.
   const exploreHost = useCallback(
     async (host: SavedHost) => {
       const label = host.label || `${host.username}@${host.host}`;
@@ -269,11 +271,26 @@ export function HostsDashboard() {
         const { invoke } = await import("@tauri-apps/api/core");
 
         const sessionId = await invoke<string>("connect_saved_host_no_pty", { hostId: host.id });
-        const sftpSessionId = await invoke<string>("sftp_open", { sessionId });
-        useSftpStore.getState().openSession(sftpSessionId, sessionId, label);
+
+        let explorerSessionId: string;
+        let transport: "sftp" | "scp" = "sftp";
+        try {
+          explorerSessionId = await invoke<string>("sftp_open", { sessionId });
+        } catch (sftpErr) {
+          // SFTP subsystem unavailable — retry over SCP on the same connection.
+          try {
+            explorerSessionId = await invoke<string>("scp_open", { sessionId });
+            transport = "scp";
+          } catch {
+            // Surface the original SFTP error if SCP also fails.
+            throw sftpErr;
+          }
+        }
+
+        useSftpStore.getState().openSession(explorerSessionId, sessionId, label);
 
         setConnectingHost(null);
-        useTabStore.getState().addTab({ type: "sftp", id: sftpSessionId, label });
+        useTabStore.getState().addTab({ type: "sftp", id: explorerSessionId, label, transport });
       } catch (err) {
         const msg = err && typeof err === "object" && "message" in err
           ? String((err as { message: string }).message)
