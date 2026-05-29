@@ -20,6 +20,7 @@ const INPUT_CLASS = [
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function SettingsPage() {
+  const themeMode = useSettingsStore((s) => s.themeMode);
   const fontSize = useSettingsStore((s) => s.terminalFontSize);
   const cursorStyle = useSettingsStore((s) => s.terminalCursorStyle);
   const cursorBlink = useSettingsStore((s) => s.terminalCursorBlink);
@@ -27,6 +28,7 @@ export function SettingsPage() {
   const scrollback = useSettingsStore((s) => s.terminalScrollback);
   const transferConcurrency = useSettingsStore((s) => s.transferConcurrency);
 
+  const setThemeMode = useSettingsStore((s) => s.setThemeMode);
   const setFontSize = useSettingsStore((s) => s.setTerminalFontSize);
   const setCursorStyle = useSettingsStore((s) => s.setTerminalCursorStyle);
   const setCursorBlink = useSettingsStore((s) => s.setTerminalCursorBlink);
@@ -43,9 +45,30 @@ export function SettingsPage() {
             Settings
           </h1>
           <p className="text-[length:var(--text-xs)] text-text-muted mt-1">
-            Configure terminal appearance, file transfers, and app updates
+            Configure app appearance, terminal behavior, file transfers, and app updates
           </p>
         </div>
+
+        {/* Appearance */}
+        <section className="mb-8">
+          <h2 className="text-[length:var(--text-sm)] font-semibold uppercase tracking-wider text-text-muted mb-4">
+            Appearance
+          </h2>
+
+          <div className="flex flex-col gap-4">
+            <SettingRow>
+              <div>
+                <label htmlFor="s-light-theme" className={LABEL_CLASS}>Light Theme</label>
+                <p className={DESC_CLASS}>Use a softer grey interface instead of the dark background</p>
+              </div>
+              <Toggle
+                id="s-light-theme"
+                checked={themeMode === "light"}
+                onChange={(checked) => setThemeMode(checked ? "light" : "dark")}
+              />
+            </SettingRow>
+          </div>
+        </section>
 
         {/* Terminal Appearance */}
         <section className="mb-8">
@@ -178,7 +201,7 @@ function Toggle({ id, checked, onChange }: { id: string; checked: boolean; onCha
     >
       <span
         className={[
-          "absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-text-primary",
+          "absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-[var(--shadow-sm)]",
           "transition-transform duration-[var(--duration-fast)]",
           checked ? "translate-x-4" : "translate-x-0",
         ].join(" ")}
@@ -423,4 +446,3 @@ function NumberSetting({ id, value, min, max, step, onChange }: {
     />
   );
 }
-

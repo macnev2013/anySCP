@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useLayoutEffect, useMemo } from "react";
 import { useTabStore } from "../../stores/tab-store";
 import { useSessionStore } from "../../stores/session-store";
 import { useTerminalSearchStore } from "../../stores/terminal-search-store";
@@ -23,6 +23,7 @@ import { HistoryPage } from "../history";
 import { usePortForwardEvents } from "../../hooks/use-port-forward-events";
 
 export function AppShell() {
+  const themeMode = useSettingsStore((s) => s.themeMode);
   const activeTabId = useTabStore((s) => s.activeTabId);
   const allTabs = useTabStore((s) => s.tabs);
   const activeTab = activeTabId ? allTabs.get(activeTabId) : null;
@@ -225,6 +226,11 @@ export function AppShell() {
   useEffect(() => {
     void useSettingsStore.getState().loadSettings();
   }, []);
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = themeMode;
+  }, [themeMode]);
+
   useSftpTransfers();
   usePortForwardEvents();
 

@@ -117,6 +117,43 @@
   --duration-slow: 350ms;
 }
 
+:root {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Soft grey light theme: airy surfaces without turning the app stark white. */
+  --color-bg-base:      oklch(0.905 0.006 255);
+  --color-bg-surface:   oklch(0.955 0.004 255);
+  --color-bg-overlay:   oklch(0.985 0.003 255);
+  --color-bg-subtle:    oklch(0.930 0.005 255);
+  --color-bg-muted:     oklch(0.855 0.008 255);
+
+  --color-text-primary:   oklch(0.235 0.018 260);
+  --color-text-secondary: oklch(0.410 0.018 260);
+  --color-text-muted:     oklch(0.555 0.016 260);
+  --color-text-inverse:   oklch(0.985 0.003 255);
+
+  --color-accent:       oklch(0.575 0.170 250);
+  --color-accent-hover: oklch(0.520 0.170 250);
+  --color-accent-muted: oklch(0.575 0.170 250 / 0.14);
+
+  --color-status-connected:    oklch(0.575 0.145 155);
+  --color-status-connecting:   oklch(0.640 0.130 80);
+  --color-status-error:        oklch(0.575 0.190 25);
+  --color-status-disconnected: oklch(0.580 0.012 260);
+
+  --color-border:       oklch(0.785 0.010 255);
+  --color-border-focus: oklch(0.575 0.170 250);
+  --color-ring:         oklch(0.575 0.170 250 / 0.28);
+
+  --shadow-sm:  0 1px 2px oklch(0.290 0.020 260 / 0.08);
+  --shadow-md:  0 2px 10px oklch(0.290 0.020 260 / 0.10), 0 1px 2px oklch(0.290 0.020 260 / 0.06);
+  --shadow-lg:  0 14px 32px oklch(0.290 0.020 260 / 0.14), 0 3px 10px oklch(0.290 0.020 260 / 0.08);
+}
+
 /* --- Base Resets --- */
 
 html, body, #root {
@@ -131,6 +168,8 @@ html, body, #root {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  transition: background-color var(--duration-base) var(--ease-expo-out),
+              color var(--duration-base) var(--ease-expo-out);
 }
 
 /* Prevent text selection on UI chrome (not terminal) */

@@ -1,8 +1,12 @@
 import { create } from "zustand";
 
 export type CursorStyle = "block" | "bar" | "underline";
+export type ThemeMode = "dark" | "light";
 
 interface SettingsState {
+  // Appearance
+  themeMode: ThemeMode;
+
   // Terminal appearance
   terminalFontSize: number;
   terminalFontFamily: string;
@@ -18,6 +22,7 @@ interface SettingsState {
   loaded: boolean;
 
   // Actions
+  setThemeMode: (mode: ThemeMode) => void;
   setTerminalFontSize: (size: number) => void;
   setTerminalFontFamily: (family: string) => void;
   setTerminalCursorStyle: (style: CursorStyle) => void;
@@ -30,6 +35,7 @@ interface SettingsState {
 
 // Defaults
 const DEFAULTS = {
+  themeMode: "dark" as ThemeMode,
   terminalFontSize: 14,
   terminalFontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
   terminalCursorStyle: "bar" as CursorStyle,
@@ -52,6 +58,11 @@ function persist(key: string, value: string) {
 export const useSettingsStore = create<SettingsState>((set) => ({
   ...DEFAULTS,
   loaded: false,
+
+  setThemeMode: (mode) => {
+    set({ themeMode: mode });
+    persist("app_theme", mode);
+  },
 
   setTerminalFontSize: (size) => {
     const clamped = Math.max(8, Math.min(32, size));
@@ -107,6 +118,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       const updates: Partial<SettingsState> = {};
       for (const [key, value] of pairs) {
         switch (key) {
+          case "app_theme": updates.themeMode = value === "light" ? "light" : DEFAULTS.themeMode; break;
           case "terminal_font_size": updates.terminalFontSize = Number(value) || DEFAULTS.terminalFontSize; break;
           case "terminal_font_family": updates.terminalFontFamily = value || DEFAULTS.terminalFontFamily; break;
           case "terminal_cursor_style": updates.terminalCursorStyle = (value as CursorStyle) || DEFAULTS.terminalCursorStyle; break;
