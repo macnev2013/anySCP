@@ -286,9 +286,9 @@ impl ScpTransferManager {
         local_dir: PathBuf,
     ) -> Result<Vec<String>, ScpError> {
         self.ensure_worker_spawned();
-        let handle = {
+        let (handle, flavor) = {
             let session = self.scp_manager.get_session(&scp_session_id)?;
-            session.ssh_handle.clone()
+            (session.ssh_handle.clone(), session.flavor)
         };
 
         let mut ids = Vec::with_capacity(remote_paths.len());
@@ -298,13 +298,13 @@ impl ScpTransferManager {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "unknown".to_string());
 
-            let stat = exec::stat(handle.clone(), &remote_path)
+            let stat = exec::stat(handle.clone(), flavor, &remote_path)
                 .await?
                 .ok_or_else(|| ScpError::NotFound(remote_path.clone()))?;
 
             let local_dest = local_dir.join(&name);
             let job = if stat.entry_type == super::ScpEntryType::Directory {
-                let (bytes, count) = exec::dir_stats(handle.clone(), &remote_path).await?;
+                let (bytes, count) = exec::dir_stats(handle.clone(), flavor, &remote_path).await?;
                 Self::new_job(
                     &scp_session_id,
                     name,
@@ -476,14 +476,14 @@ async fn execute_transfer(
 
     set_job_status(jobs, job_id, TransferStatus::InProgress, None, app_handle);
 
-    // Resolve the SSH handle.
-    let handle = {
+    // Resolve the SSH handle and remote flavor.
+    let (handle, flavor) = {
         let sid = match jobs.get(job_id) {
             Some(j) => j.scp_session_id.clone(),
             None => return,
         };
         match scp_manager.get_session(&sid) {
-            Ok(s) => s.ssh_handle.clone(),
+            Ok(s) => (s.ssh_handle.clone(), s.flavor),
             Err(e) => {
                 set_job_status(
                     jobs,
@@ -552,7 +552,7 @@ async fn execute_transfer(
         KindDesc::DownloadDir {
             remote_path,
             local_dir,
-        } => run_download_dir(jobs, job_id, &handle, &remote_path, &local_dir, &cancel_token, app_handle).await,
+        } => run_download_dir(jobs, job_id, &handle, flavor, &remote_path, &local_dir, &cancel_token, app_handle).await,
     };
 
     let (direction, total_bytes, files_total, bytes_done) = jobs
@@ -779,6 +779,7 @@ async fn run_download_dir(
     jobs: &Arc<DashMap<String, TransferJobState>>,
     job_id: &str,
     handle: &Handle_,
+    flavor: super::listing::Flavor,
     remote_root: &str,
     local_root: &Path,
     cancel: &CancellationToken,
@@ -788,7 +789,7 @@ async fn run_download_dir(
         .await
         .map_err(|e| ScpError::LocalIoError(e.to_string()))?;
 
-    let mut tree = exec::enumerate_tree(handle.clone(), remote_root).await?;
+    let mut tree = exec::enumerate_tree(handle.clone(), flavor, remote_root).await?;
     // Create directories before files: shallower paths first.
     tree.sort_by_key(|e| (!e.is_dir, e.rel_path.matches('/').count()));
 

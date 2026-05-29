@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod exec;
+pub mod listing;
 pub mod transfer;
 pub mod transfer_manager;
 pub mod wire;
@@ -179,6 +180,9 @@ pub struct ScpSessionWrapper {
     #[allow(dead_code)]
     pub ssh_session_id: String,
     pub ssh_handle: Arc<Mutex<russh::client::Handle<SshClientHandler>>>,
+    /// Remote userland, detected once at open — decides which listing/stat
+    /// commands to issue.
+    pub flavor: listing::Flavor,
 }
 
 pub struct ScpManager {

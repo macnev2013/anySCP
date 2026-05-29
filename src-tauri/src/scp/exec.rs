@@ -15,7 +15,13 @@ use russh::ChannelMsg;
 
 use crate::ssh::handler::SshClientHandler;
 
-use super::{format_permissions, shell_quote, ScpEntry, ScpEntryType, ScpError};
+use super::listing::{self, Flavor};
+use super::{shell_quote, ScpEntry, ScpError};
+
+// Re-export so callers keep using `exec::StatInfo` / `exec::TreeEntry`.
+pub use super::listing::{StatInfo, TreeEntry};
+
+type SshHandle = Arc<Mutex<Handle<SshClientHandler>>>;
 
 /// Run `command` on the remote. Returns `(stdout, stderr, exit_code)`.
 pub async fn ssh_exec(
@@ -197,69 +203,42 @@ pub async fn copy(
     Ok(())
 }
 
+/// Detect the remote's userland once. GNU has `find -printf`; busybox lacks
+/// it but keeps `stat -c`; BSD/macOS have neither (only `stat -f`).
+pub async fn detect_flavor(handle: SshHandle) -> Result<Flavor, ScpError> {
+    let probe = "if find / -maxdepth 0 -printf '' >/dev/null 2>&1; then echo gnu; \
+                 elif stat -c '%s' / >/dev/null 2>&1; then echo busybox; \
+                 else echo bsd; fi";
+    let out = ssh_exec_str(handle, probe).await?;
+    Ok(Flavor::parse(&out).unwrap_or(Flavor::Gnu))
+}
+
 /// Stat a single path. Returns None when the path doesn't exist.
 pub async fn stat(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: SshHandle,
+    flavor: Flavor,
     path: &str,
 ) -> Result<Option<StatInfo>, ScpError> {
-    // %f = type letter (we don't use stat's %f for raw mode — `find -printf`
-    // does that better below). Use stat -c with type, mode, size, mtime.
-    let cmd = format!(
-        // Returns "<type>\t<mode_octal>\t<size>\t<mtime>" or non-zero exit if missing.
-        // `stat -c` is GNU; macOS uses -f with a different format. Stick with GNU.
-        "stat -c '%F\t%a\t%s\t%Y' -- {p} 2>/dev/null",
-        p = shell_quote(path)
-    );
+    let cmd = match flavor {
+        Flavor::Gnu | Flavor::Busybox => format!(
+            "stat -c '{fmt}' -- {p} 2>/dev/null",
+            fmt = listing::STATC_FMT,
+            p = shell_quote(path)
+        ),
+        Flavor::Bsd => format!(
+            "stat -f '{fmt}' -- {p} 2>/dev/null",
+            fmt = listing::STATF_FMT,
+            p = shell_quote(path)
+        ),
+    };
     let (stdout, _, exit) = ssh_exec(handle, &cmd).await?;
     if exit != 0 {
         return Ok(None);
     }
-    let line = String::from_utf8_lossy(&stdout);
-    let line = line.trim_end_matches('\n');
-    if line.is_empty() {
-        return Ok(None);
+    match flavor {
+        Flavor::Gnu | Flavor::Busybox => listing::parse_statc_single(&stdout),
+        Flavor::Bsd => listing::parse_statf_single(&stdout),
     }
-    let parts: Vec<&str> = line.split('\t').collect();
-    if parts.len() != 4 {
-        return Err(ScpError::ParseError(format!(
-            "stat: expected 4 fields, got {} in {line:?}",
-            parts.len()
-        )));
-    }
-    let type_str = parts[0];
-    let entry_type = match type_str {
-        "regular file" | "regular empty file" => ScpEntryType::File,
-        "directory" => ScpEntryType::Directory,
-        "symbolic link" => ScpEntryType::Symlink,
-        _ => ScpEntryType::Other,
-    };
-    let mode = u32::from_str_radix(parts[1], 8)
-        .map_err(|e| ScpError::ParseError(format!("stat: bad mode {:?}: {e}", parts[1])))?;
-    let size: u64 = parts[2]
-        .parse()
-        .map_err(|e| ScpError::ParseError(format!("stat: bad size {:?}: {e}", parts[2])))?;
-    let mtime: u64 = parts[3]
-        .parse()
-        .map_err(|e| ScpError::ParseError(format!("stat: bad mtime {:?}: {e}", parts[3])))?;
-
-    Ok(Some(StatInfo {
-        entry_type,
-        mode,
-        size,
-        mtime,
-    }))
-}
-
-#[derive(Debug, Clone)]
-pub struct StatInfo {
-    pub entry_type: ScpEntryType,
-    // mode/mtime are parsed for completeness; only entry_type and size are
-    // consumed today (by the download enqueue path).
-    #[allow(dead_code)]
-    pub mode: u32,
-    pub size: u64,
-    #[allow(dead_code)]
-    pub mtime: u64,
 }
 
 /// Whether a remote path exists. Used by deduplicate_name for copy/move.
@@ -278,144 +257,89 @@ pub async fn exists(
 
 // ─── Directory listing ──────────────────────────────────────────────────────
 
-/// List the contents of `dir` using GNU `find -printf` with NUL record
-/// separators. Each record: `<type>\t<mode_octal>\t<size>\t<mtime_seconds>\t<basename>\0`.
-///
-/// `<type>` is `f` (file), `d` (directory), `l` (symlink), `b/c/p/s` (other).
+/// List the immediate contents of `dir`, using the right command for the
+/// remote `flavor`:
+/// - GNU: one `find -printf` pass (NUL-delimited).
+/// - busybox: `find … -exec stat -c …` (busybox find has no `-printf`).
+/// - BSD/macOS: `find … -exec stat -f …`.
 pub async fn list_dir(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: SshHandle,
+    flavor: Flavor,
     dir: &str,
 ) -> Result<Vec<ScpEntry>, ScpError> {
-    let cmd = format!(
-        "find {dir} -mindepth 1 -maxdepth 1 -printf '%y\\t%m\\t%s\\t%T@\\t%f\\0'",
-        dir = shell_quote(dir)
-    );
-    let stdout = ssh_exec_ok(handle, &cmd).await?;
-
-    let mut entries = Vec::new();
-    for record in stdout.split(|b| *b == 0) {
-        if record.is_empty() {
-            continue;
+    let q = shell_quote(dir);
+    match flavor {
+        Flavor::Gnu => {
+            let cmd = format!(
+                "find {q} -mindepth 1 -maxdepth 1 -printf '{fmt}'",
+                fmt = listing::GNU_LISTING_PRINTF
+            );
+            let stdout = ssh_exec_ok(handle, &cmd).await?;
+            listing::parse_gnu_listing(&stdout, dir)
         }
-        let line = std::str::from_utf8(record)
-            .map_err(|e| ScpError::ParseError(format!("non-UTF-8 listing record: {e}")))?;
-        let parts: Vec<&str> = line.splitn(5, '\t').collect();
-        if parts.len() != 5 {
-            return Err(ScpError::ParseError(format!(
-                "listing record has {} fields, expected 5: {line:?}",
-                parts.len()
-            )));
+        Flavor::Busybox => {
+            let cmd = format!(
+                "find {q} -mindepth 1 -maxdepth 1 -exec stat -c '{fmt}' {{}} +",
+                fmt = listing::STATC_FMT_NAMED
+            );
+            let stdout = ssh_exec_ok(handle, &cmd).await?;
+            listing::parse_statc_listing(&stdout, dir)
         }
-        let type_char = parts[0];
-        let mode_str = parts[1];
-        let size_str = parts[2];
-        let mtime_str = parts[3];
-        let name = parts[4];
-
-        let (entry_type, is_symlink) = match type_char {
-            "f" => (ScpEntryType::File, false),
-            "d" => (ScpEntryType::Directory, false),
-            "l" => (ScpEntryType::Symlink, true),
-            _ => (ScpEntryType::Other, false),
-        };
-
-        let permissions = u32::from_str_radix(mode_str, 8).unwrap_or(0) & 0o7777;
-        let size: u64 = size_str.parse().unwrap_or(0);
-        // mtime is a float ("1700000000.0000000000"). Take the integer part.
-        let modified: Option<u64> = mtime_str
-            .split('.')
-            .next()
-            .and_then(|s| s.parse().ok());
-
-        let full_path = if dir == "/" {
-            format!("/{name}")
-        } else {
-            format!("{dir}/{name}")
-        };
-
-        entries.push(ScpEntry {
-            name: name.to_string(),
-            path: full_path,
-            entry_type,
-            size,
-            permissions,
-            permissions_display: format_permissions(permissions),
-            modified,
-            is_symlink,
-        });
+        Flavor::Bsd => {
+            let cmd = format!(
+                "find {q} -mindepth 1 -maxdepth 1 -exec stat -f '{fmt}' {{}} +",
+                fmt = listing::STATF_FMT_NAMED
+            );
+            let stdout = ssh_exec_ok(handle, &cmd).await?;
+            listing::parse_statf_listing(&stdout, dir)
+        }
     }
-
-    // Directories first, then alphabetical within each group.
-    entries.sort_by(|a, b| {
-        let a_dir = a.entry_type == ScpEntryType::Directory;
-        let b_dir = b.entry_type == ScpEntryType::Directory;
-        b_dir
-            .cmp(&a_dir)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
-
-    Ok(entries)
-}
-
-/// One node in a recursive directory walk, with its path relative to the
-/// walk root.
-#[derive(Debug, Clone)]
-pub struct TreeEntry {
-    /// Path relative to the walk root (never starts with `/`).
-    pub rel_path: String,
-    pub is_dir: bool,
-    pub size: u64,
 }
 
 /// Recursively enumerate everything under `dir` (excluding `dir` itself),
-/// returning each node's path relative to `dir`. Directories first within the
-/// list isn't guaranteed — callers that need ordering should sort by depth.
+/// each node's path relative to `dir`. Ordering is not guaranteed — callers
+/// that need dirs-before-files should sort by depth.
 pub async fn enumerate_tree(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: SshHandle,
+    flavor: Flavor,
     dir: &str,
 ) -> Result<Vec<TreeEntry>, ScpError> {
-    // %y = type letter, %s = size, %P = path relative to the starting point.
-    let cmd = format!(
-        "find {dir} -mindepth 1 -printf '%y\\t%s\\t%P\\0'",
-        dir = shell_quote(dir)
-    );
-    let stdout = ssh_exec_ok(handle, &cmd).await?;
-
-    let mut entries = Vec::new();
-    for record in stdout.split(|b| *b == 0) {
-        if record.is_empty() {
-            continue;
+    let q = shell_quote(dir);
+    match flavor {
+        Flavor::Gnu => {
+            let cmd = format!(
+                "find {q} -mindepth 1 -printf '{fmt}'",
+                fmt = listing::GNU_TREE_PRINTF
+            );
+            let stdout = ssh_exec_ok(handle, &cmd).await?;
+            listing::parse_gnu_tree(&stdout)
         }
-        let line = std::str::from_utf8(record)
-            .map_err(|e| ScpError::ParseError(format!("non-UTF-8 tree record: {e}")))?;
-        let parts: Vec<&str> = line.splitn(3, '\t').collect();
-        if parts.len() != 3 {
-            return Err(ScpError::ParseError(format!(
-                "tree record has {} fields, expected 3: {line:?}",
-                parts.len()
-            )));
+        Flavor::Busybox => {
+            let cmd = format!(
+                "find {q} -mindepth 1 -exec stat -c '{fmt}' {{}} +",
+                fmt = listing::STATC_TREE_FMT
+            );
+            let stdout = ssh_exec_ok(handle, &cmd).await?;
+            listing::parse_statc_tree(&stdout, dir)
         }
-        let is_dir = parts[0] == "d";
-        let size: u64 = parts[1].parse().unwrap_or(0);
-        let rel_path = parts[2].to_string();
-        if rel_path.is_empty() {
-            continue;
+        Flavor::Bsd => {
+            let cmd = format!(
+                "find {q} -mindepth 1 -exec stat -f '{fmt}' {{}} +",
+                fmt = listing::STATF_TREE_FMT
+            );
+            let stdout = ssh_exec_ok(handle, &cmd).await?;
+            listing::parse_statf_tree(&stdout, dir)
         }
-        entries.push(TreeEntry {
-            rel_path,
-            is_dir,
-            size,
-        });
     }
-    Ok(entries)
 }
 
-/// Sum (total_bytes, file_count) under a remote directory in one `find` pass.
+/// Sum (total_bytes, file_count) under a remote directory in one walk.
 pub async fn dir_stats(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: SshHandle,
+    flavor: Flavor,
     dir: &str,
 ) -> Result<(u64, u32), ScpError> {
-    let entries = enumerate_tree(handle, dir).await?;
+    let entries = enumerate_tree(handle, flavor, dir).await?;
     let mut bytes = 0u64;
     let mut count = 0u32;
     for e in &entries {

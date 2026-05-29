@@ -52,17 +52,21 @@ pub async fn scp_open(
         ));
     }
 
+    // Detect the remote userland once so listings use the right command.
+    let flavor = exec::detect_flavor(handle.clone()).await.unwrap_or_default();
+
     let scp_id = uuid::Uuid::new_v4().to_string();
     scp_manager.insert_session(
         scp_id.clone(),
         ScpSessionWrapper {
             ssh_session_id: session_id,
             ssh_handle: handle,
+            flavor,
         },
     );
 
-    tracing::info!(scp_session_id = %scp_id, "SCP session opened");
-    crate::telemetry::capture("scp_opened", serde_json::json!({}));
+    tracing::info!(scp_session_id = %scp_id, flavor = %flavor.as_str(), "SCP session opened");
+    crate::telemetry::capture("scp_opened", serde_json::json!({ "flavor": flavor.as_str() }));
     Ok(scp_id)
 }
 
@@ -82,14 +86,22 @@ pub async fn scp_close(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+type SshHandle =
+    Arc<tokio::sync::Mutex<russh::client::Handle<crate::ssh::handler::SshClientHandler>>>;
+
 /// Resolve the SSH handle behind an SCP session id.
-fn handle_for(
-    scp_manager: &Arc<ScpManager>,
-    scp_session_id: &str,
-) -> Result<Arc<tokio::sync::Mutex<russh::client::Handle<crate::ssh::handler::SshClientHandler>>>, ScpError>
-{
+fn handle_for(scp_manager: &Arc<ScpManager>, scp_session_id: &str) -> Result<SshHandle, ScpError> {
     let session = scp_manager.get_session(scp_session_id)?;
     Ok(session.ssh_handle.clone())
+}
+
+/// Resolve both the SSH handle and the detected userland flavor.
+fn handle_and_flavor(
+    scp_manager: &Arc<ScpManager>,
+    scp_session_id: &str,
+) -> Result<(SshHandle, super::listing::Flavor), ScpError> {
+    let session = scp_manager.get_session(scp_session_id)?;
+    Ok((session.ssh_handle.clone(), session.flavor))
 }
 
 // ─── Directory operations ─────────────────────────────────────────────────────
@@ -101,8 +113,8 @@ pub async fn scp_list_dir(
     path: String,
     scp_manager: State<'_, Arc<ScpManager>>,
 ) -> Result<Vec<ScpEntry>, ScpError> {
-    let handle = handle_for(&scp_manager, &scp_session_id)?;
-    exec::list_dir(handle, &path).await
+    let (handle, flavor) = handle_and_flavor(&scp_manager, &scp_session_id)?;
+    exec::list_dir(handle, flavor, &path).await
 }
 
 #[tauri::command]
