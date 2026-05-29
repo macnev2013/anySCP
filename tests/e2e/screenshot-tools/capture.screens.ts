@@ -61,30 +61,72 @@ async function moveMouseAway(): Promise<void> {
 
 /** Glide the cursor to an element's centre over ~0.65s so the recorded mouse
  *  movement looks fluid (x11grab captures the cursor). Returns the element. */
-async function glide(selector: string): Promise<WebdriverIO.Element> {
+// The gif recording hides the OS cursor (-draw_mouse 0), so clicks are shown
+// with an injected ripple at the click point instead. These helpers run JS in
+// the webview to draw the ripple / key badge — they survive React re-renders
+// because they live on document.body, outside the React root.
+
+/** Pulse a ripple at an element's centre, click it, then move the (hidden)
+ *  pointer off-window so no :hover tooltip lingers in the recording. */
+async function rippleClick(selector: string): Promise<void> {
     const el = await $(selector);
     await el.waitForClickable({ timeout: 10_000 });
+    await browser.execute((sel: string) => {
+        const e = document.querySelector(sel);
+        if (!e) return;
+        const r = e.getBoundingClientRect();
+        if (!document.getElementById("e2e-ripple-style")) {
+            const s = document.createElement("style");
+            s.id = "e2e-ripple-style";
+            s.textContent =
+                "@keyframes e2eRipple{0%{transform:translate(-50%,-50%) scale(.5);opacity:.9}" +
+                "100%{transform:translate(-50%,-50%) scale(2.6);opacity:0}}";
+            document.head.appendChild(s);
+        }
+        const d = document.createElement("div");
+        d.style.cssText =
+            `position:fixed;left:${r.left + r.width / 2}px;top:${r.top + r.height / 2}px;` +
+            "width:28px;height:28px;border-radius:50%;background:rgba(96,165,250,.45);" +
+            "border:2px solid rgba(147,197,253,.95);pointer-events:none;z-index:2147483647;" +
+            "animation:e2eRipple .55s ease-out forwards";
+        document.body.appendChild(d);
+        setTimeout(() => d.remove(), 650);
+    }, selector);
+    await browser.pause(220); // let the ripple be seen before the click navigates
+    await el.click();
+    // Clear hover so no tooltip shows (the cursor itself is hidden in the gif).
     try {
-        const loc = await el.getLocation();
-        const size = await el.getSize();
         await browser
             .action("pointer", { parameters: { pointerType: "mouse" } })
-            .move({
-                origin: "viewport",
-                x: Math.round(loc.x + size.width / 2),
-                y: Math.round(loc.y + size.height / 2),
-                duration: 650,
-            })
-            .pause(150)
+            .move({ origin: "viewport", x: 1260, y: 420, duration: 0 })
             .perform();
     } catch {
-        try {
-            await el.moveTo();
-        } catch {
-            /* pointer actions unsupported — ignore */
-        }
+        /* pointer actions unsupported — ignore */
     }
-    return el;
+}
+
+/** Briefly flash a centred key-combo badge (for keyboard actions like split). */
+async function keyBadge(text: string): Promise<void> {
+    await browser.execute((t: string) => {
+        if (!document.getElementById("e2e-badge-style")) {
+            const s = document.createElement("style");
+            s.id = "e2e-badge-style";
+            s.textContent =
+                "@keyframes e2eBadge{0%{opacity:0;transform:translate(-50%,-50%) scale(.92)}" +
+                "12%{opacity:1;transform:translate(-50%,-50%) scale(1)}80%{opacity:1}100%{opacity:0}}";
+            document.head.appendChild(s);
+        }
+        const d = document.createElement("div");
+        d.textContent = t;
+        d.style.cssText =
+            "position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);padding:11px 18px;" +
+            "border-radius:12px;background:rgba(18,18,22,.92);color:#e5e7eb;" +
+            "font:600 17px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.4px;" +
+            "border:1px solid rgba(255,255,255,.14);box-shadow:0 10px 34px rgba(0,0,0,.5);" +
+            "pointer-events:none;z-index:2147483647;animation:e2eBadge 1.1s ease forwards";
+        document.body.appendChild(d);
+        setTimeout(() => d.remove(), 1150);
+    }, text);
 }
 
 /** Save the current webview to <rawDir>/<name>.png. */
@@ -267,27 +309,29 @@ describe("screenshots", () => {
         this.timeout(60_000);
 
         // 1. Hosts dashboard — let the list settle in view.
-        await (await glide("[aria-label='Hosts']")).click();
+        await rippleClick("[aria-label='Hosts']");
         await waitForDashboard();
         await browser.pause(1100);
 
         // 2. Open the file Explorer on a host.
-        await (await glide(`[data-testid='host-card-${localTestingId}-explorer']`)).click();
+        await rippleClick(`[data-testid='host-card-${localTestingId}-explorer']`);
         await waitForExplorer();
         await browser.pause(1600);
 
         // 3. Back to Hosts, then open a Terminal on another host.
-        await (await glide("[aria-label='Hosts']")).click();
+        await rippleClick("[aria-label='Hosts']");
         await waitForDashboard();
         await browser.pause(700);
-        await (await glide(`[data-testid='host-card-${databaseId}-terminal']`)).click();
+        await rippleClick(`[data-testid='host-card-${databaseId}-terminal']`);
         const sid = await waitForAnyTerminal();
         await waitForTerminalText(sid, ":~$", { timeoutMs: 20_000 }).catch(() => {});
         await browser.pause(600);
         await typeIntoTerminal(sid, "ls -la\n");
         await browser.pause(1300);
 
-        // 4. Split the terminal into two panes.
+        // 4. Split the terminal into two panes (show the shortcut as a badge).
+        await keyBadge("⌘ D  ·  Split");
+        await browser.pause(450);
         await cmd("d");
         await browser.pause(900);
         await typeIntoTerminal(sid, "uname -a\n");

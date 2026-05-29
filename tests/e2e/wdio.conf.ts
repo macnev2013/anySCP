@@ -48,6 +48,7 @@ function startRecording(testTitle: string, parentTitle: string): { proc: ChildPr
             "-y",
             "-loglevel", "error",
             "-f", "x11grab",
+            "-draw_mouse", "0", // hide the cursor — the demo gif shows clicks via ripples instead
             "-framerate", "15",
             "-video_size", "1280x800",
             "-i", xvfbDisplay,
