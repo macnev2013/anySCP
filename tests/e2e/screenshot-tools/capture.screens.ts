@@ -30,13 +30,7 @@ import { fillSnippetAndSave, gotoSnippetsPage, openNewSnippetModal } from "../he
 import { fillRuleAndSave, gotoPortForwardingPage, openNewRuleDialog } from "../helpers/port-forwards.js";
 import { runCommand, typeIntoTerminal, waitForAnyTerminal, waitForTerminalText } from "../helpers/terminal.js";
 import { cmd, cmdShift } from "../helpers/keyboard.js";
-import {
-    createFile,
-    deleteEntry,
-    refreshExplorer,
-    renameEntry,
-    waitForExplorer,
-} from "../helpers/sftp-ops.js";
+import { refreshExplorer, waitForExplorer } from "../helpers/sftp-ops.js";
 import { clickS3Save, fillS3Form, openNewS3Dialog } from "../helpers/s3.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -166,6 +160,107 @@ async function typeCommand(sid: string, text: string, perChar = 70): Promise<voi
     }
     await browser.pause(280);
     await typeIntoTerminal(sid, "\n");
+}
+
+// ── Explorer demo helpers ───────────────────────────────────────────────────
+// The test-suite sftp-ops helpers are built for speed/reliability: rename
+// bypasses the UI via a hook, delete uses the keyboard, create dumps the name
+// with setValue. None of that reads in a gif. These variants drive the *real*
+// right-click context menu and type slowly so each step is visible.
+
+/** Draw a ripple at an element's centre (the OS cursor is hidden in the gif). */
+async function rippleEl(el: WebdriverIO.Element): Promise<void> {
+    const rect = await el.getLocation();
+    const size = await el.getSize();
+    await browser.execute(
+        (x: number, y: number) => {
+            const d = document.createElement("div");
+            d.style.cssText =
+                `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;border-radius:50%;` +
+                "background:rgba(96,165,250,.45);border:2px solid rgba(147,197,253,.95);" +
+                "pointer-events:none;z-index:2147483647;animation:e2eRipple .55s ease-out forwards";
+            document.body.appendChild(d);
+            setTimeout(() => d.remove(), 650);
+        },
+        rect.x + size.width / 2,
+        rect.y + size.height / 2,
+    );
+    await browser.pause(240);
+}
+
+/** Type into an input character-by-character so it reads like real typing. */
+async function slowTypeInput(el: WebdriverIO.Element, text: string, perChar = 95): Promise<void> {
+    for (const ch of text) {
+        await el.addValue(ch);
+        await browser.pause(perChar);
+    }
+}
+
+/** Right-click a directory entry and wait for its context menu to open. */
+async function openRowMenu(name: string): Promise<void> {
+    const row = await $(`[data-entry-name='${name}']`);
+    await row.waitForExist({ timeout: 10_000 });
+    await row.click({ button: "right" });
+    const menu = await $("[role='menu']");
+    await menu.waitForDisplayed({ timeout: 5_000 });
+    await browser.pause(700); // hold so the menu is clearly visible in the gif
+}
+
+/** Ripple + click a context-menu item by its visible label. */
+async function clickMenuItem(label: string): Promise<void> {
+    const items = await $$("[role='menu'] [role='menuitem']");
+    for (const it of items) {
+        if ((await it.getText()).trim() === label) {
+            await rippleEl(it);
+            await it.click();
+            return;
+        }
+    }
+    throw new Error(`context-menu item '${label}' not found`);
+}
+
+/** Create a file via the toolbar, typing the name slowly. */
+async function createFileDemo(name: string): Promise<void> {
+    await rippleClick("[data-testid='explorer-new-file']");
+    const input = await $("[data-testid='explorer-new-file-input']");
+    await input.waitForDisplayed({ timeout: 5_000 });
+    await browser.pause(500);
+    await slowTypeInput(input, name);
+    await browser.pause(500);
+    await browser.keys(["Enter"]);
+    await (await $(`[data-entry-name='${name}']`)).waitForExist({ timeout: 10_000 });
+}
+
+/** Rename an entry through the right-click menu, typing the new name slowly. */
+async function renameDemo(oldName: string, newName: string): Promise<void> {
+    await openRowMenu(oldName);
+    await clickMenuItem("Rename");
+    const input = await $("[data-testid='explorer-rename-input']");
+    await input.waitForDisplayed({ timeout: 5_000 });
+    await browser.pause(400);
+    // The input is pre-filled with the old name — select all and clear it first.
+    await input.click();
+    await browser.keys(["Control", "a"]);
+    await browser.keys(["Delete"]);
+    await browser.pause(300);
+    await slowTypeInput(input, newName);
+    await browser.pause(500);
+    await browser.keys(["Enter"]);
+    await (await $(`[data-entry-name='${newName}']`)).waitForExist({ timeout: 10_000 });
+}
+
+/** Delete an entry through the right-click menu + confirm dialog. */
+async function deleteDemo(name: string): Promise<void> {
+    await openRowMenu(name);
+    await clickMenuItem("Delete");
+    const confirm = await $("[data-testid='explorer-delete-confirm-button']");
+    await confirm.waitForClickable({ timeout: 5_000 });
+    await browser.pause(800); // let the confirm dialog register
+    await rippleClick("[data-testid='explorer-delete-confirm-button']");
+    await browser.waitUntil(
+        async () => !(await (await $(`[data-entry-name='${name}']`)).isExisting()),
+        { timeout: 10_000, timeoutMsg: `entry '${name}' still present after delete` },
+    );
 }
 
 /** Run a split shortcut, find the newly-created pane, wait for its prompt, and
@@ -391,11 +486,8 @@ describe("screenshots", () => {
 
         // 2. Split vertically (⌘D, side-by-side) → whoami.
         await splitAndType(() => cmd("d"), "whoami", "⌘ D  ·  Split right");
-        // 3. Split horizontally (⇧⌘D, stacked) → pwd.
-        await splitAndType(() => cmdShift("d"), "pwd", "⇧ ⌘ D  ·  Split down");
-        await browser.pause(1200);
 
-        // 4. Hosts → open the Explorer on the SAME host (so it shows the file
+        // 3. Hosts → open the Explorer on the SAME host (so it shows the file
         //    the terminal just created).
         await rippleClick("[aria-label='Hosts']");
         await waitForDashboard();
@@ -404,16 +496,18 @@ describe("screenshots", () => {
         await waitForExplorer();
         await browser.pause(1200);
 
-        // 5. Create a file, then rename it.
-        await createFile("anysp.txt");
-        await browser.pause(1000);
-        await renameEntry("anysp.txt", "anyscp.txt");
-        await browser.pause(1000);
+        // 5. Create a file (slow, visible), then rename it via the right-click
+        //    menu — both paused enough to read in the gif.
+        await createFileDemo("anysp.txt");
+        await browser.pause(1300);
+        await renameDemo("anysp.txt", "anyscp.txt");
+        await browser.pause(1300);
 
-        // 6. Delete the file created earlier from the terminal.
+        // 6. Delete the file the terminal created — via the right-click menu so
+        //    the context menu + confirm dialog are both on screen.
         await refreshExplorer();
-        await browser.pause(500);
-        await deleteEntry("terminal-test");
+        await browser.pause(700);
+        await deleteDemo("terminal-test");
         await browser.pause(1600);
     });
 });
