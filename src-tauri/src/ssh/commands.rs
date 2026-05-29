@@ -1,7 +1,7 @@
 use crate::db::HostDb;
 use crate::ssh::keys::SshKeyInfo;
 use crate::ssh::manager::SshManager;
-use crate::types::{AuthMethod, HostConfig, SessionId, SshError};
+use crate::types::{AuthMethod, BastionConfig, HostConfig, SessionId, SshError};
 use crate::vault;
 use std::sync::Arc;
 use tauri::{AppHandle, State};
@@ -149,7 +149,56 @@ pub async fn connect_saved_host(
         .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?;
 
     // -----------------------------------------------------------------
-    // 3. Build HostConfig and open the SSH connection.
+    // 3. Resolve bastion config from proxy_jump JSON (if present).
+    // -----------------------------------------------------------------
+    let bastion = if let Some(ref proxy_json) = saved_host.proxy_jump {
+        match serde_json::from_str::<serde_json::Value>(proxy_json) {
+            Ok(val) => {
+                let bastion_host = val["host"].as_str().unwrap_or_default().to_string();
+                let bastion_port = val["port"].as_u64().unwrap_or(22) as u16;
+                let bastion_username = val["username"].as_str().unwrap_or_default().to_string();
+                let bastion_auth_type = val["auth_type"].as_str().unwrap_or("password").to_string();
+                let bastion_key_path = val["key_path"].as_str().map(|s| s.to_string());
+
+                // Resolve bastion credentials from keychain
+                let bastion_vault_key = format!("bastion:{}", host_id);
+                let bastion_auth = tokio::task::spawn_blocking(move || -> AuthMethod {
+                    match bastion_auth_type.as_str() {
+                        "privateKey" => {
+                            let path = bastion_key_path.unwrap_or_default();
+                            let passphrase = match vault::get_credential(&bastion_vault_key) {
+                                Ok(vault::StoredCredential::KeyPassphrase { passphrase }) => Some(passphrase),
+                                _ => None,
+                            };
+                            AuthMethod::PrivateKey { key_path: path, passphrase }
+                        }
+                        _ => {
+                            let password = match vault::get_credential(&bastion_vault_key) {
+                                Ok(vault::StoredCredential::Password { password }) => password,
+                                _ => String::new(),
+                            };
+                            AuthMethod::Password { password }
+                        }
+                    }
+                })
+                .await
+                .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?;
+
+                Some(BastionConfig {
+                    host: bastion_host,
+                    port: bastion_port,
+                    username: bastion_username,
+                    auth_method: bastion_auth,
+                })
+            }
+            Err(_) => None, // Invalid JSON — skip bastion
+        }
+    } else {
+        None
+    };
+
+    // -----------------------------------------------------------------
+    // 4. Build HostConfig and open the SSH connection.
     // -----------------------------------------------------------------
     let config = HostConfig {
         host: saved_host.host,
@@ -164,6 +213,7 @@ pub async fn connect_saved_host(
         keep_alive_interval: saved_host.keep_alive_interval,
         default_shell: saved_host.default_shell,
         startup_command: saved_host.startup_command,
+        bastion,
     };
 
     let session_id = state.connect(config, app_handle).await?;
@@ -220,6 +270,52 @@ pub async fn connect_saved_host_no_pty(
         .await
         .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?;
 
+    // Resolve bastion config
+    let bastion = if let Some(ref proxy_json) = saved_host.proxy_jump {
+        match serde_json::from_str::<serde_json::Value>(proxy_json) {
+            Ok(val) => {
+                let bastion_host = val["host"].as_str().unwrap_or_default().to_string();
+                let bastion_port = val["port"].as_u64().unwrap_or(22) as u16;
+                let bastion_username = val["username"].as_str().unwrap_or_default().to_string();
+                let bastion_auth_type = val["auth_type"].as_str().unwrap_or("password").to_string();
+                let bastion_key_path = val["key_path"].as_str().map(|s| s.to_string());
+
+                let bastion_vault_key = format!("bastion:{}", host_id);
+                let bastion_auth = tokio::task::spawn_blocking(move || -> AuthMethod {
+                    match bastion_auth_type.as_str() {
+                        "privateKey" => {
+                            let path = bastion_key_path.unwrap_or_default();
+                            let passphrase = match vault::get_credential(&bastion_vault_key) {
+                                Ok(vault::StoredCredential::KeyPassphrase { passphrase }) => Some(passphrase),
+                                _ => None,
+                            };
+                            AuthMethod::PrivateKey { key_path: path, passphrase }
+                        }
+                        _ => {
+                            let password = match vault::get_credential(&bastion_vault_key) {
+                                Ok(vault::StoredCredential::Password { password }) => password,
+                                _ => String::new(),
+                            };
+                            AuthMethod::Password { password }
+                        }
+                    }
+                })
+                .await
+                .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?;
+
+                Some(BastionConfig {
+                    host: bastion_host,
+                    port: bastion_port,
+                    username: bastion_username,
+                    auth_method: bastion_auth,
+                })
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
     let config = HostConfig {
         host: saved_host.host,
         port: saved_host.port,
@@ -229,6 +325,7 @@ pub async fn connect_saved_host_no_pty(
         keep_alive_interval: None,
         default_shell: None,
         startup_command: None,
+        bastion,
     };
 
     state.connect_no_pty(config).await

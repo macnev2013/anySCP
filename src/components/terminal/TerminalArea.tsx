@@ -1,11 +1,13 @@
-import type { LayoutNode } from "../../types";
-import { Terminal } from "./Terminal";
-import { SplitContainer } from "./SplitContainer";
-import { DisconnectOverlay } from "./DisconnectOverlay";
-import { TerminalSearchBar } from "./TerminalSearchBar";
-import { PaneHeader } from "./PaneHeader";
 import { useSessionStore } from "../../stores/session-store";
 import { useTerminalSearchStore } from "../../stores/terminal-search-store";
+import { useUiStore } from "../../stores/ui-store";
+import type { LayoutNode } from "../../types";
+import { DisconnectOverlay } from "./DisconnectOverlay";
+import { HostPickerDropdown } from "./HostPickerDropdown";
+import { PaneHeader } from "./PaneHeader";
+import { SplitContainer } from "./SplitContainer";
+import { Terminal } from "./Terminal";
+import { TerminalSearchBar } from "./TerminalSearchBar";
 
 interface TerminalAreaProps {
   node: LayoutNode;
@@ -15,6 +17,7 @@ interface TerminalAreaProps {
 
 export function TerminalPane({ sessionId }: { sessionId: string }) {
   const session = useSessionStore((s) => s.sessions.get(sessionId));
+  const isPending = useUiStore((s) => s.pendingPanes.has(sessionId));
   const isActive = useSessionStore((s) => s.activeSessionId === sessionId);
   const isZoomed = useSessionStore((s) => s.zoomedPaneId === sessionId);
   const hasSplits = useSessionStore((s) => {
@@ -25,6 +28,24 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
   });
   const setActiveSession = useSessionStore((s) => s.setActiveSession);
   const searchOpen = useTerminalSearchStore((s) => s.openSessions.has(sessionId));
+
+  // Pending pane — show embedded host picker instead of terminal
+  if (isPending) {
+    return (
+      <div
+        className={[
+          "group/pane flex flex-col rounded-lg overflow-hidden border",
+          "transition-[border-color,box-shadow] duration-[var(--duration-fast)]",
+          "relative h-full w-full border-border/60",
+        ].join(" ")}
+      >
+        <PaneHeader sessionId={sessionId} isPending />
+        <div className="relative flex-1 min-h-0">
+          <HostPickerDropdown pendingId={sessionId} />
+        </div>
+      </div>
+    );
+  }
 
   const showOverlay =
     session?.status === "Disconnected" || session?.status === "Error";

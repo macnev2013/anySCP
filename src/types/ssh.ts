@@ -5,6 +5,16 @@ export type AuthMethod =
   | { type: "privateKey"; key_path: string; passphrase?: string }
   | { type: "privateKeyData"; key_data: string; passphrase?: string };
 
+export type BastionAuthType = "password" | "privateKey";
+
+export interface BastionConfig {
+  host: string;
+  port: number;
+  username: string;
+  auth_type: BastionAuthType;
+  key_path?: string;
+}
+
 export interface HostConfig {
   host: string;
   port: number;
@@ -14,6 +24,7 @@ export interface HostConfig {
   keep_alive_interval?: number;
   default_shell?: string;
   startup_command?: string;
+  bastion?: BastionConfig;
 }
 
 export type ConnectionStatus =
@@ -29,6 +40,7 @@ export interface Session {
   status: ConnectionStatus;
   statusMessage?: string;
   label: string;
+  isLocal?: boolean;
 }
 
 export interface SshOutputPayload {

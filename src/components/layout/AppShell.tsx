@@ -1,26 +1,25 @@
 import { useEffect, useMemo } from "react";
-import { useTabStore } from "../../stores/tab-store";
-import { useSessionStore } from "../../stores/session-store";
-import { useTerminalSearchStore } from "../../stores/terminal-search-store";
-import { useSettingsStore } from "../../stores/settings-store";
-import { useUiStore } from "../../stores/ui-store";
-import { useKeyboardShortcuts } from "../../hooks/use-keyboard-shortcuts";
-import { useSshStatus } from "../../hooks/use-ssh-status";
-import { useSftpTransfers } from "../../hooks/use-sftp-transfers";
 import type { ShortcutDef } from "../../hooks/use-keyboard-shortcuts";
+import { useKeyboardShortcuts } from "../../hooks/use-keyboard-shortcuts";
+import { useSftpTransfers } from "../../hooks/use-sftp-transfers";
+import { useSshStatus } from "../../hooks/use-ssh-status";
+import { useSessionStore } from "../../stores/session-store";
+import { useSettingsStore } from "../../stores/settings-store";
+import { useTabStore } from "../../stores/tab-store";
+import { useTerminalSearchStore } from "../../stores/terminal-search-store";
+import { useUiStore } from "../../stores/ui-store";
 import { Sidebar } from "../sidebar";
 import { TerminalArea } from "../terminal";
 import { UnifiedTabBar } from "./UnifiedTabBar";
 
-import { HostsDashboard, HostEditModal } from "../dashboard";
-import { NEW_HOST_ID } from "../dashboard/HostEditModal";
+import { usePortForwardEvents } from "../../hooks/use-port-forward-events";
+import { HostEditModal, HostsDashboard } from "../dashboard";
+import { HistoryPage } from "../history";
+import { PortForwardingPage } from "../port-forwarding";
+import { SettingsPage } from "../settings";
+import { ExplorerPage } from "../sftp";
 import { SnippetsPage } from "../snippets";
 import { SnippetPalette } from "../snippets/SnippetPalette";
-import { ExplorerPage } from "../sftp";
-import { SettingsPage } from "../settings";
-import { PortForwardingPage } from "../port-forwarding";
-import { HistoryPage } from "../history";
-import { usePortForwardEvents } from "../../hooks/use-port-forward-events";
 
 export function AppShell() {
   const activeTabId = useTabStore((s) => s.activeTabId);
@@ -38,8 +37,6 @@ export function AppShell() {
     }
   }, [activeTabId, allTabs]);
 
-  const openNewHost = () => setEditingHostId(NEW_HOST_ID);
-
   const shortcuts = useMemo<ShortcutDef[]>(
     () => [
       {
@@ -50,7 +47,13 @@ export function AppShell() {
       {
         key: "t",
         meta: true,
-        action: openNewHost,
+        action: () => {
+          // New tab with embedded host picker
+          const pendingId = crypto.randomUUID();
+          useUiStore.getState().addPendingPane(pendingId);
+          useSessionStore.getState().addPendingTab(pendingId);
+          useTabStore.getState().addTab({ type: "terminal", id: pendingId, label: "New Connection" });
+        },
       },
       {
         key: "w",
@@ -80,7 +83,12 @@ export function AppShell() {
             void (async () => {
               try {
                 const { invoke } = await import("@tauri-apps/api/core");
-                await invoke("ssh_disconnect", { sessionId: activeSessionId });
+                const sess = useSessionStore.getState().sessions.get(activeSessionId);
+                if (sess?.isLocal) {
+                  await invoke("local_disconnect", { sessionId: activeSessionId });
+                } else {
+                  await invoke("ssh_disconnect", { sessionId: activeSessionId });
+                }
               } catch { /* already disconnected */ }
 
               if (isInSplit) {
@@ -147,15 +155,26 @@ export function AppShell() {
         key: "d",
         meta: true,
         action: () => {
-          const { activeSessionId } = useSessionStore.getState();
+          const { activeSessionId, sessions } = useSessionStore.getState();
           if (!activeSessionId) return;
+          const isLocal = sessions.get(activeSessionId)?.isLocal === true;
           void (async () => {
             try {
               const { invoke } = await import("@tauri-apps/api/core");
-              const newId = await invoke<string>("ssh_split_session", {
-                sourceSessionId: activeSessionId,
-              });
+              let newId: string;
+              if (isLocal) {
+                newId = await invoke<string>("local_open_pty");
+              } else {
+                newId = await invoke<string>("ssh_split_session", {
+                  sourceSessionId: activeSessionId,
+                });
+              }
               useSessionStore.getState().splitPane("horizontal", activeSessionId, newId);
+              if (isLocal) {
+                const s = useSessionStore.getState().sessions;
+                const ns = s.get(newId);
+                if (ns) s.set(newId, { ...ns, isLocal: true });
+              }
             } catch (err) {
               console.error("Split failed:", err);
             }
@@ -168,15 +187,26 @@ export function AppShell() {
         meta: true,
         shift: true,
         action: () => {
-          const { activeSessionId } = useSessionStore.getState();
+          const { activeSessionId, sessions } = useSessionStore.getState();
           if (!activeSessionId) return;
+          const isLocal = sessions.get(activeSessionId)?.isLocal === true;
           void (async () => {
             try {
               const { invoke } = await import("@tauri-apps/api/core");
-              const newId = await invoke<string>("ssh_split_session", {
-                sourceSessionId: activeSessionId,
-              });
+              let newId: string;
+              if (isLocal) {
+                newId = await invoke<string>("local_open_pty");
+              } else {
+                newId = await invoke<string>("ssh_split_session", {
+                  sourceSessionId: activeSessionId,
+                });
+              }
               useSessionStore.getState().splitPane("vertical", activeSessionId, newId);
+              if (isLocal) {
+                const s = useSessionStore.getState().sessions;
+                const ns = s.get(newId);
+                if (ns) s.set(newId, { ...ns, isLocal: true });
+              }
             } catch (err) {
               console.error("Split failed:", err);
             }
@@ -212,6 +242,32 @@ export function AppShell() {
         action: () => {
           useUiStore.getState().toggleSnippetPanel();
         },
+      },
+      // ─── New tab / split with host picker ──────────────────────────
+      {
+        key: "n",
+        meta: true,
+        action: () => {
+          // New tab with embedded host picker
+          const pendingId = crypto.randomUUID();
+          useUiStore.getState().addPendingPane(pendingId);
+          useSessionStore.getState().addPendingTab(pendingId);
+          useTabStore.getState().addTab({ type: "terminal", id: pendingId, label: "New Connection" });
+        },
+      },
+      {
+        key: "n",
+        meta: true,
+        shift: true,
+        action: () => {
+          const { activeSessionId } = useSessionStore.getState();
+          if (!activeSessionId) return;
+          // Split pane with embedded host picker in the new half
+          const pendingId = crypto.randomUUID();
+          useUiStore.getState().addPendingPane(pendingId);
+          useSessionStore.getState().addPendingSplit("horizontal", activeSessionId, pendingId);
+        },
+        when: () => useTabStore.getState().tabs.get(useTabStore.getState().activeTabId ?? "")?.type === "terminal",
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
