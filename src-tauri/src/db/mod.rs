@@ -1,6 +1,6 @@
 pub mod commands;
 
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tracing::instrument;
@@ -174,10 +174,8 @@ impl HostDb {
             .map_err(|e| DbError::InitError(format!("could not set PRAGMAs: {e}")))?;
 
         // Bootstrap the _meta table used by the migration system.
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT);",
-        )
-        .map_err(|e| DbError::InitError(format!("could not create _meta table: {e}")))?;
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT);")
+            .map_err(|e| DbError::InitError(format!("could not create _meta table: {e}")))?;
 
         Self::run_migrations(&conn)
             .map_err(|e| DbError::InitError(format!("could not run migrations: {e}")))?;
@@ -260,7 +258,10 @@ impl HostDb {
             conn.execute("ALTER TABLE saved_hosts ADD COLUMN notes TEXT", [])?;
             conn.execute("ALTER TABLE saved_hosts ADD COLUMN environment TEXT", [])?;
             conn.execute("ALTER TABLE saved_hosts ADD COLUMN os_type TEXT", [])?;
-            conn.execute("ALTER TABLE saved_hosts ADD COLUMN startup_command TEXT", [])?;
+            conn.execute(
+                "ALTER TABLE saved_hosts ADD COLUMN startup_command TEXT",
+                [],
+            )?;
             conn.execute("ALTER TABLE saved_hosts ADD COLUMN proxy_jump TEXT", [])?;
             conn.execute(
                 "ALTER TABLE saved_hosts ADD COLUMN keep_alive_interval INTEGER",
@@ -361,7 +362,9 @@ impl HostDb {
                 [],
             )?;
 
-            tracing::info!("migration 5→6 applied: created snippet_folders, snippets, FTS5, triggers");
+            tracing::info!(
+                "migration 5→6 applied: created snippet_folders, snippets, FTS5, triggers"
+            );
         }
 
         if version < 7 {
@@ -444,7 +447,9 @@ impl HostDb {
             conn.execute_batch(
                 "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '11');",
             )?;
-            tracing::info!("migration 10→11 applied: ensured color, environment, notes on s3_connections");
+            tracing::info!(
+                "migration 10→11 applied: ensured color, environment, notes on s3_connections"
+            );
         }
 
         Ok(())
@@ -458,7 +463,10 @@ impl HostDb {
     /// is fully replaced; `created_at` is preserved by the caller-supplied value.
     #[instrument(skip(self), fields(id = %host.id))]
     pub fn save_host(&self, host: &SavedHost) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         conn.execute(
             "INSERT INTO saved_hosts (
                  id, label, host, port, username, auth_type, group_id, created_at, updated_at,
@@ -522,7 +530,10 @@ impl HostDb {
     /// Return all saved hosts ordered by label ascending.
     #[instrument(skip(self))]
     pub fn list_hosts(&self) -> Result<Vec<SavedHost>, DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         let mut stmt = conn.prepare(
             "SELECT id, label, host, port, username, auth_type, group_id, created_at, updated_at,
                     key_path, color, notes, environment, os_type,
@@ -565,7 +576,10 @@ impl HostDb {
     /// row matched so callers can surface a meaningful error to the frontend.
     #[instrument(skip(self), fields(id = %id))]
     pub fn delete_host(&self, id: &str) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         let affected = conn.execute("DELETE FROM saved_hosts WHERE id = ?1", params![id])?;
         if affected == 0 {
             return Err(DbError::NotFound(id.to_string()));
@@ -577,7 +591,10 @@ impl HostDb {
     /// consistent with Rust conventions for optional lookups.
     #[instrument(skip(self), fields(id = %id))]
     pub fn get_host(&self, id: &str) -> Result<Option<SavedHost>, DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         let mut stmt = conn.prepare(
             "SELECT id, label, host, port, username, auth_type, group_id, created_at, updated_at,
                     key_path, color, notes, environment, os_type,
@@ -625,10 +642,13 @@ impl HostDb {
     // -----------------------------------------------------------------------
 
     /// Record a successful connection for `host_id` and prune the table so
-    /// it never exceeds 50 rows total.
+    /// it never exceeds 500 rows total.
     #[instrument(skip(self), fields(host_id = %host_id))]
     pub fn record_connection(&self, host_id: &str) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         conn.execute(
             "INSERT INTO connection_history (host_id) VALUES (?1)",
             params![host_id],
@@ -657,7 +677,10 @@ impl HostDb {
     /// ordered newest-first.
     #[instrument(skip(self), fields(limit = %limit))]
     pub fn list_recent_connections(&self, limit: u32) -> Result<Vec<RecentConnection>, DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         // For each host_id select only the single most-recent connected_at,
         // then join with saved_hosts and sort the result set newest-first.
         let mut stmt = conn.prepare(
@@ -693,7 +716,10 @@ impl HostDb {
         limit: u32,
         offset: u32,
     ) -> Result<Vec<ConnectionHistoryEntry>, DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
 
         if let Some(hid) = host_id {
             let mut stmt = conn.prepare(
@@ -738,7 +764,10 @@ impl HostDb {
     /// Insert a new group record.
     #[instrument(skip(self), fields(id = %group.id))]
     pub fn create_group(&self, group: &HostGroup) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         conn.execute(
             "INSERT INTO host_groups (id, name, color, icon, sort_order, default_username, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -759,7 +788,10 @@ impl HostDb {
     /// Update an existing group record.  All mutable fields are replaced.
     #[instrument(skip(self), fields(id = %group.id))]
     pub fn update_group(&self, group: &HostGroup) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         let affected = conn.execute(
             "UPDATE host_groups
              SET name             = ?2,
@@ -788,7 +820,10 @@ impl HostDb {
     /// Return all groups ordered by `sort_order` ascending, then by name.
     #[instrument(skip(self))]
     pub fn list_groups(&self) -> Result<Vec<HostGroup>, DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         let mut stmt = conn.prepare(
             "SELECT id, name, color, icon, sort_order, default_username, created_at, updated_at
              FROM host_groups
@@ -816,7 +851,10 @@ impl HostDb {
     /// `group_id` is set to NULL) rather than deleted.
     #[instrument(skip(self), fields(id = %id))]
     pub fn delete_group(&self, id: &str) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         let affected = conn.execute("DELETE FROM host_groups WHERE id = ?1", params![id])?;
         if affected == 0 {
             return Err(DbError::NotFound(id.to_string()));
@@ -827,7 +865,10 @@ impl HostDb {
     /// Delete a group and ALL hosts that belong to it.
     #[instrument(skip(self), fields(id = %id))]
     pub fn delete_group_with_hosts(&self, id: &str) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         // Delete hosts first (before the group, since FK is ON DELETE SET NULL)
         conn.execute("DELETE FROM saved_hosts WHERE group_id = ?1", params![id])?;
         let affected = conn.execute("DELETE FROM host_groups WHERE id = ?1", params![id])?;
@@ -845,7 +886,10 @@ impl HostDb {
     /// fully replaced; `created_at` is preserved by the caller-supplied value.
     #[instrument(skip(self), fields(id = %snippet.id))]
     pub fn save_snippet(&self, snippet: &Snippet) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         conn.execute(
             "INSERT INTO snippets (
                  id, name, command, description, folder_id, tags, variables,
@@ -886,7 +930,10 @@ impl HostDb {
     /// Look up a single snippet by id.  Returns `None` when not found.
     #[instrument(skip(self), fields(id = %id))]
     pub fn get_snippet(&self, id: &str) -> Result<Option<Snippet>, DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         let mut stmt = conn.prepare(
             "SELECT id, name, command, description, folder_id, tags, variables,
                     is_dangerous, use_count, last_used_at, sort_order, created_at, updated_at
@@ -925,7 +972,10 @@ impl HostDb {
     /// ordered by `sort_order ASC, name ASC`.
     #[instrument(skip(self), fields(folder_id = ?folder_id))]
     pub fn list_snippets(&self, folder_id: Option<&str>) -> Result<Vec<Snippet>, DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
 
         let sql = if folder_id.is_some() {
             "SELECT id, name, command, description, folder_id, tags, variables,
@@ -973,7 +1023,10 @@ impl HostDb {
     /// no row matched.
     #[instrument(skip(self), fields(id = %id))]
     pub fn delete_snippet(&self, id: &str) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         let affected = conn.execute("DELETE FROM snippets WHERE id = ?1", params![id])?;
         if affected == 0 {
             return Err(DbError::NotFound(id.to_string()));
@@ -984,7 +1037,10 @@ impl HostDb {
     /// Increment `use_count` and update `last_used_at` for the given snippet.
     #[instrument(skip(self), fields(id = %id))]
     pub fn record_snippet_use(&self, id: &str) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         conn.execute(
             "UPDATE snippets
              SET use_count    = use_count + 1,
@@ -1002,8 +1058,15 @@ impl HostDb {
     /// typeahead results.  Results are ordered by FTS rank (best match first)
     /// and capped at `limit` rows.
     #[instrument(skip(self), fields(query = %query, limit = %limit))]
-    pub fn search_snippets(&self, query: &str, limit: u32) -> Result<Vec<SnippetSearchResult>, DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+    pub fn search_snippets(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<SnippetSearchResult>, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
 
         // Build FTS5 prefix query: "git log" → "git* log*"
         let fts_query = query
@@ -1056,7 +1119,10 @@ impl HostDb {
     /// it is fully replaced.
     #[instrument(skip(self), fields(id = %folder.id))]
     pub fn save_snippet_folder(&self, folder: &SnippetFolder) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         conn.execute(
             "INSERT INTO snippet_folders (id, name, parent_id, color, icon, sort_order, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
@@ -1084,7 +1150,10 @@ impl HostDb {
     /// Return all snippet folders ordered by `sort_order ASC, name ASC`.
     #[instrument(skip(self))]
     pub fn list_snippet_folders(&self) -> Result<Vec<SnippetFolder>, DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         let mut stmt = conn.prepare(
             "SELECT id, name, parent_id, color, icon, sort_order, created_at, updated_at
              FROM snippet_folders
@@ -1113,7 +1182,10 @@ impl HostDb {
     /// this folder are orphaned rather than deleted.
     #[instrument(skip(self), fields(id = %id))]
     pub fn delete_snippet_folder(&self, id: &str) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         let affected = conn.execute("DELETE FROM snippet_folders WHERE id = ?1", params![id])?;
         if affected == 0 {
             return Err(DbError::NotFound(id.to_string()));
@@ -1127,7 +1199,10 @@ impl HostDb {
 
     /// Save a single setting. Upserts (insert or replace).
     pub fn save_setting(&self, key: &str, value: &str) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         conn.execute(
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
             params![key, value],
@@ -1139,6 +1214,7 @@ impl HostDb {
     // Port Forwarding Rules
     // -----------------------------------------------------------------------
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_pf_rule(
         &self,
         id: &str,
@@ -1152,7 +1228,10 @@ impl HostDb {
         remote_port: u32,
         auto_start: bool,
     ) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         conn.execute(
             "INSERT INTO port_forwarding_rules (id, host_id, label, description, forward_type, bind_address, local_port, remote_host, remote_port, auto_start)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -1161,6 +1240,7 @@ impl HostDb {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_pf_rule(
         &self,
         id: &str,
@@ -1172,18 +1252,26 @@ impl HostDb {
         remote_port: u32,
         auto_start: bool,
     ) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         let affected = conn.execute(
             "UPDATE port_forwarding_rules SET label=?2, description=?3, bind_address=?4, local_port=?5, remote_host=?6, remote_port=?7, auto_start=?8, updated_at=datetime('now') WHERE id=?1",
             params![id, label, description, bind_address, local_port as i64, remote_host, remote_port as i64, auto_start as i32],
         )?;
-        if affected == 0 { return Err(DbError::NotFound(id.to_string())); }
+        if affected == 0 {
+            return Err(DbError::NotFound(id.to_string()));
+        }
         Ok(())
     }
 
     /// Update last_used_at timestamp for a rule.
     pub fn touch_pf_rule(&self, id: &str) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         conn.execute(
             "UPDATE port_forwarding_rules SET last_used_at=datetime('now') WHERE id=?1",
             params![id],
@@ -1192,14 +1280,28 @@ impl HostDb {
     }
 
     pub fn delete_pf_rule(&self, id: &str) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
-        let affected = conn.execute("DELETE FROM port_forwarding_rules WHERE id = ?1", params![id])?;
-        if affected == 0 { return Err(DbError::NotFound(id.to_string())); }
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let affected = conn.execute(
+            "DELETE FROM port_forwarding_rules WHERE id = ?1",
+            params![id],
+        )?;
+        if affected == 0 {
+            return Err(DbError::NotFound(id.to_string()));
+        }
         Ok(())
     }
 
-    pub fn list_pf_rules(&self, host_id: Option<&str>) -> Result<Vec<crate::portforward::PortForwardRule>, DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+    pub fn list_pf_rules(
+        &self,
+        host_id: Option<&str>,
+    ) -> Result<Vec<crate::portforward::PortForwardRule>, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         let sql_all = "SELECT id, host_id, label, forward_type, bind_address, local_port, remote_host, remote_port, auto_start, enabled, created_at, description, last_used_at, total_bytes FROM port_forwarding_rules ORDER BY sort_order";
         let sql_host = "SELECT id, host_id, label, forward_type, bind_address, local_port, remote_host, remote_port, auto_start, enabled, created_at, description, last_used_at, total_bytes FROM port_forwarding_rules WHERE host_id = ?1 ORDER BY sort_order";
 
@@ -1237,6 +1339,7 @@ impl HostDb {
     // S3 Connections
     // -----------------------------------------------------------------------
 
+    #[allow(clippy::too_many_arguments)]
     pub fn save_s3_connection(
         &self,
         id: &str,
@@ -1251,7 +1354,10 @@ impl HostDb {
         environment: Option<&str>,
         notes: Option<&str>,
     ) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         conn.execute(
             "INSERT OR REPLACE INTO s3_connections (id, label, provider, region, endpoint, bucket, path_style, group_id, color, environment, notes, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'))",
@@ -1261,7 +1367,10 @@ impl HostDb {
     }
 
     pub fn list_s3_connections(&self) -> Result<Vec<crate::s3::S3Connection>, DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         let mut stmt = conn.prepare(
             "SELECT id, label, provider, region, endpoint, bucket, path_style, group_id, color, environment, notes, created_at FROM s3_connections ORDER BY label"
         )?;
@@ -1285,14 +1394,20 @@ impl HostDb {
     }
 
     pub fn delete_s3_connection(&self, id: &str) -> Result<(), DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         conn.execute("DELETE FROM s3_connections WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     /// Load all settings as a list of (key, value) pairs.
     pub fn load_all_settings(&self) -> Result<Vec<(String, String)>, DbError> {
-        let conn = self.conn.lock().map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         let mut stmt = conn.prepare("SELECT key, value FROM app_settings")?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -1316,8 +1431,7 @@ mod tests {
     /// Create a HostDb in an isolated temp directory.  Returns the db and the
     /// path so the caller can keep the directory alive for the test duration.
     fn test_db() -> (HostDb, std::path::PathBuf) {
-        let dir = std::env::temp_dir()
-            .join(format!("anyscp_test_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("anyscp_test_{}", uuid::Uuid::new_v4()));
         let db = HostDb::new(&dir).expect("HostDb::new");
         (db, dir)
     }
@@ -1490,7 +1604,8 @@ mod tests {
         let h = sample_host("conn-host-1");
         db.save_host(&h).expect("save_host");
 
-        db.record_connection("conn-host-1").expect("record_connection");
+        db.record_connection("conn-host-1")
+            .expect("record_connection");
 
         let recent = db.list_recent_connections(10).expect("list_recent");
         assert_eq!(recent.len(), 1);
@@ -1528,7 +1643,8 @@ mod tests {
         for i in 0..5 {
             let h = sample_host(&format!("limit-host-{i}"));
             db.save_host(&h).expect("save_host");
-            db.record_connection(&format!("limit-host-{i}")).expect("record");
+            db.record_connection(&format!("limit-host-{i}"))
+                .expect("record");
         }
 
         let recent = db.list_recent_connections(3).expect("list_recent");
@@ -1536,14 +1652,14 @@ mod tests {
     }
 
     #[test]
-    fn record_connection_prunes_to_50_rows() {
+    fn record_connection_prunes_to_500_rows() {
         let (db, _dir) = test_db();
 
-        // Create one host and record 60 connections for it.
+        // Create one host and record 510 connections for it so pruning kicks in.
         let h = sample_host("prune-host");
         db.save_host(&h).expect("save_host");
 
-        for _ in 0..60 {
+        for _ in 0..510 {
             db.record_connection("prune-host").expect("record");
         }
 
@@ -1553,8 +1669,8 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM connection_history", [], |r| r.get(0))
             .expect("count");
         assert!(
-            count <= 50,
-            "expected at most 50 rows after pruning, got {count}"
+            count <= 500,
+            "expected at most 500 rows after pruning, got {count}"
         );
     }
 
@@ -1739,7 +1855,8 @@ mod tests {
     #[test]
     fn fts5_search_no_results() {
         let (db, _dir) = test_db();
-        db.save_snippet(&sample_snippet("snip-nomatch")).expect("save");
+        db.save_snippet(&sample_snippet("snip-nomatch"))
+            .expect("save");
 
         let results = db
             .search_snippets("zzz_definitely_not_present", 10)
@@ -1765,7 +1882,8 @@ mod tests {
         assert_eq!(before.folder_id.as_deref(), Some("folder-del"));
 
         // Deleting the folder must NULL out the snippet's folder_id.
-        db.delete_snippet_folder("folder-del").expect("delete folder");
+        db.delete_snippet_folder("folder-del")
+            .expect("delete folder");
 
         let after = db.get_snippet("snip-orphan").expect("get").expect("Some");
         assert!(

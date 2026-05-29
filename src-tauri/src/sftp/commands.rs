@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use russh_sftp::protocol::OpenFlags;
 use tauri::{AppHandle, Emitter, State};
@@ -9,19 +9,16 @@ use tracing::instrument;
 
 use crate::ssh::manager::SshManager;
 
+use super::transfer_manager::TransferManager;
 use super::{
     format_permissions, SftpEntry, SftpEntryType, SftpError, SftpManager, SftpSessionWrapper,
     TransferDirection, TransferInfo, TransferProgress, TransferStatus,
 };
-use super::transfer_manager::TransferManager;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Create a directory and all missing parents (like `mkdir -p`).
-async fn mkdir_p(
-    sftp: &russh_sftp::client::SftpSession,
-    path: &str,
-) -> Result<(), SftpError> {
+async fn mkdir_p(sftp: &russh_sftp::client::SftpSession, path: &str) -> Result<(), SftpError> {
     // Split into segments and create each level
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let mut current = String::new();
@@ -334,7 +331,10 @@ pub async fn sftp_delete(
             .map_err(|e| SftpError::RemoteIoError(e.to_string()))
     };
     if result.is_ok() {
-        crate::telemetry::capture("sftp_entry_deleted", serde_json::json!({ "is_dir": is_dir }));
+        crate::telemetry::capture(
+            "sftp_entry_deleted",
+            serde_json::json!({ "is_dir": is_dir }),
+        );
     }
     result
 }
@@ -354,7 +354,8 @@ pub async fn sftp_rename(
     };
 
     let sftp = sftp_arc.lock().await;
-    let result = sftp.rename(&old_path, &new_path)
+    let result = sftp
+        .rename(&old_path, &new_path)
         .await
         .map_err(|e| SftpError::RemoteIoError(e.to_string()));
     if result.is_ok() {
@@ -439,6 +440,7 @@ pub async fn sftp_download(
     Ok(transfer_id)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn download_task(
     sftp_arc: Arc<tokio::sync::Mutex<russh_sftp::client::SftpSession>>,
     remote_path: String,
@@ -597,6 +599,7 @@ pub async fn sftp_upload(
     Ok(transfer_id)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upload_task(
     sftp_arc: Arc<tokio::sync::Mutex<russh_sftp::client::SftpSession>>,
     local_path: String,
@@ -749,7 +752,11 @@ pub async fn sftp_edit_in_vscode(
     tokio::process::Command::new("code")
         .arg(&local_path)
         .spawn()
-        .map_err(|e| SftpError::LocalIoError(format!("Failed to open VS Code: {e}. Is 'code' in your PATH?")))?;
+        .map_err(|e| {
+            SftpError::LocalIoError(format!(
+                "Failed to open VS Code: {e}. Is 'code' in your PATH?"
+            ))
+        })?;
 
     crate::telemetry::capture("edit_in_vscode", serde_json::json!({ "source": "sftp" }));
 
@@ -761,7 +768,7 @@ pub async fn sftp_edit_in_vscode(
     let sftp_sid = sftp_session_id.clone();
 
     tokio::task::spawn_blocking(move || {
-        use notify::{Watcher, RecursiveMode, EventKind, Event, Config};
+        use notify::{Config, Event, EventKind, RecursiveMode, Watcher};
         use std::sync::mpsc;
 
         let (tx, rx) = mpsc::channel::<Event>();
@@ -773,7 +780,8 @@ pub async fn sftp_edit_in_vscode(
                 }
             },
             Config::default(),
-        ).expect("Failed to create file watcher");
+        )
+        .expect("Failed to create file watcher");
 
         watcher
             .watch(&local_path_bg, RecursiveMode::NonRecursive)
@@ -795,7 +803,7 @@ pub async fn sftp_edit_in_vscode(
                     let is_write = matches!(
                         event.kind,
                         EventKind::Modify(notify::event::ModifyKind::Data(_))
-                        | EventKind::Modify(notify::event::ModifyKind::Any)
+                            | EventKind::Modify(notify::event::ModifyKind::Any)
                     );
 
                     if !is_write {
@@ -821,7 +829,9 @@ pub async fn sftp_edit_in_vscode(
                                     let mut remote_file = sftp
                                         .open_with_flags(
                                             &remote_path,
-                                            OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+                                            OpenFlags::CREATE
+                                                | OpenFlags::WRITE
+                                                | OpenFlags::TRUNCATE,
                                         )
                                         .await?;
                                     remote_file.write_all(&contents).await?;
@@ -929,7 +939,10 @@ async fn copy_file_remote(
         .map_err(|e| SftpError::RemoteIoError(format!("Cannot open {src}: {e}")))?;
 
     let mut writer = sftp
-        .open_with_flags(dst, OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE)
+        .open_with_flags(
+            dst,
+            OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+        )
         .await
         .map_err(|e| SftpError::RemoteIoError(format!("Cannot create {dst}: {e}")))?;
 
@@ -1048,7 +1061,10 @@ pub async fn sftp_move_entries(
         new_paths.push(dest);
     }
 
-    crate::telemetry::capture("sftp_entries_moved", serde_json::json!({ "count": source_paths.len() }));
+    crate::telemetry::capture(
+        "sftp_entries_moved",
+        serde_json::json!({ "count": source_paths.len() }),
+    );
     Ok(new_paths)
 }
 
@@ -1096,7 +1112,10 @@ pub async fn sftp_copy_entries(
         new_paths.push(dest);
     }
 
-    crate::telemetry::capture("sftp_entries_copied", serde_json::json!({ "count": source_paths.len() }));
+    crate::telemetry::capture(
+        "sftp_entries_copied",
+        serde_json::json!({ "count": source_paths.len() }),
+    );
     Ok(new_paths)
 }
 
@@ -1121,7 +1140,10 @@ pub async fn sftp_enqueue_upload(
         .enqueue_upload(sftp_session_id, paths, remote_dir)
         .await;
     if result.is_ok() {
-        crate::telemetry::capture("sftp_upload_enqueued", serde_json::json!({ "file_count": file_count }));
+        crate::telemetry::capture(
+            "sftp_upload_enqueued",
+            serde_json::json!({ "file_count": file_count }),
+        );
     }
     result
 }
@@ -1142,7 +1164,10 @@ pub async fn sftp_enqueue_download(
         .enqueue_download(sftp_session_id, remote_paths, PathBuf::from(local_dir))
         .await;
     if result.is_ok() {
-        crate::telemetry::capture("sftp_download_enqueued", serde_json::json!({ "file_count": file_count }));
+        crate::telemetry::capture(
+            "sftp_download_enqueued",
+            serde_json::json!({ "file_count": file_count }),
+        );
     }
     result
 }

@@ -338,10 +338,9 @@ impl ScpTransferManager {
 
     #[instrument(skip(self), fields(transfer_id = %transfer_id))]
     pub fn cancel(&self, transfer_id: &str) -> Result<(), ScpError> {
-        let mut job = self
-            .jobs
-            .get_mut(transfer_id)
-            .ok_or_else(|| ScpError::SessionNotFound(format!("transfer not found: {transfer_id}")))?;
+        let mut job = self.jobs.get_mut(transfer_id).ok_or_else(|| {
+            ScpError::SessionNotFound(format!("transfer not found: {transfer_id}"))
+        })?;
         job.cancel_token.cancel();
         if job.status == TransferStatus::Queued {
             job.status = TransferStatus::Cancelled;
@@ -540,46 +539,104 @@ async fn execute_transfer(
         KindDesc::UploadFile {
             local_path,
             remote_path,
-        } => run_upload_file(jobs, job_id, &handle, &local_path, &remote_path, &cancel_token, app_handle).await,
+        } => {
+            run_upload_file(
+                jobs,
+                job_id,
+                &handle,
+                &local_path,
+                &remote_path,
+                &cancel_token,
+                app_handle,
+            )
+            .await
+        }
         KindDesc::UploadDir {
             local_path,
             remote_dir,
-        } => run_upload_dir(jobs, job_id, &handle, &local_path, &remote_dir, &cancel_token, app_handle).await,
+        } => {
+            run_upload_dir(
+                jobs,
+                job_id,
+                &handle,
+                &local_path,
+                &remote_dir,
+                &cancel_token,
+                app_handle,
+            )
+            .await
+        }
         KindDesc::DownloadFile {
             remote_path,
             local_path,
-        } => run_download_file(jobs, job_id, &handle, &remote_path, &local_path, &cancel_token, app_handle).await,
+        } => {
+            run_download_file(
+                jobs,
+                job_id,
+                &handle,
+                &remote_path,
+                &local_path,
+                &cancel_token,
+                app_handle,
+            )
+            .await
+        }
         KindDesc::DownloadDir {
             remote_path,
             local_dir,
-        } => run_download_dir(jobs, job_id, &handle, flavor, &remote_path, &local_dir, &cancel_token, app_handle).await,
+        } => {
+            run_download_dir(
+                jobs,
+                job_id,
+                &handle,
+                flavor,
+                &remote_path,
+                &local_dir,
+                &cancel_token,
+                app_handle,
+            )
+            .await
+        }
     };
 
     let (direction, total_bytes, files_total, bytes_done) = jobs
         .get(job_id)
-        .map(|j| (j.direction.clone(), j.total_bytes, j.files_total, j.bytes_transferred))
+        .map(|j| {
+            (
+                j.direction.clone(),
+                j.total_bytes,
+                j.files_total,
+                j.bytes_transferred,
+            )
+        })
         .unwrap_or((TransferDirection::Upload, 0, 0, 0));
 
     match result {
         Ok(()) => {
-            crate::telemetry::capture("transfer_completed", serde_json::json!({
-                "protocol": "scp",
-                "direction": if direction == TransferDirection::Upload { "upload" } else { "download" },
-                "total_bytes": total_bytes,
-                "files_total": files_total,
-            }));
+            crate::telemetry::capture(
+                "transfer_completed",
+                serde_json::json!({
+                    "protocol": "scp",
+                    "direction": if direction == TransferDirection::Upload { "upload" } else { "download" },
+                    "total_bytes": total_bytes,
+                    "files_total": files_total,
+                }),
+            );
             set_job_status(jobs, job_id, TransferStatus::Completed, None, app_handle);
         }
         Err(ScpError::TransferCancelled) => {
             set_job_status(jobs, job_id, TransferStatus::Cancelled, None, app_handle)
         }
         Err(e) => {
-            crate::telemetry::capture("transfer_failed", serde_json::json!({
-                "protocol": "scp",
-                "direction": if direction == TransferDirection::Upload { "upload" } else { "download" },
-                "bytes_transferred": bytes_done,
-                "total_bytes": total_bytes,
-            }));
+            crate::telemetry::capture(
+                "transfer_failed",
+                serde_json::json!({
+                    "protocol": "scp",
+                    "direction": if direction == TransferDirection::Upload { "upload" } else { "download" },
+                    "bytes_transferred": bytes_done,
+                    "total_bytes": total_bytes,
+                }),
+            );
             set_job_status(
                 jobs,
                 job_id,
@@ -592,10 +649,22 @@ async fn execute_transfer(
 }
 
 enum KindDesc {
-    UploadFile { local_path: PathBuf, remote_path: String },
-    UploadDir { local_path: PathBuf, remote_dir: String },
-    DownloadFile { remote_path: String, local_path: PathBuf },
-    DownloadDir { remote_path: String, local_dir: PathBuf },
+    UploadFile {
+        local_path: PathBuf,
+        remote_path: String,
+    },
+    UploadDir {
+        local_path: PathBuf,
+        remote_dir: String,
+    },
+    DownloadFile {
+        remote_path: String,
+        local_path: PathBuf,
+    },
+    DownloadDir {
+        remote_path: String,
+        local_dir: PathBuf,
+    },
 }
 
 // ─── Status / progress helpers ─────────────────────────────────────────────────
@@ -680,9 +749,15 @@ async fn run_upload_file(
     let jobs_cl = jobs.clone();
     let app_cl = app_handle.clone();
     let jid = job_id.to_string();
-    transfer::upload_file(handle.clone(), local_path, remote_path, cancel, move |done| {
-        report_progress(&jobs_cl, &jid, done, &app_cl);
-    })
+    transfer::upload_file(
+        handle.clone(),
+        local_path,
+        remote_path,
+        cancel,
+        move |done| {
+            report_progress(&jobs_cl, &jid, done, &app_cl);
+        },
+    )
     .await?;
     mark_file_done(jobs, job_id);
     Ok(())
@@ -706,9 +781,15 @@ async fn run_download_file(
     let jobs_cl = jobs.clone();
     let app_cl = app_handle.clone();
     let jid = job_id.to_string();
-    transfer::download_file(handle.clone(), remote_path, local_path, cancel, move |done| {
-        report_progress(&jobs_cl, &jid, done, &app_cl);
-    })
+    transfer::download_file(
+        handle.clone(),
+        remote_path,
+        local_path,
+        cancel,
+        move |done| {
+            report_progress(&jobs_cl, &jid, done, &app_cl);
+        },
+    )
     .await?;
     mark_file_done(jobs, job_id);
     Ok(())
@@ -775,6 +856,7 @@ async fn run_upload_dir(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_download_dir(
     jobs: &Arc<DashMap<String, TransferJobState>>,
     job_id: &str,

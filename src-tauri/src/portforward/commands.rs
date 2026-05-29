@@ -13,6 +13,7 @@ use super::{manager::PortForwardManager, ForwardType, PortForwardRule, TunnelSta
 
 #[tauri::command]
 #[instrument(skip(db))]
+#[allow(clippy::too_many_arguments)]
 pub async fn pf_create_rule(
     host_id: Option<String>,
     label: Option<String>,
@@ -51,10 +52,12 @@ pub async fn pf_create_rule(
         )
     })
     .await
-    .map_err(|e| DbError::InitError(format!("task panicked: {e}")))?
-    .map_err(|e| e)?;
+    .map_err(|e| DbError::InitError(format!("task panicked: {e}")))??;
 
-    crate::telemetry::capture("tunnel_rule_created", serde_json::json!({ "auto_start": auto_start }));
+    crate::telemetry::capture(
+        "tunnel_rule_created",
+        serde_json::json!({ "auto_start": auto_start }),
+    );
     Ok(PortForwardRule {
         id,
         host_id,
@@ -75,6 +78,7 @@ pub async fn pf_create_rule(
 
 #[tauri::command]
 #[instrument(skip(db))]
+#[allow(clippy::too_many_arguments)]
 pub async fn pf_update_rule(
     id: String,
     label: Option<String>,
@@ -88,7 +92,16 @@ pub async fn pf_update_rule(
 ) -> Result<(), DbError> {
     let db = Arc::clone(&db);
     task::spawn_blocking(move || {
-        db.update_pf_rule(&id, label.as_deref(), description.as_deref(), &bind_address, local_port, &remote_host, remote_port, auto_start)
+        db.update_pf_rule(
+            &id,
+            label.as_deref(),
+            description.as_deref(),
+            &bind_address,
+            local_port,
+            &remote_host,
+            remote_port,
+            auto_start,
+        )
     })
     .await
     .map_err(|e| DbError::InitError(format!("task panicked: {e}")))?
@@ -96,10 +109,7 @@ pub async fn pf_update_rule(
 
 #[tauri::command]
 #[instrument(skip(db))]
-pub async fn pf_delete_rule(
-    id: String,
-    db: State<'_, Arc<HostDb>>,
-) -> Result<(), DbError> {
+pub async fn pf_delete_rule(id: String, db: State<'_, Arc<HostDb>>) -> Result<(), DbError> {
     let db = Arc::clone(&db);
     let result = task::spawn_blocking(move || db.delete_pf_rule(&id))
         .await
@@ -126,6 +136,7 @@ pub async fn pf_list_rules(
 
 #[tauri::command]
 #[instrument(skip(pf_manager, ssh_manager, db))]
+#[allow(clippy::too_many_arguments)]
 pub async fn pf_start_tunnel(
     rule_id: String,
     host_id: String,
@@ -146,7 +157,9 @@ pub async fn pf_start_tunnel(
         .await
         .map_err(|e| crate::types::SshError::IoError(format!("task panicked: {e}")))?
         .map_err(|e| crate::types::SshError::IoError(e.to_string()))?
-        .ok_or_else(|| crate::types::SshError::SessionNotFound(format!("host not found: {host_id}")))?;
+        .ok_or_else(|| {
+            crate::types::SshError::SessionNotFound(format!("host not found: {host_id}"))
+        })?;
 
     // Resolve credentials from vault
     let vid = host_id.clone();
@@ -158,10 +171,15 @@ pub async fn pf_start_tunnel(
             "privateKey" => {
                 let path = key_path.unwrap_or_default();
                 let passphrase = match crate::vault::get_credential(&vid) {
-                    Ok(crate::vault::StoredCredential::KeyPassphrase { passphrase }) => Some(passphrase),
+                    Ok(crate::vault::StoredCredential::KeyPassphrase { passphrase }) => {
+                        Some(passphrase)
+                    }
                     _ => None,
                 };
-                AuthMethod::PrivateKey { key_path: path, passphrase }
+                AuthMethod::PrivateKey {
+                    key_path: path,
+                    passphrase,
+                }
             }
             _ => {
                 let password = match crate::vault::get_credential(&vid) {
@@ -181,7 +199,11 @@ pub async fn pf_start_tunnel(
         port: saved_host.port,
         username: saved_host.username,
         auth_method,
-        label: if saved_host.label.is_empty() { None } else { Some(saved_host.label) },
+        label: if saved_host.label.is_empty() {
+            None
+        } else {
+            Some(saved_host.label)
+        },
         keep_alive_interval: None,
         default_shell: None,
         startup_command: None,
@@ -196,7 +218,14 @@ pub async fn pf_start_tunnel(
     let _ = task::spawn_blocking(move || db_clone.touch_pf_rule(&rid)).await;
 
     let status = pf_manager
-        .start_tunnel(rule_id, handle, bind_address, local_port, remote_host, remote_port)
+        .start_tunnel(
+            rule_id,
+            handle,
+            bind_address,
+            local_port,
+            remote_host,
+            remote_port,
+        )
         .await?;
 
     crate::telemetry::capture("tunnel_started", serde_json::json!({}));

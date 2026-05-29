@@ -149,6 +149,7 @@ impl S3Manager {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn connect(
         &self,
         session_id: String,
@@ -160,14 +161,8 @@ impl S3Manager {
         secret_key: &str,
         path_style: bool,
     ) -> Result<(), S3Error> {
-        let credentials = Credentials::new(
-            Some(access_key),
-            Some(secret_key),
-            None,
-            None,
-            None,
-        )
-        .map_err(|e| S3Error::CredentialError(e.to_string()))?;
+        let credentials = Credentials::new(Some(access_key), Some(secret_key), None, None, None)
+            .map_err(|e| S3Error::CredentialError(e.to_string()))?;
 
         let region = if let Some(ep) = endpoint {
             Region::Custom {
@@ -187,13 +182,8 @@ impl S3Manager {
             bucket = bucket.with_path_style();
         }
 
-        self.sessions.insert(
-            session_id,
-            S3Session {
-                bucket,
-                label,
-            },
-        );
+        self.sessions
+            .insert(session_id, S3Session { bucket, label });
 
         Ok(())
     }
@@ -202,10 +192,7 @@ impl S3Manager {
         self.sessions.remove(session_id);
     }
 
-    pub fn get_bucket(
-        &self,
-        session_id: &str,
-    ) -> Result<Box<Bucket>, S3Error> {
+    pub fn get_bucket(&self, session_id: &str) -> Result<Box<Bucket>, S3Error> {
         let session = self
             .sessions
             .get(session_id)
@@ -213,25 +200,20 @@ impl S3Manager {
         Ok(session.bucket.clone())
     }
 
-    pub async fn switch_bucket(
-        &self,
-        session_id: &str,
-        bucket_name: &str,
-    ) -> Result<(), S3Error> {
+    pub async fn switch_bucket(&self, session_id: &str, bucket_name: &str) -> Result<(), S3Error> {
         let mut session = self
             .sessions
             .get_mut(session_id)
             .ok_or_else(|| S3Error::SessionNotFound(session_id.to_string()))?;
 
-        let creds = session.bucket.credentials().await
+        let creds = session
+            .bucket
+            .credentials()
+            .await
             .map_err(|e| S3Error::CredentialError(e.to_string()))?;
 
-        let new_bucket = Bucket::new(
-            bucket_name,
-            session.bucket.region().clone(),
-            creds,
-        )
-        .map_err(|e| S3Error::OperationError(e.to_string()))?;
+        let new_bucket = Bucket::new(bucket_name, session.bucket.region().clone(), creds)
+            .map_err(|e| S3Error::OperationError(e.to_string()))?;
 
         session.bucket = if session.bucket.is_path_style() {
             new_bucket.with_path_style()

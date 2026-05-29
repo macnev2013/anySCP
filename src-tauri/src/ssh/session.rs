@@ -60,15 +60,7 @@ impl SshSession {
             .map_err(|e| SshError::ChannelError(e.to_string()))?;
 
         channel
-            .request_pty(
-                false,
-                "xterm-256color",
-                cols,
-                rows,
-                0,
-                0,
-                &[],
-            )
+            .request_pty(false, "xterm-256color", cols, rows, 0, 0, &[])
             .await
             .map_err(|e| SshError::ChannelError(e.to_string()))?;
 

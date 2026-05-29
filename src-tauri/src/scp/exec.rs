@@ -47,11 +47,9 @@ pub async fn ssh_exec(
     while let Some(msg) = channel.wait().await {
         match msg {
             ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
-            ChannelMsg::ExtendedData { data, ext } => {
-                // ext = 1 is stderr per RFC 4254 §5.2.
-                if ext == 1 {
-                    stderr.extend_from_slice(&data);
-                }
+            // ext = 1 is stderr per RFC 4254 §5.2.
+            ChannelMsg::ExtendedData { data, ext: 1 } => {
+                stderr.extend_from_slice(&data);
             }
             ChannelMsg::ExitStatus { exit_status } => {
                 exit_code = Some(exit_status as i32);
@@ -99,9 +97,7 @@ pub async fn ssh_exec_str(
 // ─── Filesystem ops ──────────────────────────────────────────────────────────
 
 /// Resolve the remote home directory by echoing `$HOME`.
-pub async fn home_dir(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
-) -> Result<String, ScpError> {
+pub async fn home_dir(handle: Arc<Mutex<Handle<SshClientHandler>>>) -> Result<String, ScpError> {
     let out = ssh_exec_str(handle, r#"printf '%s' "$HOME""#).await?;
     if out.is_empty() {
         return Err(ScpError::RemoteIoError("$HOME is empty".into()));

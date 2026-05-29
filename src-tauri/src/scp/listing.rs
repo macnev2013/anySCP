@@ -166,15 +166,42 @@ fn rwx_to_mode(rwx: &str) -> u32 {
     }
     let mut mode: u32 = 0;
     // Read triads: owner, group, other.
-    if b[0] == 'r' { mode |= 0o400; }
-    if b[1] == 'w' { mode |= 0o200; }
-    match b[2] { 'x' => mode |= 0o100, 's' => mode |= 0o100 | 0o4000, 'S' => mode |= 0o4000, _ => {} }
-    if b[3] == 'r' { mode |= 0o040; }
-    if b[4] == 'w' { mode |= 0o020; }
-    match b[5] { 'x' => mode |= 0o010, 's' => mode |= 0o010 | 0o2000, 'S' => mode |= 0o2000, _ => {} }
-    if b[6] == 'r' { mode |= 0o004; }
-    if b[7] == 'w' { mode |= 0o002; }
-    match b[8] { 'x' => mode |= 0o001, 't' => mode |= 0o001 | 0o1000, 'T' => mode |= 0o1000, _ => {} }
+    if b[0] == 'r' {
+        mode |= 0o400;
+    }
+    if b[1] == 'w' {
+        mode |= 0o200;
+    }
+    match b[2] {
+        'x' => mode |= 0o100,
+        's' => mode |= 0o100 | 0o4000,
+        'S' => mode |= 0o4000,
+        _ => {}
+    }
+    if b[3] == 'r' {
+        mode |= 0o040;
+    }
+    if b[4] == 'w' {
+        mode |= 0o020;
+    }
+    match b[5] {
+        'x' => mode |= 0o010,
+        's' => mode |= 0o010 | 0o2000,
+        'S' => mode |= 0o2000,
+        _ => {}
+    }
+    if b[6] == 'r' {
+        mode |= 0o004;
+    }
+    if b[7] == 'w' {
+        mode |= 0o002;
+    }
+    match b[8] {
+        'x' => mode |= 0o001,
+        't' => mode |= 0o001 | 0o1000,
+        'T' => mode |= 0o1000,
+        _ => {}
+    }
     mode
 }
 
@@ -234,7 +261,15 @@ pub fn parse_gnu_listing(stdout: &[u8], dir: &str) -> Result<Vec<ScpEntry>, ScpE
         let size: u64 = parts[2].parse().unwrap_or(0);
         let modified: Option<u64> = parts[3].split('.').next().and_then(|s| s.parse().ok());
         let name = parts[4];
-        out.push(mk_entry(name, join_remote(dir, name), entry_type, is_symlink, permissions, size, modified));
+        out.push(mk_entry(
+            name,
+            join_remote(dir, name),
+            entry_type,
+            is_symlink,
+            permissions,
+            size,
+            modified,
+        ));
     }
     sort_entries(&mut out);
     Ok(out)
@@ -262,7 +297,15 @@ pub fn parse_statc_listing(stdout: &[u8], _dir: &str) -> Result<Vec<ScpEntry>, S
         let size: u64 = parts[2].parse().unwrap_or(0);
         let modified: Option<u64> = parts[3].parse().ok();
         let full = parts[4];
-        out.push(mk_entry(basename(full), full.to_string(), entry_type, is_symlink, permissions, size, modified));
+        out.push(mk_entry(
+            basename(full),
+            full.to_string(),
+            entry_type,
+            is_symlink,
+            permissions,
+            size,
+            modified,
+        ));
     }
     sort_entries(&mut out);
     Ok(out)
@@ -288,7 +331,15 @@ pub fn parse_statf_listing(stdout: &[u8], _dir: &str) -> Result<Vec<ScpEntry>, S
         let size: u64 = parts[1].parse().unwrap_or(0);
         let modified: Option<u64> = parts[2].parse().ok();
         let full = parts[3];
-        out.push(mk_entry(basename(full), full.to_string(), entry_type, is_symlink, permissions, size, modified));
+        out.push(mk_entry(
+            basename(full),
+            full.to_string(),
+            entry_type,
+            is_symlink,
+            permissions,
+            size,
+            modified,
+        ));
     }
     sort_entries(&mut out);
     Ok(out)
@@ -320,7 +371,12 @@ pub fn parse_statc_single(stdout: &[u8]) -> Result<Option<StatInfo>, ScpError> {
     let mtime: u64 = parts[3]
         .parse()
         .map_err(|e| ScpError::ParseError(format!("stat -c bad mtime {:?}: {e}", parts[3])))?;
-    Ok(Some(StatInfo { entry_type, mode, size, mtime }))
+    Ok(Some(StatInfo {
+        entry_type,
+        mode,
+        size,
+        mtime,
+    }))
 }
 
 /// Parse `stat -f '%Sp\t%z\t%m'` output (single path; BSD/macOS).
@@ -345,7 +401,12 @@ pub fn parse_statf_single(stdout: &[u8]) -> Result<Option<StatInfo>, ScpError> {
     let mtime: u64 = parts[2]
         .parse()
         .map_err(|e| ScpError::ParseError(format!("stat -f bad mtime {:?}: {e}", parts[2])))?;
-    Ok(Some(StatInfo { entry_type, mode, size, mtime }))
+    Ok(Some(StatInfo {
+        entry_type,
+        mode,
+        size,
+        mtime,
+    }))
 }
 
 // ─── Tree parsers ──────────────────────────────────────────────────────────────
@@ -372,7 +433,11 @@ pub fn parse_gnu_tree(stdout: &[u8]) -> Result<Vec<TreeEntry>, ScpError> {
         if rel_path.is_empty() {
             continue;
         }
-        out.push(TreeEntry { rel_path, is_dir, size });
+        out.push(TreeEntry {
+            rel_path,
+            is_dir,
+            size,
+        });
     }
     Ok(out)
 }
@@ -420,7 +485,11 @@ fn parse_exec_tree(
         if rel_path.is_empty() {
             continue;
         }
-        out.push(TreeEntry { rel_path: rel_path.to_string(), is_dir: dir_flag, size });
+        out.push(TreeEntry {
+            rel_path: rel_path.to_string(),
+            is_dir: dir_flag,
+            size,
+        });
     }
     Ok(out)
 }
@@ -520,7 +589,9 @@ mod tests {
 
     #[test]
     fn statc_single_parses() {
-        let info = parse_statc_single(b"directory\t755\t66\t1700000000\n").unwrap().unwrap();
+        let info = parse_statc_single(b"directory\t755\t66\t1700000000\n")
+            .unwrap()
+            .unwrap();
         assert_eq!(info.entry_type, ScpEntryType::Directory);
         assert_eq!(info.mode, 0o755);
         assert_eq!(info.size, 66);
@@ -534,7 +605,9 @@ mod tests {
 
     #[test]
     fn statf_single_parses() {
-        let info = parse_statf_single(b"drwxr-xr-x\t66\t1700000000\n").unwrap().unwrap();
+        let info = parse_statf_single(b"drwxr-xr-x\t66\t1700000000\n")
+            .unwrap()
+            .unwrap();
         assert_eq!(info.entry_type, ScpEntryType::Directory);
         assert_eq!(info.mode, 0o755);
         assert_eq!(info.size, 66);

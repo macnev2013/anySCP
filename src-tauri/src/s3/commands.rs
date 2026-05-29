@@ -4,17 +4,18 @@ use s3::Bucket;
 use tauri::{AppHandle, Emitter, State};
 use tracing::instrument;
 
-use crate::db::HostDb;
+use super::transfer_manager::S3TransferManager;
 use super::{
     S3BucketInfo, S3Connection, S3Entry, S3EntryType, S3Error, S3ListResult, S3Manager,
     S3TransferEvent,
 };
-use super::transfer_manager::S3TransferManager;
+use crate::db::HostDb;
 
 // ─── Connection ──────────────────────────────────────────────────────────────
 
 #[tauri::command]
 #[instrument(skip(s3_manager, db))]
+#[allow(clippy::too_many_arguments)]
 pub async fn s3_connect(
     label: String,
     provider: String,
@@ -58,19 +59,36 @@ pub async fn s3_connect(
     let env = environment.clone();
     let nts = notes.clone();
     let _ = tokio::task::spawn_blocking(move || {
-        db.save_s3_connection(&sid, &lbl, &prov, &reg, ep.as_deref(), Some(&bkt), ps, gid.as_deref(), col.as_deref(), env.as_deref(), nts.as_deref())
-    }).await;
+        db.save_s3_connection(
+            &sid,
+            &lbl,
+            &prov,
+            &reg,
+            ep.as_deref(),
+            Some(&bkt),
+            ps,
+            gid.as_deref(),
+            col.as_deref(),
+            env.as_deref(),
+            nts.as_deref(),
+        )
+    })
+    .await;
 
     // Save credentials to vault
     let vault_key = format!("s3:{}", session_id);
-    let cred = crate::vault::StoredCredential::Password { password: format!("{}:{}", access_key, secret_key) };
-    let _ = tokio::task::spawn_blocking(move || {
-        crate::vault::save_credential(&vault_key, &cred)
-    }).await;
+    let cred = crate::vault::StoredCredential::Password {
+        password: format!("{}:{}", access_key, secret_key),
+    };
+    let _ =
+        tokio::task::spawn_blocking(move || crate::vault::save_credential(&vault_key, &cred)).await;
 
-    crate::telemetry::capture("s3_connected", serde_json::json!({
-        "provider": provider,
-    }));
+    crate::telemetry::capture(
+        "s3_connected",
+        serde_json::json!({
+            "provider": provider,
+        }),
+    );
 
     Ok(session_id)
 }
@@ -78,6 +96,7 @@ pub async fn s3_connect(
 /// Save an S3 connection to DB + vault without connecting.
 #[tauri::command]
 #[instrument(skip(db))]
+#[allow(clippy::too_many_arguments)]
 pub async fn s3_save_connection(
     label: String,
     provider: String,
@@ -109,9 +128,17 @@ pub async fn s3_save_connection(
 
     tokio::task::spawn_blocking(move || {
         db.save_s3_connection(
-            &sid, &lbl, &prov, &reg, ep.as_deref(),
+            &sid,
+            &lbl,
+            &prov,
+            &reg,
+            ep.as_deref(),
             if bkt.is_empty() { None } else { Some(&bkt) },
-            path_style, gid.as_deref(), col.as_deref(), env.as_deref(), nts.as_deref(),
+            path_style,
+            gid.as_deref(),
+            col.as_deref(),
+            env.as_deref(),
+            nts.as_deref(),
         )
     })
     .await
@@ -123,11 +150,13 @@ pub async fn s3_save_connection(
     let cred = crate::vault::StoredCredential::Password {
         password: format!("{}:{}", access_key, secret_key),
     };
-    let _ = tokio::task::spawn_blocking(move || {
-        crate::vault::save_credential(&vault_key, &cred)
-    }).await;
+    let _ =
+        tokio::task::spawn_blocking(move || crate::vault::save_credential(&vault_key, &cred)).await;
 
-    crate::telemetry::capture("s3_connection_saved", serde_json::json!({ "provider": provider }));
+    crate::telemetry::capture(
+        "s3_connection_saved",
+        serde_json::json!({ "provider": provider }),
+    );
     Ok(id)
 }
 
@@ -135,6 +164,7 @@ pub async fn s3_save_connection(
 /// the existing vault entry is kept.
 #[tauri::command]
 #[instrument(skip(db))]
+#[allow(clippy::too_many_arguments)]
 pub async fn s3_update_connection(
     id: String,
     label: String,
@@ -165,9 +195,17 @@ pub async fn s3_update_connection(
 
     tokio::task::spawn_blocking(move || {
         db.save_s3_connection(
-            &sid, &lbl, &prov, &reg, ep.as_deref(),
+            &sid,
+            &lbl,
+            &prov,
+            &reg,
+            ep.as_deref(),
             if bkt.is_empty() { None } else { Some(&bkt) },
-            path_style, gid.as_deref(), col.as_deref(), env.as_deref(), nts.as_deref(),
+            path_style,
+            gid.as_deref(),
+            col.as_deref(),
+            env.as_deref(),
+            nts.as_deref(),
         )
     })
     .await
@@ -183,7 +221,8 @@ pub async fn s3_update_connection(
             };
             let _ = tokio::task::spawn_blocking(move || {
                 crate::vault::save_credential(&vault_key, &cred)
-            }).await;
+            })
+            .await;
         }
     }
 
@@ -192,9 +231,7 @@ pub async fn s3_update_connection(
 
 #[tauri::command]
 #[instrument(skip(db))]
-pub async fn s3_list_connections(
-    db: State<'_, Arc<HostDb>>,
-) -> Result<Vec<S3Connection>, S3Error> {
+pub async fn s3_list_connections(db: State<'_, Arc<HostDb>>) -> Result<Vec<S3Connection>, S3Error> {
     let db = Arc::clone(&db);
     tokio::task::spawn_blocking(move || db.list_s3_connections())
         .await
@@ -217,9 +254,7 @@ pub async fn s3_delete_connection(
 
     // Remove vault credential
     let vault_key = format!("s3:{}", id);
-    let _ = tokio::task::spawn_blocking(move || {
-        crate::vault::delete_credential(&vault_key)
-    }).await;
+    let _ = tokio::task::spawn_blocking(move || crate::vault::delete_credential(&vault_key)).await;
 
     crate::telemetry::capture("s3_connection_deleted", serde_json::json!({}));
     Ok(())
@@ -239,7 +274,9 @@ pub async fn s3_reconnect(
         .map_err(|e| S3Error::IoError(format!("task panicked: {e}")))?
         .map_err(|e| S3Error::OperationError(e.to_string()))?;
 
-    let conn = connections.iter().find(|c| c.id == id)
+    let conn = connections
+        .iter()
+        .find(|c| c.id == id)
         .ok_or_else(|| S3Error::SessionNotFound(id.clone()))?;
 
     // Load credentials from vault
@@ -255,10 +292,16 @@ pub async fn s3_reconnect(
             if parts.len() == 2 {
                 (parts[0].to_string(), parts[1].to_string())
             } else {
-                return Err(S3Error::CredentialError("Invalid credential format".to_string()));
+                return Err(S3Error::CredentialError(
+                    "Invalid credential format".to_string(),
+                ));
             }
         }
-        _ => return Err(S3Error::CredentialError("Unexpected credential type".to_string())),
+        _ => {
+            return Err(S3Error::CredentialError(
+                "Unexpected credential type".to_string(),
+            ))
+        }
     };
 
     let bucket_name = conn.bucket.clone().unwrap_or_default();
@@ -298,7 +341,9 @@ pub async fn s3_list_buckets(
 ) -> Result<Vec<S3BucketInfo>, S3Error> {
     let bucket = s3_manager.get_bucket(&s3_session_id)?;
 
-    let creds = bucket.credentials().await
+    let creds = bucket
+        .credentials()
+        .await
         .map_err(|e| S3Error::CredentialError(e.to_string()))?;
     let result = Bucket::list_buckets(bucket.region().clone(), creds)
         .await
@@ -306,7 +351,6 @@ pub async fn s3_list_buckets(
 
     Ok(result
         .bucket_names()
-        .into_iter()
         .map(|name| S3BucketInfo {
             name: name.to_string(),
             creation_date: None,
@@ -381,11 +425,7 @@ pub async fn s3_list_objects(
                 continue;
             }
 
-            let name = key
-                .rsplit('/')
-                .next()
-                .unwrap_or(key)
-                .to_string();
+            let name = key.rsplit('/').next().unwrap_or(key).to_string();
 
             entries.push(S3Entry {
                 name,
@@ -455,7 +495,10 @@ pub async fn s3_delete_objects(
         }
     }
 
-    crate::telemetry::capture("s3_objects_deleted_batch", serde_json::json!({ "count": deleted }));
+    crate::telemetry::capture(
+        "s3_objects_deleted_batch",
+        serde_json::json!({ "count": deleted }),
+    );
     Ok(deleted)
 }
 
@@ -497,7 +540,10 @@ pub async fn s3_presign_url(
         .await
         .map_err(|e| S3Error::OperationError(format!("Presign failed: {e}")))?;
 
-    crate::telemetry::capture("s3_presign_url_generated", serde_json::json!({ "expiry_secs": expiry_secs }));
+    crate::telemetry::capture(
+        "s3_presign_url_generated",
+        serde_json::json!({ "expiry_secs": expiry_secs }),
+    );
     Ok(url)
 }
 
@@ -515,11 +561,7 @@ pub async fn s3_head_object(
         .await
         .map_err(|e| S3Error::OperationError(format!("Head object failed: {e}")))?;
 
-    let name = key
-        .rsplit('/')
-        .next()
-        .unwrap_or(&key)
-        .to_string();
+    let name = key.rsplit('/').next().unwrap_or(&key).to_string();
 
     Ok(S3Entry {
         name,
@@ -641,7 +683,9 @@ pub async fn s3_upload_files(
             bucket
                 .put_object_stream(&mut file, &key)
                 .await
-                .map_err(|e| S3Error::OperationError(format!("Upload failed for {file_name}: {e}")))?;
+                .map_err(|e| {
+                    S3Error::OperationError(format!("Upload failed for {file_name}: {e}"))
+                })?;
             uploaded += 1;
         }
     }
@@ -678,7 +722,8 @@ async fn upload_directory_recursive(
             .map_err(|e| S3Error::IoError(format!("Cannot stat entry: {e}")))?;
 
         if meta.is_dir() {
-            uploaded += Box::pin(upload_directory_recursive(bucket, &entry_path, &sub_prefix)).await?;
+            uploaded +=
+                Box::pin(upload_directory_recursive(bucket, &entry_path, &sub_prefix)).await?;
         } else {
             let file_name = entry_path
                 .file_name()
@@ -693,7 +738,9 @@ async fn upload_directory_recursive(
             bucket
                 .put_object_stream(&mut file, &key)
                 .await
-                .map_err(|e| S3Error::OperationError(format!("Upload failed for {file_name}: {e}")))?;
+                .map_err(|e| {
+                    S3Error::OperationError(format!("Upload failed for {file_name}: {e}"))
+                })?;
             uploaded += 1;
         }
     }
@@ -756,7 +803,10 @@ pub async fn s3_enqueue_upload(
         .enqueue_upload(s3_session_id, paths, prefix)
         .await;
     if result.is_ok() {
-        crate::telemetry::capture("s3_upload_enqueued", serde_json::json!({ "file_count": file_count }));
+        crate::telemetry::capture(
+            "s3_upload_enqueued",
+            serde_json::json!({ "file_count": file_count }),
+        );
     }
     result
 }
@@ -776,7 +826,10 @@ pub async fn s3_enqueue_download(
         .enqueue_download(s3_session_id, keys, std::path::PathBuf::from(local_dir))
         .await;
     if result.is_ok() {
-        crate::telemetry::capture("s3_download_enqueued", serde_json::json!({ "file_count": file_count }));
+        crate::telemetry::capture(
+            "s3_download_enqueued",
+            serde_json::json!({ "file_count": file_count }),
+        );
     }
     result
 }
@@ -906,8 +959,7 @@ pub async fn s3_edit_in_vscode(
         );
 
         // Watch for 30 minutes max, then stop.
-        let deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(30 * 60);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30 * 60);
 
         loop {
             match rx.recv_timeout(std::time::Duration::from_secs(5)) {
@@ -953,8 +1005,7 @@ pub async fn s3_edit_in_vscode(
                                             key = %key_inner,
                                             "S3 object re-uploaded on save"
                                         );
-                                        let _ = app_handle_inner
-                                            .emit("s3:file-edited", &sid_inner);
+                                        let _ = app_handle_inner.emit("s3:file-edited", &sid_inner);
                                     }
                                     Err(e) => {
                                         tracing::error!(

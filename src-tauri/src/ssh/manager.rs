@@ -14,7 +14,8 @@ use super::session::SshSession;
 pub struct SshManager {
     sessions: DashMap<String, SshSession>,
     /// Bare SSH handles for SFTP-only connections (no PTY).
-    bare_handles: DashMap<String, Arc<tokio::sync::Mutex<client::Handle<super::handler::SshClientHandler>>>>,
+    bare_handles:
+        DashMap<String, Arc<tokio::sync::Mutex<client::Handle<super::handler::SshClientHandler>>>>,
 }
 
 impl SshManager {
@@ -79,8 +80,7 @@ impl SshManager {
                         super::keys::convert_ppk_to_openssh(&kp, pp.as_deref())
                     })
                     .await
-                    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
-                    ?
+                    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))??
                 } else {
                     key_data
                 };
@@ -134,10 +134,7 @@ impl SshManager {
     /// Establish an SSH connection without opening a PTY.
     /// Used for SFTP-only sessions where no terminal is needed.
     /// Returns a session ID that can be used with `get_handle`.
-    pub async fn connect_no_pty(
-        &self,
-        config: HostConfig,
-    ) -> Result<SessionId, SshError> {
+    pub async fn connect_no_pty(&self, config: HostConfig) -> Result<SessionId, SshError> {
         let session_id = SessionId::new();
         let sid = session_id.0.clone();
 
@@ -173,8 +170,7 @@ impl SshManager {
                         super::keys::convert_ppk_to_openssh(&kp, pp.as_deref())
                     })
                     .await
-                    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
-                    ?
+                    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))??
                 } else {
                     key_data
                 };
@@ -209,10 +205,8 @@ impl SshManager {
 
         info!(session_id = %sid, host = %config.host, "SSH authenticated (no PTY, for SFTP)");
 
-        self.bare_handles.insert(
-            sid.clone(),
-            Arc::new(tokio::sync::Mutex::new(handle)),
-        );
+        self.bare_handles
+            .insert(sid.clone(), Arc::new(tokio::sync::Mutex::new(handle)));
 
         Ok(session_id)
     }
@@ -261,7 +255,9 @@ impl SshManager {
     ) -> Result<SessionId, SshError> {
         // Get the shared handle and host config from the source session
         let (handle, host_config) = {
-            let entry = self.sessions.get(source_session_id)
+            let entry = self
+                .sessions
+                .get(source_session_id)
                 .ok_or_else(|| SshError::SessionNotFound(source_session_id.to_string()))?;
             (entry.value().ssh_handle(), entry.value().host_config())
         };
@@ -293,12 +289,7 @@ impl SshManager {
     }
 
     /// Resize a session's PTY.
-    pub async fn resize_pty(
-        &self,
-        session_id: &str,
-        cols: u32,
-        rows: u32,
-    ) -> Result<(), SshError> {
+    pub async fn resize_pty(&self, session_id: &str, cols: u32, rows: u32) -> Result<(), SshError> {
         let entry = self
             .sessions
             .get(session_id)

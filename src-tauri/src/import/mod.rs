@@ -87,11 +87,13 @@ pub fn parse_ssh_config(
         // Query resolved params
         let params = config.query(alias);
 
-        let hostname = params
-            .host_name
-            .as_deref()
-            .map(String::from)
-            .or_else(|| if !is_pattern { Some(alias.clone()) } else { None });
+        let hostname = params.host_name.as_deref().map(String::from).or_else(|| {
+            if !is_pattern {
+                Some(alias.clone())
+            } else {
+                None
+            }
+        });
 
         let user = params.user.as_deref().map(String::from);
         let port = params.port;
@@ -107,20 +109,18 @@ pub fn parse_ssh_config(
             .proxy_jump
             .as_ref()
             .and_then(|jumps| jumps.first())
-            .map(|j| format!("{}", j));
+            .map(|j| j.to_string());
 
-        let keep_alive_interval = params
-            .server_alive_interval
-            .map(|d| d.as_secs() as u32);
+        let keep_alive_interval = params.server_alive_interval.map(|d| d.as_secs() as u32);
 
         // Check for duplicates
         let resolved_host = hostname.as_deref().unwrap_or(alias);
         let resolved_user = user.as_deref().unwrap_or("");
         let resolved_port = port.unwrap_or(22);
 
-        let already_exists = existing_hosts.iter().any(|(h, u, p)| {
-            h == resolved_host && u == resolved_user && *p == resolved_port
-        });
+        let already_exists = existing_hosts
+            .iter()
+            .any(|(h, u, p)| h == resolved_host && u == resolved_user && *p == resolved_port);
 
         entries.push(SshConfigEntry {
             host_alias: alias.clone(),
@@ -170,7 +170,10 @@ fn extract_host_aliases(path: &Path) -> Result<Vec<String>, SshError> {
         }
 
         // Match "Host ..." lines (case-insensitive)
-        if let Some(rest) = trimmed.strip_prefix("Host ").or_else(|| trimmed.strip_prefix("host ")) {
+        if let Some(rest) = trimmed
+            .strip_prefix("Host ")
+            .or_else(|| trimmed.strip_prefix("host "))
+        {
             // A Host line can have multiple space-separated patterns
             for alias in rest.split_whitespace() {
                 let alias = alias.trim();
@@ -192,8 +195,8 @@ fn extract_host_aliases(path: &Path) -> Result<Vec<String>, SshError> {
 fn resolve_key_path(path: &Path, home: &str) -> String {
     let path_str = path.to_string_lossy();
 
-    if path_str.starts_with("~/") {
-        return format!("{}/{}", home, &path_str[2..]);
+    if let Some(rest) = path_str.strip_prefix("~/") {
+        return format!("{home}/{rest}");
     }
 
     if path.is_absolute() {

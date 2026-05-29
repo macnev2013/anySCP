@@ -65,7 +65,7 @@ pub async fn ssh_split_session(
 /// Scan `~/.ssh/` for private key files and return metadata for each one.
 #[tauri::command]
 pub async fn list_ssh_keys() -> Result<Vec<SshKeyInfo>, SshError> {
-    tokio::task::spawn_blocking(|| super::keys::list_ssh_keys())
+    tokio::task::spawn_blocking(super::keys::list_ssh_keys)
         .await
         .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
 }
@@ -119,34 +119,34 @@ pub async fn connect_saved_host(
     let auth_type = saved_host.auth_type.clone();
     let key_path = saved_host.key_path.clone();
 
-    let auth_method =
-        tokio::task::spawn_blocking(move || -> AuthMethod {
-            match auth_type.as_str() {
-                "privateKey" => {
-                    let path = key_path.unwrap_or_default();
-                    // A passphrase is optional — a key without encryption is valid.
-                    let passphrase = match vault::get_credential(&id_for_vault) {
-                        Ok(vault::StoredCredential::KeyPassphrase { passphrase }) => {
-                            Some(passphrase)
-                        }
-                        _ => None,
-                    };
-                    AuthMethod::PrivateKey { key_path: path, passphrase }
-                }
-                _ => {
-                    // Default: password auth.  An empty password means the
-                    // keychain entry is missing; the SSH handshake will fail
-                    // with AuthenticationFailed rather than a vault error.
-                    let password = match vault::get_credential(&id_for_vault) {
-                        Ok(vault::StoredCredential::Password { password }) => password,
-                        _ => String::new(),
-                    };
-                    AuthMethod::Password { password }
+    let auth_method = tokio::task::spawn_blocking(move || -> AuthMethod {
+        match auth_type.as_str() {
+            "privateKey" => {
+                let path = key_path.unwrap_or_default();
+                // A passphrase is optional — a key without encryption is valid.
+                let passphrase = match vault::get_credential(&id_for_vault) {
+                    Ok(vault::StoredCredential::KeyPassphrase { passphrase }) => Some(passphrase),
+                    _ => None,
+                };
+                AuthMethod::PrivateKey {
+                    key_path: path,
+                    passphrase,
                 }
             }
-        })
-        .await
-        .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?;
+            _ => {
+                // Default: password auth.  An empty password means the
+                // keychain entry is missing; the SSH handshake will fail
+                // with AuthenticationFailed rather than a vault error.
+                let password = match vault::get_credential(&id_for_vault) {
+                    Ok(vault::StoredCredential::Password { password }) => password,
+                    _ => String::new(),
+                };
+                AuthMethod::Password { password }
+            }
+        }
+    })
+    .await
+    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?;
 
     // -----------------------------------------------------------------
     // 3. Build HostConfig and open the SSH connection.
@@ -168,9 +168,12 @@ pub async fn connect_saved_host(
 
     let session_id = state.connect(config, app_handle).await?;
 
-    crate::telemetry::capture("ssh_connected", serde_json::json!({
-        "auth_type": saved_host.auth_type,
-    }));
+    crate::telemetry::capture(
+        "ssh_connected",
+        serde_json::json!({
+            "auth_type": saved_host.auth_type,
+        }),
+    );
 
     Ok(session_id)
 }
@@ -197,35 +200,41 @@ pub async fn connect_saved_host_no_pty(
     let auth_type = saved_host.auth_type.clone();
     let key_path = saved_host.key_path.clone();
 
-    let auth_method =
-        tokio::task::spawn_blocking(move || -> AuthMethod {
-            match auth_type.as_str() {
-                "privateKey" => {
-                    let path = key_path.unwrap_or_default();
-                    let passphrase = match vault::get_credential(&id_for_vault) {
-                        Ok(vault::StoredCredential::KeyPassphrase { passphrase }) => Some(passphrase),
-                        _ => None,
-                    };
-                    AuthMethod::PrivateKey { key_path: path, passphrase }
-                }
-                _ => {
-                    let password = match vault::get_credential(&id_for_vault) {
-                        Ok(vault::StoredCredential::Password { password }) => password,
-                        _ => String::new(),
-                    };
-                    AuthMethod::Password { password }
+    let auth_method = tokio::task::spawn_blocking(move || -> AuthMethod {
+        match auth_type.as_str() {
+            "privateKey" => {
+                let path = key_path.unwrap_or_default();
+                let passphrase = match vault::get_credential(&id_for_vault) {
+                    Ok(vault::StoredCredential::KeyPassphrase { passphrase }) => Some(passphrase),
+                    _ => None,
+                };
+                AuthMethod::PrivateKey {
+                    key_path: path,
+                    passphrase,
                 }
             }
-        })
-        .await
-        .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?;
+            _ => {
+                let password = match vault::get_credential(&id_for_vault) {
+                    Ok(vault::StoredCredential::Password { password }) => password,
+                    _ => String::new(),
+                };
+                AuthMethod::Password { password }
+            }
+        }
+    })
+    .await
+    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?;
 
     let config = HostConfig {
         host: saved_host.host,
         port: saved_host.port,
         username: saved_host.username,
         auth_method,
-        label: if saved_host.label.is_empty() { None } else { Some(saved_host.label) },
+        label: if saved_host.label.is_empty() {
+            None
+        } else {
+            Some(saved_host.label)
+        },
         keep_alive_interval: None,
         default_shell: None,
         startup_command: None,

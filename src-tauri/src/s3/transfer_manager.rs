@@ -524,7 +524,9 @@ async fn execute_transfer(
                 local_path: local_path.clone(),
                 prefix: prefix.clone(),
             },
-            TransferJobKind::DownloadFile { key, local_path, .. } => KindDesc::DownloadFile {
+            TransferJobKind::DownloadFile {
+                key, local_path, ..
+            } => KindDesc::DownloadFile {
                 key: key.clone(),
                 local_path: local_path.clone(),
             },
@@ -534,23 +536,52 @@ async fn execute_transfer(
 
     let result = match kind_desc {
         KindDesc::UploadFile { local_path, key } => {
-            run_upload_file(jobs, job_id, &bucket, &local_path, &key, &cancel_token, app_handle)
-                .await
+            run_upload_file(
+                jobs,
+                job_id,
+                &bucket,
+                &local_path,
+                &key,
+                &cancel_token,
+                app_handle,
+            )
+            .await
         }
         KindDesc::UploadDir { local_path, prefix } => {
-            run_upload_dir(jobs, job_id, &bucket, &local_path, &prefix, &cancel_token, app_handle)
-                .await
+            run_upload_dir(
+                jobs,
+                job_id,
+                &bucket,
+                &local_path,
+                &prefix,
+                &cancel_token,
+                app_handle,
+            )
+            .await
         }
         KindDesc::DownloadFile { key, local_path } => {
-            run_download_file(jobs, job_id, &bucket, &key, &local_path, &cancel_token, app_handle)
-                .await
+            run_download_file(
+                jobs,
+                job_id,
+                &bucket,
+                &key,
+                &local_path,
+                &cancel_token,
+                app_handle,
+            )
+            .await
         }
     };
 
     // Snapshot job metrics before setting terminal status.
     let (job_direction, job_total_bytes, job_files_total, job_bytes_transferred) = {
         if let Some(job) = jobs.get(job_id) {
-            (job.direction.clone(), job.total_bytes, job.files_total, job.bytes_transferred)
+            (
+                job.direction.clone(),
+                job.total_bytes,
+                job.files_total,
+                job.bytes_transferred,
+            )
         } else {
             (S3TransferDirection::Upload, 0, 0, 0)
         }
@@ -558,24 +589,30 @@ async fn execute_transfer(
 
     match result {
         Ok(()) => {
-            crate::telemetry::capture("transfer_completed", serde_json::json!({
-                "protocol": "s3",
-                "direction": if job_direction == S3TransferDirection::Upload { "upload" } else { "download" },
-                "total_bytes": job_total_bytes,
-                "files_total": job_files_total,
-            }));
+            crate::telemetry::capture(
+                "transfer_completed",
+                serde_json::json!({
+                    "protocol": "s3",
+                    "direction": if job_direction == S3TransferDirection::Upload { "upload" } else { "download" },
+                    "total_bytes": job_total_bytes,
+                    "files_total": job_files_total,
+                }),
+            );
             set_job_status(jobs, job_id, S3TransferStatus::Completed, None, app_handle);
         }
         Err(S3Error::TransferCancelled) => {
             set_job_status(jobs, job_id, S3TransferStatus::Cancelled, None, app_handle)
         }
         Err(e) => {
-            crate::telemetry::capture("transfer_failed", serde_json::json!({
-                "protocol": "s3",
-                "direction": if job_direction == S3TransferDirection::Upload { "upload" } else { "download" },
-                "bytes_transferred": job_bytes_transferred,
-                "total_bytes": job_total_bytes,
-            }));
+            crate::telemetry::capture(
+                "transfer_failed",
+                serde_json::json!({
+                    "protocol": "s3",
+                    "direction": if job_direction == S3TransferDirection::Upload { "upload" } else { "download" },
+                    "bytes_transferred": job_bytes_transferred,
+                    "total_bytes": job_total_bytes,
+                }),
+            );
             set_job_status(
                 jobs,
                 job_id,
@@ -671,9 +708,9 @@ async fn run_upload_file(
 ) -> Result<(), S3Error> {
     use tokio::io::AsyncReadExt;
 
-    let mut local_file = tokio::fs::File::open(local_path).await.map_err(|e| {
-        S3Error::IoError(format!("Cannot read {}: {e}", local_path.display()))
-    })?;
+    let mut local_file = tokio::fs::File::open(local_path)
+        .await
+        .map_err(|e| S3Error::IoError(format!("Cannot read {}: {e}", local_path.display())))?;
 
     let mut data: Vec<u8> = Vec::new();
     let mut buf = vec![0u8; CHUNK_SIZE];

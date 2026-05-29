@@ -123,7 +123,10 @@ pub fn inspect_ssh_key(path: &str) -> Result<SshKeyInfo, SshError> {
     let needs_passphrase = if parse_result.is_err() {
         // Could be passphrase-protected — that's ok, it's still a valid key format
         // Check if it at least looks like a key file
-        if !key_data.contains("-----BEGIN") && !key_data.contains("PRIVATE KEY") && !key_data.contains("PuTTY") {
+        if !key_data.contains("-----BEGIN")
+            && !key_data.contains("PRIVATE KEY")
+            && !key_data.contains("PuTTY")
+        {
             return Err(SshError::KeyParseError(format!(
                 "File does not appear to be a valid SSH private key: {file_name}"
             )));
@@ -153,11 +156,12 @@ pub fn is_ppk_format(key_data: &str) -> bool {
 /// Convert a PPK file to OpenSSH format using puttygen.
 /// Returns the converted key data as a string.
 /// If puttygen is not available, returns an error with install instructions.
-pub fn convert_ppk_to_openssh(ppk_path: &str, passphrase: Option<&str>) -> Result<String, SshError> {
+pub fn convert_ppk_to_openssh(
+    ppk_path: &str,
+    passphrase: Option<&str>,
+) -> Result<String, SshError> {
     // Check if puttygen is available
-    let which = std::process::Command::new("which")
-        .arg("puttygen")
-        .output();
+    let which = std::process::Command::new("which").arg("puttygen").output();
 
     if which.is_err() || !which.unwrap().status.success() {
         return Err(SshError::KeyParseError(
@@ -183,9 +187,8 @@ pub fn convert_ppk_to_openssh(ppk_path: &str, passphrase: Option<&str>) -> Resul
     // and pass via --old-passphrase <file>
     let passphrase_file = if let Some(pass) = passphrase {
         let pf = temp_dir.join(format!("anyscp_pass_{}", uuid::Uuid::new_v4()));
-        std::fs::write(&pf, pass).map_err(|e| {
-            SshError::IoError(format!("Cannot write passphrase file: {e}"))
-        })?;
+        std::fs::write(&pf, pass)
+            .map_err(|e| SshError::IoError(format!("Cannot write passphrase file: {e}")))?;
         cmd.arg("--old-passphrase").arg(&pf);
         // Output key without passphrase (so russh can read it)
         cmd.arg("--new-passphrase").arg("/dev/null");
@@ -195,12 +198,16 @@ pub fn convert_ppk_to_openssh(ppk_path: &str, passphrase: Option<&str>) -> Resul
     };
 
     let output = cmd.output().map_err(|e| {
-        if let Some(pf) = &passphrase_file { let _ = std::fs::remove_file(pf); }
+        if let Some(pf) = &passphrase_file {
+            let _ = std::fs::remove_file(pf);
+        }
         SshError::KeyParseError(format!("Failed to run puttygen: {e}"))
     })?;
 
     // Clean up passphrase file immediately
-    if let Some(pf) = &passphrase_file { let _ = std::fs::remove_file(pf); }
+    if let Some(pf) = &passphrase_file {
+        let _ = std::fs::remove_file(pf);
+    }
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -221,7 +228,9 @@ pub fn convert_ppk_to_openssh(ppk_path: &str, passphrase: Option<&str>) -> Resul
     let _ = std::fs::remove_file(&temp_out);
 
     if converted.is_empty() {
-        return Err(SshError::KeyParseError("Conversion produced empty output".to_string()));
+        return Err(SshError::KeyParseError(
+            "Conversion produced empty output".to_string(),
+        ));
     }
 
     Ok(converted)
@@ -235,7 +244,11 @@ pub fn convert_ppk_to_openssh(ppk_path: &str, passphrase: Option<&str>) -> Resul
 fn ssh_dir() -> Result<PathBuf, SshError> {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
-        .map_err(|_| SshError::IoError("cannot determine home directory (HOME/USERPROFILE unset)".to_string()))?;
+        .map_err(|_| {
+            SshError::IoError(
+                "cannot determine home directory (HOME/USERPROFILE unset)".to_string(),
+            )
+        })?;
     Ok(PathBuf::from(home).join(".ssh"))
 }
 
@@ -287,7 +300,7 @@ fn read_first_line(path: &Path) -> String {
         return String::new();
     };
     let reader = std::io::BufReader::new(file);
-    for line in reader.lines().flatten() {
+    for line in reader.lines().map_while(Result::ok) {
         let trimmed = line.trim().to_string();
         if !trimmed.is_empty() {
             return trimmed;
@@ -304,7 +317,11 @@ fn algorithm_from_pub_file(path: &Path, _file_name: &str) -> String {
         return "unknown".to_string();
     };
     // Format: `<algo> <base64-key> [comment]`
-    let algo_token = content.split_whitespace().next().unwrap_or("").to_lowercase();
+    let algo_token = content
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
     if algo_token.contains("ed25519") {
         "ed25519".to_string()
     } else if algo_token.contains("rsa") {
@@ -506,9 +523,15 @@ mod tests {
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJdD7y3aLq454yWBdwLWbieU1ebz9/cu7/QEXn9OIeZJ user@host\n",
         );
         // Non-key config file — must be skipped
-        write_file(&dir.path().join("config"), "Host *\n  ServerAliveInterval 60\n");
+        write_file(
+            &dir.path().join("config"),
+            "Host *\n  ServerAliveInterval 60\n",
+        );
         // known_hosts — must be skipped
-        write_file(&dir.path().join("known_hosts"), "github.com ssh-rsa AAA...\n");
+        write_file(
+            &dir.path().join("known_hosts"),
+            "github.com ssh-rsa AAA...\n",
+        );
 
         // Override HOME so list_ssh_keys points at our temp dir.
         // We call the internals directly to avoid mutating process env.
@@ -517,7 +540,9 @@ mod tests {
             .flatten()
             .filter(|e| {
                 let p = e.path();
-                if !p.is_file() { return false; }
+                if !p.is_file() {
+                    return false;
+                }
                 let name = p.file_name().unwrap().to_string_lossy().into_owned();
                 !name.ends_with(".pub") && is_likely_private_key(&name, &p)
             })

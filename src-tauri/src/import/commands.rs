@@ -24,7 +24,7 @@ pub async fn import_parse_ssh_config(
             .list_hosts()
             .unwrap_or_default()
             .into_iter()
-            .map(|h| (h.host, h.username, h.port as u16))
+            .map(|h| (h.host, h.username, h.port))
             .collect::<Vec<_>>();
 
         super::parse_ssh_config(path.as_deref(), &existing)
@@ -98,7 +98,10 @@ pub async fn import_save_ssh_hosts(
     .await
     .map_err(|e| DbError::InitError(format!("task panicked: {e}")))?;
 
-    crate::telemetry::capture("ssh_config_imported", serde_json::json!({ "host_count": host_count }));
+    crate::telemetry::capture(
+        "ssh_config_imported",
+        serde_json::json!({ "host_count": host_count }),
+    );
     result
 }
 

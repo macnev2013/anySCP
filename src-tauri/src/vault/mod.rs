@@ -78,8 +78,8 @@ pub fn save_credential(host_id: &str, credential: &StoredCredential) -> Result<(
     let entry = keyring::Entry::new(SERVICE_NAME, host_id)
         .map_err(|e| VaultError::Keychain(e.to_string()))?;
 
-    let json = serde_json::to_string(credential)
-        .map_err(|e| VaultError::InvalidData(e.to_string()))?;
+    let json =
+        serde_json::to_string(credential).map_err(|e| VaultError::InvalidData(e.to_string()))?;
 
     entry
         .set_password(&json)
@@ -249,8 +249,13 @@ mod tests {
         let id = unique_id("present");
         let _guard = KeychainGuard(id.clone());
 
-        save_credential(&id, &StoredCredential::Password { password: "x".to_string() })
-            .expect("save");
+        save_credential(
+            &id,
+            &StoredCredential::Password {
+                password: "x".to_string(),
+            },
+        )
+        .expect("save");
         assert!(has_credential(&id));
     }
 
@@ -260,8 +265,13 @@ mod tests {
         // Guard will also try to delete — that is fine because delete is idempotent.
         let _guard = KeychainGuard(id.clone());
 
-        save_credential(&id, &StoredCredential::Password { password: "y".to_string() })
-            .expect("save");
+        save_credential(
+            &id,
+            &StoredCredential::Password {
+                password: "y".to_string(),
+            },
+        )
+        .expect("save");
         assert!(has_credential(&id));
 
         delete_credential(&id).expect("delete");
@@ -280,10 +290,20 @@ mod tests {
         let id = unique_id("overwrite");
         let _guard = KeychainGuard(id.clone());
 
-        save_credential(&id, &StoredCredential::Password { password: "old".to_string() })
-            .expect("first save");
-        save_credential(&id, &StoredCredential::Password { password: "new".to_string() })
-            .expect("second save");
+        save_credential(
+            &id,
+            &StoredCredential::Password {
+                password: "old".to_string(),
+            },
+        )
+        .expect("first save");
+        save_credential(
+            &id,
+            &StoredCredential::Password {
+                password: "new".to_string(),
+            },
+        )
+        .expect("second save");
 
         match get_credential(&id).expect("get") {
             StoredCredential::Password { password } => assert_eq!(password, "new"),

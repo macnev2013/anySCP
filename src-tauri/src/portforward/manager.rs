@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, error};
+use tracing::{error, info};
 
 use crate::ssh::handler::SshClientHandler;
 use crate::types::SshError;
@@ -58,7 +58,8 @@ impl PortForwardManager {
         })?;
 
         // Get the actual bound port (may differ if local_port was 0)
-        let actual_port = listener.local_addr()
+        let actual_port = listener
+            .local_addr()
             .map(|a| a.port() as u32)
             .unwrap_or(local_port);
 
@@ -152,13 +153,16 @@ impl PortForwardManager {
             if let Some(mut tunnel) = tunnels.get_mut(&rid) {
                 tunnel.status = TunnelState::Stopped;
             }
-            let _ = app_handle.emit("pf:status", &TunnelStatus {
-                rule_id: rid,
-                status: TunnelState::Stopped,
-                local_port: actual_port,
-                connections: 0,
-                error: None,
-            });
+            let _ = app_handle.emit(
+                "pf:status",
+                &TunnelStatus {
+                    rule_id: rid,
+                    status: TunnelState::Stopped,
+                    local_port: actual_port,
+                    connections: 0,
+                    error: None,
+                },
+            );
         });
 
         Ok(status)
@@ -168,13 +172,16 @@ impl PortForwardManager {
         if let Some((_, tunnel)) = self.tunnels.remove(rule_id) {
             tunnel.cancel_token.cancel();
             info!(rule_id = %rule_id, "Tunnel stopped");
-            let _ = self.app_handle.emit("pf:status", &TunnelStatus {
-                rule_id: rule_id.to_string(),
-                status: TunnelState::Stopped,
-                local_port: tunnel.local_port,
-                connections: 0,
-                error: None,
-            });
+            let _ = self.app_handle.emit(
+                "pf:status",
+                &TunnelStatus {
+                    rule_id: rule_id.to_string(),
+                    status: TunnelState::Stopped,
+                    local_port: tunnel.local_port,
+                    connections: 0,
+                    error: None,
+                },
+            );
         }
         Ok(())
     }

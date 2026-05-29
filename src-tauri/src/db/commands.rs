@@ -9,10 +9,7 @@ use super::{ConnectionHistoryEntry, DbError, HostDb, HostGroup, RecentConnection
 /// Persist (insert or update) a host entry.
 #[tauri::command]
 #[instrument(skip(state), fields(id = %host.id))]
-pub async fn save_host(
-    host: SavedHost,
-    state: State<'_, Arc<HostDb>>,
-) -> Result<(), DbError> {
+pub async fn save_host(host: SavedHost, state: State<'_, Arc<HostDb>>) -> Result<(), DbError> {
     let db = Arc::clone(&state);
     task::spawn_blocking(move || db.save_host(&host))
         .await
@@ -55,10 +52,7 @@ pub async fn get_host(
 /// Create a new host group.
 #[tauri::command]
 #[instrument(skip(state), fields(id = %group.id))]
-pub async fn create_group(
-    group: HostGroup,
-    state: State<'_, Arc<HostDb>>,
-) -> Result<(), DbError> {
+pub async fn create_group(group: HostGroup, state: State<'_, Arc<HostDb>>) -> Result<(), DbError> {
     let db = Arc::clone(&state);
     task::spawn_blocking(move || db.create_group(&group))
         .await
@@ -68,10 +62,7 @@ pub async fn create_group(
 /// Update an existing host group.
 #[tauri::command]
 #[instrument(skip(state), fields(id = %group.id))]
-pub async fn update_group(
-    group: HostGroup,
-    state: State<'_, Arc<HostDb>>,
-) -> Result<(), DbError> {
+pub async fn update_group(group: HostGroup, state: State<'_, Arc<HostDb>>) -> Result<(), DbError> {
     let db = Arc::clone(&state);
     task::spawn_blocking(move || db.update_group(&group))
         .await
@@ -102,7 +93,10 @@ pub async fn delete_group(id: String, state: State<'_, Arc<HostDb>>) -> Result<(
 /// Delete a host group AND all hosts inside it.
 #[tauri::command]
 #[instrument(skip(state), fields(id = %id))]
-pub async fn delete_group_with_hosts(id: String, state: State<'_, Arc<HostDb>>) -> Result<(), DbError> {
+pub async fn delete_group_with_hosts(
+    id: String,
+    state: State<'_, Arc<HostDb>>,
+) -> Result<(), DbError> {
     let db = Arc::clone(&state);
     task::spawn_blocking(move || db.delete_group_with_hosts(&id))
         .await

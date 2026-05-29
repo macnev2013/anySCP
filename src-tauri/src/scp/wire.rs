@@ -470,7 +470,7 @@ mod tests {
     async fn stream_bytes_honors_cancel() {
         let (mut sink, _drain) = duplex(1024);
         let (mut src_w, mut src_r) = duplex(1024);
-        src_w.write_all(&vec![0u8; 100]).await.unwrap();
+        src_w.write_all(&[0u8; 100]).await.unwrap();
         drop(src_w);
 
         let err = stream_bytes(

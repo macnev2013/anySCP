@@ -13,10 +13,7 @@ use super::{Snippet, SnippetFolder, SnippetSearchResult};
 /// Persist (insert or update) a snippet.
 #[tauri::command]
 #[instrument(skip(state), fields(id = %snippet.id))]
-pub async fn save_snippet(
-    snippet: Snippet,
-    state: State<'_, Arc<HostDb>>,
-) -> Result<(), DbError> {
+pub async fn save_snippet(snippet: Snippet, state: State<'_, Arc<HostDb>>) -> Result<(), DbError> {
     let db = Arc::clone(&state);
     let result = task::spawn_blocking(move || db.save_snippet(&snippet))
         .await
@@ -59,10 +56,7 @@ pub async fn list_snippets(
 /// Permanently delete a snippet by its UUID string.
 #[tauri::command]
 #[instrument(skip(state), fields(id = %id))]
-pub async fn delete_snippet(
-    id: String,
-    state: State<'_, Arc<HostDb>>,
-) -> Result<(), DbError> {
+pub async fn delete_snippet(id: String, state: State<'_, Arc<HostDb>>) -> Result<(), DbError> {
     let db = Arc::clone(&state);
     let result = task::spawn_blocking(move || db.delete_snippet(&id))
         .await
@@ -94,10 +88,7 @@ pub async fn search_snippets(
 /// Increment `use_count` and stamp `last_used_at` for a snippet.
 #[tauri::command]
 #[instrument(skip(state), fields(id = %id))]
-pub async fn record_snippet_use(
-    id: String,
-    state: State<'_, Arc<HostDb>>,
-) -> Result<(), DbError> {
+pub async fn record_snippet_use(id: String, state: State<'_, Arc<HostDb>>) -> Result<(), DbError> {
     let db = Arc::clone(&state);
     task::spawn_blocking(move || db.record_snippet_use(&id))
         .await

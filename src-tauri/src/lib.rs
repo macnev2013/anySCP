@@ -12,13 +12,13 @@ mod types;
 mod vault;
 
 use db::HostDb;
-use scp::ScpManager;
-use scp::transfer_manager::ScpTransferManager;
-use sftp::SftpManager;
-use sftp::transfer_manager::TransferManager;
 use portforward::manager::PortForwardManager;
-use s3::S3Manager;
 use s3::transfer_manager::S3TransferManager;
+use s3::S3Manager;
+use scp::transfer_manager::ScpTransferManager;
+use scp::ScpManager;
+use sftp::transfer_manager::TransferManager;
+use sftp::SftpManager;
 use ssh::manager::SshManager;
 use std::sync::Arc;
 use tauri::Manager;

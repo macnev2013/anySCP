@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -388,10 +388,9 @@ impl TransferManager {
     /// Cancel a queued or in-progress transfer.
     #[instrument(skip(self), fields(transfer_id = %transfer_id))]
     pub fn cancel(&self, transfer_id: &str) -> Result<(), SftpError> {
-        let mut job = self
-            .jobs
-            .get_mut(transfer_id)
-            .ok_or_else(|| SftpError::SessionNotFound(format!("transfer not found: {transfer_id}")))?;
+        let mut job = self.jobs.get_mut(transfer_id).ok_or_else(|| {
+            SftpError::SessionNotFound(format!("transfer not found: {transfer_id}"))
+        })?;
 
         job.cancel_token.cancel();
 
@@ -492,10 +491,7 @@ impl TransferManager {
 
 /// Recursively walk a remote directory and return (total_bytes, file_count).
 /// Tracks visited paths to prevent infinite loops from symlink cycles.
-async fn walk_remote_dir_stats(
-    sftp: &russh_sftp::client::SftpSession,
-    path: &str,
-) -> (u64, u32) {
+async fn walk_remote_dir_stats(sftp: &russh_sftp::client::SftpSession, path: &str) -> (u64, u32) {
     let mut visited = HashSet::new();
     Box::pin(walk_remote_dir_inner(sftp, path, &mut visited)).await
 }
@@ -650,23 +646,32 @@ async fn execute_transfer(
         // We can't move out of the DashMap ref, so we clone what we need.
         let cancel_token = job.cancel_token.clone();
         let desc = match &job.kind {
-            TransferJobKind::UploadFile { local_path, remote_path } => {
-                KindDesc::UploadFile {
-                    local_path: local_path.clone(),
-                    remote_path: remote_path.clone(),
-                }
-            }
-            TransferJobKind::UploadDir { local_path, remote_dir } => KindDesc::UploadDir {
+            TransferJobKind::UploadFile {
+                local_path,
+                remote_path,
+            } => KindDesc::UploadFile {
+                local_path: local_path.clone(),
+                remote_path: remote_path.clone(),
+            },
+            TransferJobKind::UploadDir {
+                local_path,
+                remote_dir,
+            } => KindDesc::UploadDir {
                 local_path: local_path.clone(),
                 remote_dir: remote_dir.clone(),
             },
-            TransferJobKind::DownloadFile { remote_path, local_path, .. } => {
-                KindDesc::DownloadFile {
-                    remote_path: remote_path.clone(),
-                    local_path: local_path.clone(),
-                }
-            }
-            TransferJobKind::DownloadDir { remote_path, local_dir } => KindDesc::DownloadDir {
+            TransferJobKind::DownloadFile {
+                remote_path,
+                local_path,
+                ..
+            } => KindDesc::DownloadFile {
+                remote_path: remote_path.clone(),
+                local_path: local_path.clone(),
+            },
+            TransferJobKind::DownloadDir {
+                remote_path,
+                local_dir,
+            } => KindDesc::DownloadDir {
                 remote_path: remote_path.clone(),
                 local_dir: local_dir.clone(),
             },
@@ -675,7 +680,10 @@ async fn execute_transfer(
     };
 
     let result = match kind_desc {
-        KindDesc::UploadFile { local_path, remote_path } => {
+        KindDesc::UploadFile {
+            local_path,
+            remote_path,
+        } => {
             run_upload_file(
                 jobs,
                 job_id,
@@ -687,7 +695,10 @@ async fn execute_transfer(
             )
             .await
         }
-        KindDesc::UploadDir { local_path, remote_dir } => {
+        KindDesc::UploadDir {
+            local_path,
+            remote_dir,
+        } => {
             run_upload_dir(
                 jobs,
                 job_id,
@@ -699,7 +710,10 @@ async fn execute_transfer(
             )
             .await
         }
-        KindDesc::DownloadFile { remote_path, local_path } => {
+        KindDesc::DownloadFile {
+            remote_path,
+            local_path,
+        } => {
             run_download_file(
                 jobs,
                 job_id,
@@ -711,7 +725,10 @@ async fn execute_transfer(
             )
             .await
         }
-        KindDesc::DownloadDir { remote_path, local_dir } => {
+        KindDesc::DownloadDir {
+            remote_path,
+            local_dir,
+        } => {
             run_download_dir(
                 jobs,
                 job_id,
@@ -728,7 +745,12 @@ async fn execute_transfer(
     // Snapshot job metrics before setting terminal status.
     let (job_direction, job_total_bytes, job_files_total, job_bytes_transferred) = {
         if let Some(job) = jobs.get(job_id) {
-            (job.direction.clone(), job.total_bytes, job.files_total, job.bytes_transferred)
+            (
+                job.direction.clone(),
+                job.total_bytes,
+                job.files_total,
+                job.bytes_transferred,
+            )
         } else {
             (TransferDirection::Upload, 0, 0, 0)
         }
@@ -736,24 +758,30 @@ async fn execute_transfer(
 
     match result {
         Ok(()) => {
-            crate::telemetry::capture("transfer_completed", serde_json::json!({
-                "protocol": "sftp",
-                "direction": if job_direction == TransferDirection::Upload { "upload" } else { "download" },
-                "total_bytes": job_total_bytes,
-                "files_total": job_files_total,
-            }));
+            crate::telemetry::capture(
+                "transfer_completed",
+                serde_json::json!({
+                    "protocol": "sftp",
+                    "direction": if job_direction == TransferDirection::Upload { "upload" } else { "download" },
+                    "total_bytes": job_total_bytes,
+                    "files_total": job_files_total,
+                }),
+            );
             set_job_status(jobs, job_id, TransferStatus::Completed, None, app_handle);
         }
         Err(SftpError::TransferCancelled) => {
             set_job_status(jobs, job_id, TransferStatus::Cancelled, None, app_handle)
         }
         Err(e) => {
-            crate::telemetry::capture("transfer_failed", serde_json::json!({
-                "protocol": "sftp",
-                "direction": if job_direction == TransferDirection::Upload { "upload" } else { "download" },
-                "bytes_transferred": job_bytes_transferred,
-                "total_bytes": job_total_bytes,
-            }));
+            crate::telemetry::capture(
+                "transfer_failed",
+                serde_json::json!({
+                    "protocol": "sftp",
+                    "direction": if job_direction == TransferDirection::Upload { "upload" } else { "download" },
+                    "bytes_transferred": job_bytes_transferred,
+                    "total_bytes": job_total_bytes,
+                }),
+            );
             set_job_status(
                 jobs,
                 job_id,
@@ -767,10 +795,22 @@ async fn execute_transfer(
 
 // An owned copy of the discriminant so we can release the DashMap reference.
 enum KindDesc {
-    UploadFile { local_path: PathBuf, remote_path: String },
-    UploadDir { local_path: PathBuf, remote_dir: String },
-    DownloadFile { remote_path: String, local_path: PathBuf },
-    DownloadDir { remote_path: String, local_dir: PathBuf },
+    UploadFile {
+        local_path: PathBuf,
+        remote_path: String,
+    },
+    UploadDir {
+        local_path: PathBuf,
+        remote_dir: String,
+    },
+    DownloadFile {
+        remote_path: String,
+        local_path: PathBuf,
+    },
+    DownloadDir {
+        remote_path: String,
+        local_dir: PathBuf,
+    },
 }
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
@@ -845,9 +885,9 @@ async fn run_upload_file(
     cancel_token: &CancellationToken,
     app_handle: &AppHandle,
 ) -> Result<(), SftpError> {
-    let mut local_file = tokio::fs::File::open(local_path)
-        .await
-        .map_err(|e| SftpError::LocalIoError(format!("Cannot read {}: {e}", local_path.display())))?;
+    let mut local_file = tokio::fs::File::open(local_path).await.map_err(|e| {
+        SftpError::LocalIoError(format!("Cannot read {}: {e}", local_path.display()))
+    })?;
 
     let mut remote_file = {
         let sftp = sftp_arc.lock().await;
@@ -1091,7 +1131,7 @@ async fn download_dir_recursive(
     job_id: &str,
     sftp_arc: &Arc<tokio::sync::Mutex<russh_sftp::client::SftpSession>>,
     remote_dir: &str,
-    local_dir: &PathBuf,
+    local_dir: &Path,
     cancel_token: &CancellationToken,
     app_handle: &AppHandle,
 ) -> Result<(), SftpError> {
@@ -1165,16 +1205,14 @@ async fn remote_mkdir_p(
         current = format!("{current}/{seg}");
         match sftp.create_dir(&current).await {
             Ok(()) => {}
-            Err(_) => {
-                match sftp.metadata(&current).await {
-                    Ok(attrs) if attrs.file_type() == russh_sftp::protocol::FileType::Dir => {}
-                    _ => {
-                        return Err(SftpError::RemoteIoError(format!(
-                            "failed to create remote directory: {current}"
-                        )));
-                    }
+            Err(_) => match sftp.metadata(&current).await {
+                Ok(attrs) if attrs.file_type() == russh_sftp::protocol::FileType::Dir => {}
+                _ => {
+                    return Err(SftpError::RemoteIoError(format!(
+                        "failed to create remote directory: {current}"
+                    )));
                 }
-            }
+            },
         }
     }
 

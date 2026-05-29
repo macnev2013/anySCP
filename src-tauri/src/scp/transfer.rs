@@ -39,9 +39,9 @@ pub async fn upload_file<F>(
 where
     F: FnMut(u64),
 {
-    let meta = tokio::fs::metadata(local_path)
-        .await
-        .map_err(|e| ScpError::LocalIoError(format!("cannot stat {}: {e}", local_path.display())))?;
+    let meta = tokio::fs::metadata(local_path).await.map_err(|e| {
+        ScpError::LocalIoError(format!("cannot stat {}: {e}", local_path.display()))
+    })?;
     let size = meta.len();
     let mode = local_mode(&meta);
 
@@ -52,9 +52,9 @@ where
         .ok_or_else(|| ScpError::ProtocolError(format!("invalid remote path: {remote_path}")))?
         .to_string();
 
-    let mut local_file = tokio::fs::File::open(local_path)
-        .await
-        .map_err(|e| ScpError::LocalIoError(format!("cannot open {}: {e}", local_path.display())))?;
+    let mut local_file = tokio::fs::File::open(local_path).await.map_err(|e| {
+        ScpError::LocalIoError(format!("cannot open {}: {e}", local_path.display()))
+    })?;
 
     // Open a channel and start the remote sink. `-t` = "to" (receive).
     let channel = {
@@ -157,9 +157,9 @@ where
     // Ack the header so the source starts streaming the body.
     wire::write_ack(&mut stream).await?;
 
-    let mut local_file = tokio::fs::File::create(local_path)
-        .await
-        .map_err(|e| ScpError::LocalIoError(format!("cannot create {}: {e}", local_path.display())))?;
+    let mut local_file = tokio::fs::File::create(local_path).await.map_err(|e| {
+        ScpError::LocalIoError(format!("cannot create {}: {e}", local_path.display()))
+    })?;
 
     let stream_result = wire::stream_bytes(
         &mut stream,

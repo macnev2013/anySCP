@@ -53,7 +53,9 @@ pub async fn scp_open(
     }
 
     // Detect the remote userland once so listings use the right command.
-    let flavor = exec::detect_flavor(handle.clone()).await.unwrap_or_default();
+    let flavor = exec::detect_flavor(handle.clone())
+        .await
+        .unwrap_or_default();
 
     let scp_id = uuid::Uuid::new_v4().to_string();
     scp_manager.insert_session(
@@ -66,7 +68,10 @@ pub async fn scp_open(
     );
 
     tracing::info!(scp_session_id = %scp_id, flavor = %flavor.as_str(), "SCP session opened");
-    crate::telemetry::capture("scp_opened", serde_json::json!({ "flavor": flavor.as_str() }));
+    crate::telemetry::capture(
+        "scp_opened",
+        serde_json::json!({ "flavor": flavor.as_str() }),
+    );
     Ok(scp_id)
 }
 
@@ -230,7 +235,10 @@ pub async fn scp_move_entries(
         new_paths.push(dest);
     }
 
-    crate::telemetry::capture("scp_entries_moved", serde_json::json!({ "count": source_paths.len() }));
+    crate::telemetry::capture(
+        "scp_entries_moved",
+        serde_json::json!({ "count": source_paths.len() }),
+    );
     Ok(new_paths)
 }
 
@@ -258,7 +266,10 @@ pub async fn scp_copy_entries(
         new_paths.push(dest);
     }
 
-    crate::telemetry::capture("scp_entries_copied", serde_json::json!({ "count": source_paths.len() }));
+    crate::telemetry::capture(
+        "scp_entries_copied",
+        serde_json::json!({ "count": source_paths.len() }),
+    );
     Ok(new_paths)
 }
 
@@ -436,7 +447,9 @@ pub async fn scp_edit_in_vscode(
         .arg(&local_path)
         .spawn()
         .map_err(|e| {
-            ScpError::LocalIoError(format!("Failed to open VS Code: {e}. Is 'code' in your PATH?"))
+            ScpError::LocalIoError(format!(
+                "Failed to open VS Code: {e}. Is 'code' in your PATH?"
+            ))
         })?;
 
     crate::telemetry::capture("edit_in_vscode", serde_json::json!({ "source": "scp" }));
@@ -532,7 +545,10 @@ pub async fn scp_enqueue_upload(
         .enqueue_upload(scp_session_id, paths, remote_dir)
         .await;
     if result.is_ok() {
-        crate::telemetry::capture("scp_upload_enqueued", serde_json::json!({ "file_count": file_count }));
+        crate::telemetry::capture(
+            "scp_upload_enqueued",
+            serde_json::json!({ "file_count": file_count }),
+        );
     }
     result
 }
@@ -550,7 +566,10 @@ pub async fn scp_enqueue_download(
         .enqueue_download(scp_session_id, remote_paths, PathBuf::from(local_dir))
         .await;
     if result.is_ok() {
-        crate::telemetry::capture("scp_download_enqueued", serde_json::json!({ "file_count": file_count }));
+        crate::telemetry::capture(
+            "scp_download_enqueued",
+            serde_json::json!({ "file_count": file_count }),
+        );
     }
     result
 }
