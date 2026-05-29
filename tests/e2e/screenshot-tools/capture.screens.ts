@@ -26,7 +26,7 @@ import {
     selectHostGroup,
     waitForModalClosed,
 } from "../helpers/host.js";
-import { fillGroupAndSave, openNewGroupModal } from "../helpers/groups.js";
+import { fillGroupAndSave, getGroupId, openNewGroupModal } from "../helpers/groups.js";
 import { fillSnippetAndSave, gotoSnippetsPage, openNewSnippetModal } from "../helpers/snippets.js";
 import { fillRuleAndSave, gotoPortForwardingPage, openNewRuleDialog } from "../helpers/port-forwards.js";
 import { runCommand, waitForAnyTerminal, waitForTerminalText } from "../helpers/terminal.js";
@@ -55,7 +55,7 @@ async function snap(name: string): Promise<void> {
     console.log(`[capture] saved ${name}.png`);
 }
 
-async function addHost(label: string, group?: string): Promise<void> {
+async function addHost(label: string, groupId?: string): Promise<void> {
     await openNewHostModal();
     await fillPasswordHostForm({
         label,
@@ -64,7 +64,7 @@ async function addHost(label: string, group?: string): Promise<void> {
         username: SSH_USER,
         password: SSH_PASS,
     });
-    if (group) await selectHostGroup(group);
+    if (groupId) await selectHostGroup(groupId);
     await clickSave();
     await waitForModalClosed();
 }
@@ -98,9 +98,13 @@ describe("screenshots", () => {
         await fillGroupAndSave("Production");
         await openNewGroupModal();
         await fillGroupAndSave("Testing");
-        await addHost("App", "Production");
-        await addHost("Database", "Production");
-        await addHost("Local Testing", "Testing");
+        // Capture group ids on the dashboard to target the host modal's group
+        // option (host-modal-group-option-<id>) deterministically.
+        const productionId = await getGroupId("Production");
+        const testingId = await getGroupId("Testing");
+        await addHost("App", productionId);
+        await addHost("Database", productionId);
+        await addHost("Local Testing", testingId);
 
         // Cloud storage (S3) connections — saved against the MinIO sidecar.
         await addS3("Prod Artifacts");

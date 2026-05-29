@@ -72,18 +72,16 @@ async function selectAuthType(value: "password" | "privateKey"): Promise<void> {
     await opt.click();
 }
 
-/** Pick a group in the host modal's group CustomSelect by its visible name.
- *  Option values are group UUIDs, so we match on the rendered label text. */
-export async function selectHostGroup(name: string): Promise<void> {
-    await (await $("[data-testid='host-modal-group']")).click();
-    const options = await $$('[role="option"]');
-    for (const opt of options) {
-        if ((await opt.getText()).trim() === name) {
-            await opt.click();
-            return;
-        }
-    }
-    throw new Error(`group option '${name}' not found in host modal`);
+/** Pick a group in the host modal's group CustomSelect by its id. Options are
+ *  rendered as `host-modal-group-option-<groupId>`; waitForDisplayed handles the
+ *  dropdown open + async group load. */
+export async function selectHostGroup(groupId: string): Promise<void> {
+    const trigger = await $("[data-testid='host-modal-group']");
+    await trigger.waitForClickable({ timeout: 5_000 });
+    await trigger.click();
+    const opt = await $(`[data-testid='host-modal-group-option-${groupId}']`);
+    await opt.waitForDisplayed({ timeout: 5_000 });
+    await opt.click();
 }
 
 /** Fill the password-auth form fields. Modal must already be open. */
