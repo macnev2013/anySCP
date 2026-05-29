@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libnss3 libatk1.0-0 libatk-bridge2.0-0 libgbm1 \
         keyutils \
         openssh-client \
-        imagemagick fonts-dejavu-core \
+        fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Sanity check: WebKitWebDriver must be on PATH (provided by webkit2gtk-driver).
@@ -61,6 +61,11 @@ RUN mkdir -p "$XDG_DATA_HOME"
 # the workspace so npm has no parent node_modules to confuse itself with.
 COPY package.json /opt/e2e/package.json
 RUN cd /opt/e2e && npm install --no-audit --no-fund --omit=optional
+
+# sharp powers the `make screenshots` framing step. Installed separately
+# (without --omit=optional) so its prebuilt platform binary — shipped as an
+# optionalDependency — is included. One self-contained module; no apt deps.
+RUN cd /opt/e2e && npm install --no-audit --no-fund sharp
 
 COPY entrypoint.sh /usr/local/bin/e2e-entrypoint
 RUN chmod +x /usr/local/bin/e2e-entrypoint

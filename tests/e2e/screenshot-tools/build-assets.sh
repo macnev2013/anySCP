@@ -16,13 +16,20 @@ videos="$repo/tests/e2e/videos"
 
 mkdir -p "$screens"
 
+# Ensure the harness node_modules (which holds sharp) is resolvable. The
+# entrypoint normally symlinks this, but build-assets may run via
+# `--entrypoint bash`, which skips the entrypoint.
+if [ -d /opt/e2e/node_modules ] && [ ! -e "$repo/tests/e2e/node_modules" ]; then
+    ln -sfn /opt/e2e/node_modules "$repo/tests/e2e/node_modules"
+fi
+
 # ── 1. Frame each raw capture → screens/<name>.png ──────────────────────────
 shopt -s nullglob
 framed=0
 for src in "$raw"/*.png; do
     name=$(basename "$src" .png)
     echo "[build-assets] framing $name"
-    bash "$here/frame.sh" "$src" "$screens/$name.png"
+    node "$here/frame.mjs" "$src" "$screens/$name.png"
     framed=$((framed + 1))
 done
 echo "[build-assets] framed $framed screenshot(s)"
