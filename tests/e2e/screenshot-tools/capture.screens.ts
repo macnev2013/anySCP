@@ -99,8 +99,6 @@ describe("screenshots", () => {
         await addHost("App");
         await addHost("Database");
         await addHost("Local Testing");
-        await addHost("Staging");
-        await addHost("CI Runner");
 
         // Cloud storage (S3) connections — saved against the MinIO sidecar.
         await addS3("Prod Artifacts");
