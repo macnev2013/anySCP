@@ -1,7 +1,6 @@
 // Frame a raw app capture into a polished marketing screenshot:
 //   synthesize a macOS-style titlebar (3 traffic lights + "anySCP")
-//   → round the window corners → drop shadow → composite onto a
-//   violet→blue wallpaper.
+//   → round the window corners → composite onto a wallpaper.
 //
 // Uses `sharp` (one self-contained npm module — bundled libvips, no system
 // deps) instead of ImageMagick, so the e2e image stays lean. ffmpeg (already
@@ -24,9 +23,6 @@ const TITLEBAR_H = 38; // synthesized titlebar height (px)
 const RADIUS = 12; // window corner radius (px)
 const MARGIN = 52; // wallpaper margin around the window (px)
 const MARGIN_BOTTOM = 72; // extra breathing room at the bottom
-const PAD = 40; // transparent padding so the shadow isn't clipped
-const SHADOW_DY = 12; // shadow vertical offset
-const SHADOW_SIGMA = 14; // shadow blur
 const BAR_BG = "#1b1b1d";
 const TITLE = "anySCP";
 const WALL_TOP = "#7c3aed"; // violet — gradient fallback
@@ -66,8 +62,11 @@ async function trimmedHeight(file) {
     return height;
 }
 
-const W = (await sharp(inPath).metadata()).width;
-const H = await trimmedHeight(inPath);
+const meta = await sharp(inPath).metadata();
+const W = meta.width;
+// Uniform, full-height windows. Set FRAME_TRIM=1 to instead trim the empty
+// page background at the bottom (tighter windows, but variable heights).
+const H = process.env.FRAME_TRIM ? await trimmedHeight(inPath) : meta.height;
 const captureBuf = await sharp(inPath).extract({ left: 0, top: 0, width: W, height: H }).toBuffer();
 const WH = H + TITLEBAR_H;
 
@@ -120,32 +119,7 @@ const rounded = await sharp(windowBuf)
     .png()
     .toBuffer();
 
-// ── 4. Drop shadow (blurred black rounded rect behind the window) ───────────
-const blackRectSvg = svg(
-    `<svg width="${W}" height="${WH}" xmlns="http://www.w3.org/2000/svg">` +
-        `<rect width="${W}" height="${WH}" rx="${RADIUS}" ry="${RADIUS}" fill="#000"/></svg>`,
-);
-const shadowRect = await sharp({
-    create: { width: W, height: WH, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
-})
-    .composite([{ input: blackRectSvg }])
-    .blur(SHADOW_SIGMA)
-    .png()
-    .toBuffer();
-
-const SW = W + PAD * 2;
-const SH = WH + PAD * 2;
-const shadowed = await sharp({
-    create: { width: SW, height: SH, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
-})
-    .composite([
-        { input: shadowRect, top: PAD + SHADOW_DY, left: PAD },
-        { input: rounded, top: PAD, left: PAD },
-    ])
-    .png()
-    .toBuffer();
-
-// ── 5. Composite onto the wallpaper ─────────────────────────────────────────
+// ── 4. Composite the rounded window onto the wallpaper (no drop shadow) ──────
 const CW = W + MARGIN * 2;
 const CH = WH + MARGIN + MARGIN_BOTTOM;
 
@@ -170,7 +144,7 @@ if (existsSync(BG_PATH)) {
 }
 
 await background
-    .composite([{ input: shadowed, top: MARGIN - PAD, left: MARGIN - PAD }])
+    .composite([{ input: rounded, top: MARGIN, left: MARGIN }])
     .png()
     .toFile(outPath);
 
