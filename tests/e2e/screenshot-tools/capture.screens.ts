@@ -152,6 +152,10 @@ describe("screenshots", () => {
     });
 
     it("captures a terminal session", async () => {
+        // new-host-button only exists on the hosts dashboard; the previous
+        // test leaves us on Tunnels, so navigate back first.
+        await (await $("[aria-label='Hosts']")).click();
+        await waitForDashboard();
         await openNewHostModal();
         await fillPasswordHostForm({
             label: "term",
