@@ -3,6 +3,7 @@ mod db;
 mod import;
 mod portforward;
 mod s3;
+mod scp;
 mod sftp;
 mod snippets;
 mod ssh;
@@ -11,6 +12,8 @@ mod types;
 mod vault;
 
 use db::HostDb;
+use scp::ScpManager;
+use scp::transfer_manager::ScpTransferManager;
 use sftp::SftpManager;
 use sftp::transfer_manager::TransferManager;
 use portforward::manager::PortForwardManager;
@@ -50,6 +53,16 @@ pub fn run() {
             ));
             app.manage(sftp_manager);
             app.manage(transfer_manager);
+
+            // SCP shares the SSH connection but tracks its own sessions and
+            // transfer queue, mirroring the SFTP managers.
+            let scp_manager = Arc::new(ScpManager::new());
+            let scp_transfer_manager = Arc::new(ScpTransferManager::new(
+                scp_manager.clone(),
+                app.handle().clone(),
+            ));
+            app.manage(scp_manager);
+            app.manage(scp_transfer_manager);
 
             let pf_manager = Arc::new(PortForwardManager::new(app.handle().clone()));
             app.manage(pf_manager);
@@ -92,6 +105,31 @@ pub fn run() {
             sftp::commands::sftp_list_transfers,
             sftp::commands::sftp_clear_finished_transfers,
             sftp::commands::sftp_set_concurrency,
+            // SCP — session & filesystem (mirrors SFTP; used as a fallback
+            // when the remote has the SFTP subsystem disabled)
+            scp::commands::scp_open,
+            scp::commands::scp_close,
+            scp::commands::scp_list_dir,
+            scp::commands::scp_home_dir,
+            scp::commands::scp_mkdir,
+            scp::commands::scp_create_file,
+            scp::commands::scp_delete,
+            scp::commands::scp_rename,
+            // SCP — copy / move
+            scp::commands::scp_move_entries,
+            scp::commands::scp_copy_entries,
+            // SCP — direct transfers (edit-in-vscode workflow)
+            scp::commands::scp_download,
+            scp::commands::scp_upload,
+            scp::commands::scp_cancel_transfer,
+            scp::commands::scp_edit_in_vscode,
+            // SCP — queue-based Transfer Manager
+            scp::commands::scp_enqueue_upload,
+            scp::commands::scp_enqueue_download,
+            scp::commands::scp_retry_transfer,
+            scp::commands::scp_list_transfers,
+            scp::commands::scp_clear_finished_transfers,
+            scp::commands::scp_set_concurrency,
             // SSH
             ssh::commands::ssh_connect,
             ssh::commands::ssh_split_session,
