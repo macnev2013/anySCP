@@ -159,6 +159,7 @@ pub fn run() {
             ssh::commands::ssh_resize_pty,
             ssh::commands::list_ssh_keys,
             ssh::commands::inspect_ssh_key,
+            ssh::commands::ssh_health_check_saved_host,
             ssh::commands::connect_saved_host,
             ssh::commands::connect_saved_host_no_pty,
             // Host persistence

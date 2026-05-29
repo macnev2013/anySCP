@@ -3,8 +3,32 @@ use crate::ssh::keys::SshKeyInfo;
 use crate::ssh::manager::SshManager;
 use crate::types::{AuthMethod, HostConfig, SessionId, SshError};
 use crate::vault;
+use russh::client;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, State};
+use tokio::net::{lookup_host, TcpStream};
+use tokio::time::timeout;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostHealthCheckResult {
+    pub status: HostHealthStatus,
+    pub message: String,
+    pub latency_ms: Option<u128>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HostHealthStatus {
+    Reachable,
+    DnsFailed,
+    PortClosed,
+    SshFailed,
+}
+
+const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tauri::command]
 pub async fn ssh_connect(
@@ -24,7 +48,7 @@ pub async fn ssh_disconnect(
     let result = state.disconnect(&session_id, app_handle).await;
     if result.is_ok() {
         crate::telemetry::capture("ssh_disconnected", serde_json::json!({}));
-    }
+    };
     result
 }
 
@@ -58,7 +82,7 @@ pub async fn ssh_split_session(
     let result = state.split_session(&source_session_id, app_handle).await;
     if result.is_ok() {
         crate::telemetry::capture("ssh_split_pane", serde_json::json!({}));
-    }
+    };
     result
 }
 
@@ -76,6 +100,108 @@ pub async fn inspect_ssh_key(path: String) -> Result<SshKeyInfo, SshError> {
     tokio::task::spawn_blocking(move || super::keys::inspect_ssh_key(&path))
         .await
         .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
+}
+
+/// Check whether a saved host is reachable without opening a terminal or using
+/// stored credentials. The check resolves DNS, opens the TCP port, then performs
+/// an SSH handshake. Authentication is intentionally skipped.
+#[tauri::command]
+pub async fn ssh_health_check_saved_host(
+    host_id: String,
+    db: State<'_, Arc<HostDb>>,
+) -> Result<HostHealthCheckResult, SshError> {
+    let db_clone = Arc::clone(&db);
+    let id_for_db = host_id.clone();
+    let saved_host = tokio::task::spawn_blocking(move || db_clone.get_host(&id_for_db))
+        .await
+        .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
+        .map_err(|e| SshError::IoError(e.to_string()))?
+        .ok_or_else(|| SshError::SessionNotFound(format!("host not found: {host_id}")))?;
+
+    let started = Instant::now();
+    let addr = format!("{}:{}", saved_host.host, saved_host.port);
+
+    let resolved = match timeout(HEALTH_CHECK_TIMEOUT, lookup_host(&addr)).await {
+        Ok(Ok(addrs)) => addrs.collect::<Vec<_>>(),
+        Ok(Err(e)) => {
+            return Ok(HostHealthCheckResult {
+                status: HostHealthStatus::DnsFailed,
+                message: format!("DNS lookup failed: {e}"),
+                latency_ms: None,
+            });
+        }
+        Err(_) => {
+            return Ok(HostHealthCheckResult {
+                status: HostHealthStatus::DnsFailed,
+                message: "DNS lookup timed out".to_string(),
+                latency_ms: None,
+            });
+        }
+    };
+
+    if resolved.is_empty() {
+        return Ok(HostHealthCheckResult {
+            status: HostHealthStatus::DnsFailed,
+            message: "DNS lookup returned no addresses".to_string(),
+            latency_ms: None,
+        });
+    }
+
+    let mut tcp_error = None;
+    let mut reachable_addr = None;
+    for socket_addr in resolved {
+        match timeout(HEALTH_CHECK_TIMEOUT, TcpStream::connect(socket_addr)).await {
+            Ok(Ok(_stream)) => {
+                reachable_addr = Some(socket_addr);
+                break;
+            }
+            Ok(Err(e)) => tcp_error = Some(e.to_string()),
+            Err(_) => tcp_error = Some("TCP connection timed out".to_string()),
+        }
+    }
+
+    let Some(socket_addr) = reachable_addr else {
+        return Ok(HostHealthCheckResult {
+            status: HostHealthStatus::PortClosed,
+            message: tcp_error
+                .map(|e| format!("TCP port is not reachable: {e}"))
+                .unwrap_or_else(|| "TCP port is not reachable".to_string()),
+            latency_ms: Some(started.elapsed().as_millis()),
+        });
+    };
+
+    let russh_config = Arc::new(client::Config {
+        inactivity_timeout: Some(HEALTH_CHECK_TIMEOUT),
+        ..Default::default()
+    });
+    let handler = super::handler::SshClientHandler;
+    match timeout(
+        HEALTH_CHECK_TIMEOUT,
+        client::connect(russh_config, socket_addr, handler),
+    )
+    .await
+    {
+        Ok(Ok(handle)) => {
+            let _ = handle
+                .disconnect(russh::Disconnect::ByApplication, "", "en")
+                .await;
+            Ok(HostHealthCheckResult {
+                status: HostHealthStatus::Reachable,
+                message: "SSH handshake succeeded".to_string(),
+                latency_ms: Some(started.elapsed().as_millis()),
+            })
+        }
+        Ok(Err(e)) => Ok(HostHealthCheckResult {
+            status: HostHealthStatus::SshFailed,
+            message: format!("SSH handshake failed: {e}"),
+            latency_ms: Some(started.elapsed().as_millis()),
+        }),
+        Err(_) => Ok(HostHealthCheckResult {
+            status: HostHealthStatus::SshFailed,
+            message: "SSH handshake timed out".to_string(),
+            latency_ms: Some(started.elapsed().as_millis()),
+        }),
+    }
 }
 
 /// Connect to a saved host by its UUID.
