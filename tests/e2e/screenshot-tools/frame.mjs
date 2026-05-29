@@ -20,8 +20,8 @@ if (!inPath || !outPath) {
 }
 
 // ── Tunables ──────────────────────────────────────────────────────────────────
-const TITLEBAR_H = 30; // synthesized titlebar height (px)
-const RADIUS = 10; // window corner radius (px)
+const TITLEBAR_H = 38; // synthesized titlebar height (px)
+const RADIUS = 12; // window corner radius (px)
 const MARGIN = 52; // wallpaper margin around the window (px)
 const MARGIN_BOTTOM = 72; // extra breathing room at the bottom
 const PAD = 40; // transparent padding so the shadow isn't clipped
@@ -42,16 +42,32 @@ const capture = sharp(inPath);
 const { width: W, height: H } = await capture.metadata();
 const WH = H + TITLEBAR_H;
 
-// ── 1. Titlebar (traffic lights + title) ────────────────────────────────────
+// Sample the app's own top-edge colour (a couple of px in from the top-centre)
+// so the synthesized titlebar blends into the window instead of forming a
+// visible second bar.
+let barBg = BAR_BG;
+try {
+    const px = await sharp(inPath)
+        .extract({ left: Math.floor(W / 2), top: 2, width: 1, height: 1 })
+        .raw()
+        .toBuffer();
+    barBg = `rgb(${px[0]},${px[1]},${px[2]})`;
+} catch {
+    /* keep BAR_BG fallback */
+}
+
+// ── 1. Titlebar (traffic lights + centred title) ────────────────────────────
 const cy = TITLEBAR_H / 2;
+const dotR = 6.5;
 const barSvg = svg(`
 <svg width="${W}" height="${TITLEBAR_H}" xmlns="http://www.w3.org/2000/svg">
-  <rect width="100%" height="100%" fill="${BAR_BG}"/>
-  <circle cx="20" cy="${cy}" r="6" fill="#ff5f57"/>
-  <circle cx="40" cy="${cy}" r="6" fill="#febc2e"/>
-  <circle cx="60" cy="${cy}" r="6" fill="#28c840"/>
-  <text x="84" y="${cy + 4}" font-family="${FONT}" font-size="13"
-        font-weight="bold" fill="#c7c7cc">${TITLE}</text>
+  <rect width="100%" height="100%" fill="${barBg}"/>
+  <circle cx="24" cy="${cy}" r="${dotR}" fill="#ff5f57" stroke="#e0443e" stroke-width="0.5"/>
+  <circle cx="46" cy="${cy}" r="${dotR}" fill="#febc2e" stroke="#dea123" stroke-width="0.5"/>
+  <circle cx="68" cy="${cy}" r="${dotR}" fill="#28c840" stroke="#1aab29" stroke-width="0.5"/>
+  <text x="${W / 2}" y="${cy + 4}" font-family="${FONT}" font-size="13"
+        font-weight="600" fill="#9b9ba1" text-anchor="middle"
+        letter-spacing="0.2">${TITLE}</text>
 </svg>`);
 
 // ── 2. Window = titlebar stacked above the capture ──────────────────────────
