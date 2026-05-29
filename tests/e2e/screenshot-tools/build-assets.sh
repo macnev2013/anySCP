@@ -45,14 +45,23 @@ fi
 
 if [[ -n "$tour_mp4" && -f "$tour_mp4" ]]; then
     echo "[build-assets] building gif from $(basename "$tour_mp4")"
+    # x11grab records the whole Xvfb screen (e.g. 1280x800), but the app window
+    # is narrower, leaving a black strip on the right. Crop to the window size —
+    # which equals a raw capture's dimensions — anchored top-left (the window
+    # sits at 0,0 in the headless screen).
+    win=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height \
+        -of csv=s=x:p=0 "$raw/hosts.png" 2>/dev/null || true)
+    win=${win:-1200x800}
+    crop="crop=${win%x*}:${win#*x}:0:0"
+    echo "[build-assets] cropping video to ${win} (removes Xvfb black strip)"
     pal=$(mktemp --suffix=.png)
     # Two-pass palette for clean colors. 15fps matches the x11grab capture
     # framerate (smoothest from this source); 1000px wide keeps it crisp but
     # reasonably small.
     ffmpeg -y -loglevel error -i "$tour_mp4" \
-        -vf "fps=15,scale=1000:-1:flags=lanczos,palettegen=stats_mode=diff" "$pal"
+        -vf "fps=15,${crop},scale=1000:-1:flags=lanczos,palettegen=stats_mode=diff" "$pal"
     ffmpeg -y -loglevel error -i "$tour_mp4" -i "$pal" \
-        -lavfi "fps=15,scale=1000:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer" \
+        -lavfi "fps=15,${crop},scale=1000:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer" \
         "$screens/anyscp.gif"
     rm -f "$pal"
     echo "[build-assets] wrote $screens/anyscp.gif"
