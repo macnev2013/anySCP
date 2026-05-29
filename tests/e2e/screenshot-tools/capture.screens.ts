@@ -30,6 +30,7 @@ import { fillSnippetAndSave, gotoSnippetsPage, openNewSnippetModal } from "../he
 import { fillRuleAndSave, gotoPortForwardingPage, openNewRuleDialog } from "../helpers/port-forwards.js";
 import { runCommand, waitForAnyTerminal, waitForTerminalText } from "../helpers/terminal.js";
 import { waitForExplorer } from "../helpers/sftp-ops.js";
+import { clickS3Save, fillS3Form, openNewS3Dialog } from "../helpers/s3.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rawDir = process.env.SCREENSHOT_RAW_DIR ?? path.resolve(__dirname, "raw");
@@ -38,6 +39,13 @@ const SSHD_PASS_HOST = process.env.SSHD_PASS_HOST ?? "sshd-pass";
 const SSHD_PASS_PORT = Number(process.env.SSHD_PASS_PORT ?? 2222);
 const SSH_USER = process.env.SSH_USER ?? "testuser";
 const SSH_PASS = process.env.SSH_PASS ?? "testpass";
+
+// S3 connections point at the MinIO sidecar in the e2e stack. Saved (not
+// connected), which is enough to render the Cloud Storage cards.
+const MINIO_ENDPOINT = process.env.MINIO_ENDPOINT ?? "http://minio:9000";
+const MINIO_BUCKET = process.env.MINIO_BUCKET ?? "anyscp-test";
+const MINIO_ACCESS_KEY = process.env.MINIO_ACCESS_KEY ?? "minioadmin";
+const MINIO_SECRET_KEY = process.env.MINIO_SECRET_KEY ?? "minioadmin";
 
 /** Save the current webview to <rawDir>/<name>.png. */
 async function snap(name: string): Promise<void> {
@@ -59,6 +67,19 @@ async function addHost(label: string): Promise<void> {
     await waitForModalClosed();
 }
 
+async function addS3(label: string): Promise<void> {
+    await openNewS3Dialog();
+    await fillS3Form({
+        label,
+        provider: "minio",
+        accessKey: MINIO_ACCESS_KEY,
+        secretKey: MINIO_SECRET_KEY,
+        bucket: MINIO_BUCKET,
+        endpoint: MINIO_ENDPOINT,
+    });
+    await clickS3Save();
+}
+
 describe("screenshots", () => {
     // Captured on the dashboard in before(); reused later (host ids are stable)
     // so we never call getHostId from a page where host cards aren't mounted.
@@ -78,6 +99,13 @@ describe("screenshots", () => {
         await addHost("App");
         await addHost("Database");
         await addHost("Local Testing");
+        await addHost("Staging");
+        await addHost("CI Runner");
+
+        // Cloud storage (S3) connections — saved against the MinIO sidecar.
+        await addS3("Prod Artifacts");
+        await addS3("Backups");
+        await addS3("Media Assets");
 
         // Grab the host id now, while host cards are mounted on the dashboard
         // (they don't exist on the Snippets/Tunnels pages).
