@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { AlertCircle } from "lucide-react";
 import { useSftpStore } from "../../stores/sftp-store";
+import { useTabStore } from "../../stores/tab-store";
 import type { SftpEntry } from "../../types";
 import type { ExplorerEntry, ExplorerClipboard } from "../../types/explorer";
 import { ExplorerToolbar, ExplorerFileTable, ExplorerDropZone } from "../explorer";
@@ -30,6 +32,11 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
   const setSort = useSftpStore((s) => s.setSort);
   const clipboard = useSftpStore((s) => s.clipboard);
   const setClipboard = useSftpStore((s) => s.setClipboard);
+  const sudoMode = useSftpStore((s) => s.sessions.get(sessionId)?.sudoMode ?? false);
+  const sshSessionId = useSftpStore((s) => s.sessions.get(sessionId)?.sshSessionId ?? "");
+  const swapSession = useSftpStore((s) => s.swapSession);
+  const replaceTabId = useTabStore((s) => s.replaceTabId);
+  const isRoot = useSftpStore((s) => s.sessions.get(sessionId)?.username === "root");
 
   const provider = useMemo(() => createSftpProvider(sessionId), [sessionId]);
 
@@ -158,6 +165,30 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
     },
     [sessionId, transport, setLoading, setEntries, setError],
   );
+
+  // ─── Sudo toggle (SFTP only) ──────────────────────────────────────────────
+
+  const handleToggleSudo = useCallback(async () => {
+    if (transport !== "sftp") return;
+    const newSudoMode = !sudoMode;
+
+    // 1. Open the new session BEFORE closing the old one.
+    const newSftpSessionId = await invoke<string>("sftp_open", {
+      sessionId: sshSessionId,
+      useSudo: newSudoMode,
+    });
+
+    // 2. Close old session on the server (best-effort).
+    try { await invoke("sftp_close", { sftpSessionId: sessionId }); } catch { /* ignore */ }
+
+    // 3. Atomically swap the store entry (keeps same key reference for a
+    //    split second, then the tab ID change causes a clean remount).
+    swapSession(sessionId, newSftpSessionId, newSudoMode);
+
+    // 4. Update the tab store so AppShell passes the new session ID as prop.
+    //    This triggers a React key change → ExplorerView remounts cleanly.
+    replaceTabId(sessionId, newSftpSessionId);
+  }, [transport, sudoMode, sessionId, sshSessionId, swapSession, replaceTabId]);
 
   // On mount: resolve home dir, then load it
   useEffect(() => {
@@ -451,6 +482,8 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         onNewFolder={() => setCreatingFolder(true)}
         onUpload={() => void handleUpload()}
         busy={busy}
+        sudoMode={sudoMode}
+        onToggleSudo={transport === "sftp" && !isRoot ? () => void handleToggleSudo() : undefined}
       />
 
       {/* Error banner */}

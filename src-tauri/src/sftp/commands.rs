@@ -94,6 +94,7 @@ async fn delete_dir_recursive(
 #[instrument(skip(ssh_manager, sftp_manager), fields(ssh_session_id = %session_id))]
 pub async fn sftp_open(
     session_id: String,
+    use_sudo: Option<bool>,
     ssh_manager: State<'_, SshManager>,
     sftp_manager: State<'_, Arc<SftpManager>>,
 ) -> Result<String, SftpError> {
@@ -111,14 +112,22 @@ pub async fn sftp_open(
             .map_err(|e| SftpError::ChannelError(e.to_string()))?
     };
 
-    // 3. Request the SFTP subsystem on that channel.
-    channel
-        .request_subsystem(true, "sftp")
-        .await
-        .map_err(|e| SftpError::ChannelError(e.to_string()))?;
+    // 3. Request the SFTP subsystem, or exec sudo sftp-server.
+    if use_sudo.unwrap_or(false) {
+        channel
+            .exec(true, "sudo /bin/sh -c 'exec $(which sftp-server 2>/dev/null || echo /usr/lib/openssh/sftp-server)'")
+            .await
+            .map_err(|e| SftpError::ChannelError(e.to_string()))?;
+    } else {
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|e| SftpError::ChannelError(e.to_string()))?;
+    }
 
     // 4. Hand the channel's byte-stream to the russh-sftp client.
-    let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
+    //    Use a 30 s init timeout (default is 10 s, too short for high-latency servers).
+    let sftp = russh_sftp::client::SftpSession::new_opts(channel.into_stream(), Some(30))
         .await
         .map_err(|e| SftpError::ProtocolError(e.to_string()))?;
 

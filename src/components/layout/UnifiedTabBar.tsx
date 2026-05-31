@@ -116,16 +116,20 @@ export function UnifiedTabBar() {
           const closeable = !(tab.type === "page" && tab.page === "hosts");
 
           return (
-            <button
+            <div
               key={tabId}
+              role="tab"
+              tabIndex={0}
+              aria-selected={isActive}
               data-testid={`tab-${tabId}`}
               data-tab-type={tab.type}
               data-tab-label={tab.label}
               onClick={() => setActiveTab(tabId)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setActiveTab(tabId); } }}
               title={tab.label + (paneCount > 1 ? ` (${paneCount} panes)` : "")}
               className={[
                 "group relative flex items-center gap-2 px-3.5 h-[30px] shrink-0 max-w-[220px]",
-                "text-[length:var(--text-sm)] leading-none rounded-lg",
+                "text-[length:var(--text-sm)] leading-none rounded-lg cursor-pointer",
                 "transition-[color,background-color] duration-[var(--duration-fast)]",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 isActive
@@ -195,7 +199,7 @@ export function UnifiedTabBar() {
                   <X size={12} strokeWidth={2} aria-hidden="true" />
                 </button>
               )}
-            </button>
+            </div>
           );
         })}
 
