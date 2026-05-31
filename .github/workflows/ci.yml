@@ -92,24 +92,36 @@ jobs:
         run: cargo test
 
   e2e:
-    name: E2E (WebdriverIO + Docker)
+    name: E2E shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     # Only spend the (expensive) E2E run once the cheap checks are green.
     needs: [frontend, rust]
     timeout-minutes: 60
+    strategy:
+      # Don't cancel the other shards when one fails — we want the full picture.
+      fail-fast: false
+      matrix:
+        # Specs are split round-robin across these shards (see wdio.conf.ts).
+        # SHARD_TOTAL below must equal the number of entries here.
+        shard: [1, 2, 3, 4]
+    env:
+      SHARD_INDEX: ${{ matrix.shard }}
+      SHARD_TOTAL: 4
     steps:
       - uses: actions/checkout@v4
 
       # Brings up the SSH/SCP/MinIO target containers, builds the runner image,
-      # compiles the Tauri debug binary in-container, then runs the WDIO suite.
-      - name: Run E2E suite
+      # compiles the Tauri debug binary in-container, then runs this shard's
+      # slice of the WDIO suite.
+      - name: Run E2E suite (shard ${{ matrix.shard }}/4)
         run: make e2e
 
       - name: Upload E2E artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-artifacts
+          # Artifact names must be unique per job in upload-artifact v4.
+          name: e2e-artifacts-shard${{ matrix.shard }}
           path: |
             tests/e2e/screenshots
             tests/e2e/videos

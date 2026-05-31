@@ -6,6 +6,7 @@
 // the Tauri binary specified in `tauri:options.application`.
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { readdirSync } from "node:fs";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -160,9 +161,34 @@ function renderReport(records: TestRecord[]): string {
     return lines.join("\n");
 }
 
+/**
+ * Resolve the spec list, optionally sharded across parallel CI runners.
+ *
+ * When SHARD_INDEX (1-based) and SHARD_TOTAL are set, each runner takes a
+ * round-robin slice of the (sorted) specs. Round-robin — not contiguous
+ * blocks — because the heavy SFTP/S3 transfer specs are clustered at the end
+ * (44-54); striping them spreads that cost evenly instead of dumping it all on
+ * the last shard. Without the env vars, fall back to the full glob.
+ */
+function resolveSpecs(): string[] {
+    const total = Number(process.env.SHARD_TOTAL);
+    const index = Number(process.env.SHARD_INDEX);
+    const sharded =
+        Number.isInteger(total) && total >= 2 && Number.isInteger(index) && index >= 1 && index <= total;
+    if (!sharded) return ["./specs/**/*.spec.ts"];
+
+    const all = readdirSync(path.join(__dirname, "specs"))
+        .filter((f) => f.endsWith(".spec.ts"))
+        .sort()
+        .map((f) => `./specs/${f}`);
+    const shard = all.filter((_, i) => i % total === index - 1);
+    console.log(`[wdio] shard ${index}/${total}: ${shard.length}/${all.length} specs`);
+    return shard;
+}
+
 export const config: WebdriverIO.Config = {
     runner: "local",
-    specs: ["./specs/**/*.spec.ts"],
+    specs: resolveSpecs(),
     maxInstances: 1,
 
     hostname: "127.0.0.1",

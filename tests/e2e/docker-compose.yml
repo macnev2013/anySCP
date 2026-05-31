@@ -165,6 +165,10 @@ services:
       E2E_FORCE_BUILD: ""
       # WDIO log level
       LOG_LEVEL: warn
+      # Spec sharding across parallel CI runners (see wdio.conf.ts). Passed
+      # through from the host env; empty/unset runs the full suite.
+      SHARD_INDEX: ${SHARD_INDEX:-}
+      SHARD_TOTAL: ${SHARD_TOTAL:-}
     volumes:
       - ../..:/workspace                            # repo source (rw, so we can build)
       - cargo-cache:/root/.cargo/registry           # persist crate downloads
