@@ -18,6 +18,7 @@ interface ExplorerToolbarProps {
   onUpload: () => void;
   busy?: boolean;
   sudoMode?: boolean;
+  sudoBusy?: boolean;
   onToggleSudo?: () => void;
 }
 
@@ -33,6 +34,7 @@ export function ExplorerToolbar({
   onUpload,
   busy,
   sudoMode,
+  sudoBusy,
   onToggleSudo,
 }: ExplorerToolbarProps) {
   const caps = provider.capabilities;
@@ -177,9 +179,11 @@ export function ExplorerToolbar({
       {onToggleSudo && (
         <button
           onClick={onToggleSudo}
+          disabled={sudoBusy}
+          aria-busy={sudoBusy}
           title={sudoMode ? "Disable sudo mode" : "Enable sudo mode"}
           aria-label={sudoMode ? "Disable sudo mode" : "Enable sudo mode"}
-          aria-pressed={sudoMode}
+          aria-pressed={!!sudoMode}
           className={[
             iconBtn,
             sudoMode
@@ -187,7 +191,11 @@ export function ExplorerToolbar({
               : "",
           ].join(" ")}
         >
-          <Shield size={15} strokeWidth={1.8} aria-hidden="true" />
+          {sudoBusy ? (
+            <Loader2 size={15} strokeWidth={1.8} aria-hidden="true" className="motion-safe:animate-spin" />
+          ) : (
+            <Shield size={15} strokeWidth={1.8} aria-hidden="true" />
+          )}
         </button>
       )}
     </div>

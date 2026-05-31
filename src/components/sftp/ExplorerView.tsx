@@ -168,31 +168,59 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
 
   // ─── Sudo toggle (SFTP only) ──────────────────────────────────────────────
 
+  const [togglingSudo, setTogglingSudo] = useState(false);
+
   const handleToggleSudo = useCallback(async () => {
-    if (transport !== "sftp") return;
+    // Re-entrancy guard: the open round-trip can take seconds, and a second
+    // toggle would open (and orphan) a second server-side SFTP session.
+    if (transport !== "sftp" || togglingSudo) return;
     const newSudoMode = !sudoMode;
+    setTogglingSudo(true);
 
-    // 1. Open the new session BEFORE closing the old one.
-    const newSftpSessionId = await invoke<string>("sftp_open", {
-      sessionId: sshSessionId,
-      useSudo: newSudoMode,
-    });
+    try {
+      // 1. Open the new session BEFORE closing the old one.
+      const newSftpSessionId = await invoke<string>("sftp_open", {
+        sessionId: sshSessionId,
+        useSudo: newSudoMode,
+      });
 
-    // 2. Close old session on the server (best-effort).
-    try { await invoke("sftp_close", { sftpSessionId: sessionId }); } catch { /* ignore */ }
+      // 2. Close old session on the server (best-effort).
+      try { await invoke("sftp_close", { sftpSessionId: sessionId }); } catch { /* ignore */ }
 
-    // 3. Atomically swap the store entry (keeps same key reference for a
-    //    split second, then the tab ID change causes a clean remount).
-    swapSession(sessionId, newSftpSessionId, newSudoMode);
+      // 3. Swap the store entry (preserves currentPath so the remount lands
+      //    in the same directory).
+      swapSession(sessionId, newSftpSessionId, newSudoMode);
 
-    // 4. Update the tab store so AppShell passes the new session ID as prop.
-    //    This triggers a React key change → ExplorerView remounts cleanly.
-    replaceTabId(sessionId, newSftpSessionId);
-  }, [transport, sudoMode, sessionId, sshSessionId, swapSession, replaceTabId]);
+      // 4. Update the tab store so AppShell passes the new session ID as prop.
+      //    This triggers a React key change → ExplorerView remounts cleanly.
+      replaceTabId(sessionId, newSftpSessionId);
+    } catch (err: unknown) {
+      // Surface the failure (e.g. host without passwordless sudo) instead of
+      // silently no-op'ing. The old session is untouched (close runs only
+      // after a successful open), so the view keeps working.
+      const msg =
+        err && typeof err === "object" && "message" in err
+          ? String((err as { message: string }).message)
+          : `Failed to ${newSudoMode ? "enable" : "disable"} sudo mode`;
+      setError(sessionId, msg);
+    } finally {
+      // On success the view remounts (tab id changes) and this is a no-op;
+      // on failure or a closed tab it re-enables the button.
+      setTogglingSudo(false);
+    }
+  }, [transport, togglingSudo, sudoMode, sessionId, sshSessionId, swapSession, replaceTabId, setError]);
 
-  // On mount: resolve home dir, then load it
+  // On mount: reload the preserved directory (e.g. after a sudo-toggle
+  // remount), otherwise resolve the home dir.
   useEffect(() => {
     (async () => {
+      const preserved = useSftpStore.getState().sessions.get(sessionId)?.currentPath;
+      if (preserved && preserved !== "/") {
+        try {
+          await loadDirectory(preserved);
+          return;
+        } catch { /* fall through to home/root */ }
+      }
       try {
         const homeDir = await explorerInvoke<string>(transport, "home_dir", sessionId);
         await loadDirectory(homeDir);
@@ -483,6 +511,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         onUpload={() => void handleUpload()}
         busy={busy}
         sudoMode={sudoMode}
+        sudoBusy={togglingSudo}
         onToggleSudo={transport === "sftp" && !isRoot ? () => void handleToggleSudo() : undefined}
       />
 

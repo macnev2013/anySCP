@@ -114,8 +114,21 @@ pub async fn sftp_open(
 
     // 3. Request the SFTP subsystem, or exec sudo sftp-server.
     if use_sudo.unwrap_or(false) {
+        // `-n` makes sudo fail fast and non-interactively: without it, a host
+        // that requires a password blocks reading the SFTP byte stream as the
+        // (wrong) password and the open hangs until the init timeout. The shell
+        // loop probes sftp-server on $PATH first (portable `command -v`, not the
+        // non-POSIX `which`) then the known per-distro install paths, so this
+        // works on Debian/Ubuntu, RHEL/Fedora, Alpine and Arch.
         channel
-            .exec(true, "sudo /bin/sh -c 'exec $(which sftp-server 2>/dev/null || echo /usr/lib/openssh/sftp-server)'")
+            .exec(
+                true,
+                "sudo -n /bin/sh -c 'for p in \"$(command -v sftp-server 2>/dev/null)\" \
+                 /usr/lib/openssh/sftp-server /usr/libexec/openssh/sftp-server \
+                 /usr/lib/ssh/sftp-server /usr/libexec/sftp-server; do \
+                 [ -x \"$p\" ] && exec \"$p\"; done; \
+                 echo \"sftp-server: not found\" >&2; exit 127'",
+            )
             .await
             .map_err(|e| SftpError::ChannelError(e.to_string()))?;
     } else {
@@ -126,7 +139,8 @@ pub async fn sftp_open(
     }
 
     // 4. Hand the channel's byte-stream to the russh-sftp client.
-    //    Use a 30 s init timeout (default is 10 s, too short for high-latency servers).
+    //    Raise the per-request timeout to 30 s (russh-sftp defaults to 10 s),
+    //    which covers init + every later request on high-latency servers.
     let sftp = russh_sftp::client::SftpSession::new_opts(channel.into_stream(), Some(30))
         .await
         .map_err(|e| SftpError::ProtocolError(e.to_string()))?;
@@ -141,8 +155,9 @@ pub async fn sftp_open(
         },
     );
 
-    tracing::info!(sftp_session_id = %sftp_id, "SFTP session opened");
-    crate::telemetry::capture("sftp_opened", serde_json::json!({}));
+    let sudo = use_sudo.unwrap_or(false);
+    tracing::info!(sftp_session_id = %sftp_id, sudo, "SFTP session opened");
+    crate::telemetry::capture("sftp_opened", serde_json::json!({ "sudo": sudo }));
     Ok(sftp_id)
 }
 

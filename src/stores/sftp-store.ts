@@ -83,9 +83,17 @@ export const useSftpStore = create<SftpState>((set) => ({
       if (!old) return state;
       const next = new Map(state.sessions);
       next.delete(oldId);
-      next.set(newId, { ...old, sftpSessionId: newId, sudoMode, currentPath: "/", entries: [], loading: false, error: null });
+      // Keep currentPath (via ...old) so the remounted view reloads the same
+      // directory; only the entries are cleared pending the fresh listing.
+      next.set(newId, { ...old, sftpSessionId: newId, sudoMode, entries: [], loading: false, error: null });
       const newActive = state.activeSftpSessionId === oldId ? newId : state.activeSftpSessionId;
-      return { sessions: next, activeSftpSessionId: newActive };
+      // Re-point an outstanding clipboard so a pending cut/copy still pastes
+      // after the session id changes.
+      const clipboard =
+        state.clipboard?.sourceSessionId === oldId
+          ? { ...state.clipboard, sourceSessionId: newId }
+          : state.clipboard;
+      return { sessions: next, activeSftpSessionId: newActive, clipboard };
     }),
 
   setActiveSftpSession: (id) =>

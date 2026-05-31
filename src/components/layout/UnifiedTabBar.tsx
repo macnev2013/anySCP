@@ -81,7 +81,11 @@ export function UnifiedTabBar() {
 
   return (
     <div className="flex items-center h-[var(--tabbar-height)] no-select px-2">
-      <div className="flex items-center gap-1.5 overflow-x-auto overflow-y-hidden flex-1 min-w-0">
+      <div
+        className="flex items-center gap-1.5 overflow-x-auto overflow-y-hidden flex-1 min-w-0"
+        role="tablist"
+        aria-label="Open sessions"
+      >
         {tabOrder.map((tabId) => {
           const tab = tabs.get(tabId);
           if (!tab) return null;
