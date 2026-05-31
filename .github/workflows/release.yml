@@ -9,7 +9,46 @@ permissions:
   contents: write
 
 jobs:
+  # Create the draft release ONCE so the parallel build matrix all upload to
+  # the same release. GitHub does not de-duplicate *draft* releases by tag, so
+  # previously each matrix job raced to create its own draft → multiple v*
+  # drafts with split assets. Reuse an existing draft if present (e.g. on a
+  # workflow re-run) to stay idempotent.
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create-release.outputs.result }}
+    steps:
+      - name: Create or reuse the draft release
+        id: create-release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = process.env.GITHUB_REF_NAME;
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const existing = releases.find((r) => r.tag_name === tag && r.draft);
+            if (existing) {
+              core.info(`Reusing existing draft release ${existing.id} for ${tag}`);
+              return existing.id;
+            }
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `anySCP ${tag}`,
+              body: "",
+              draft: true,
+              prerelease: false,
+            });
+            core.info(`Created draft release ${data.id} for ${tag}`);
+            return data.id;
+
   build:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -93,11 +132,8 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "anySCP ${{ github.ref_name }}"
-          releaseBody: ""
-          releaseDraft: true
-          prerelease: false
+          # Upload to the single release created up front (no per-job drafts).
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
           updaterJsonKeepUniversal: true
 
