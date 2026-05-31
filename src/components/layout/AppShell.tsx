@@ -268,14 +268,35 @@ export function AppShell() {
               })}
 
 
-            {/* Page / SFTP / S3 content — rendered on top when active */}
-            {activeTab && activeTab.type !== "terminal" && (
+            {/* Explorer (SFTP/S3) tabs — render ALL and toggle visibility, like
+                terminals, so the open directory and selection survive switching
+                tabs instead of resetting to the home/default dir (issue #17). */}
+            {Array.from(allTabs.entries())
+              .filter(([, tab]) => tab.type === "sftp" || tab.type === "s3")
+              .map(([tabId, tab]) => {
+                const isVisible = tabId === activeTabId;
+                return (
+                  <div
+                    key={tabId}
+                    className={`absolute inset-0 ${isVisible ? "z-10 visible" : "z-0 invisible"}`}
+                  >
+                    {tab.type === "sftp" ? (
+                      <ExplorerPage
+                        sftpSessionId={tabId}
+                        transport={tab.transport ?? "sftp"}
+                        isActive={isVisible}
+                      />
+                    ) : (
+                      <ExplorerPage s3SessionId={tabId} isActive={isVisible} />
+                    )}
+                  </div>
+                );
+              })}
+
+            {/* Page content — rendered on top when its tab is active */}
+            {activeTab && activeTab.type === "page" && (
               <div className="absolute inset-0 z-10">
-                {activeTab.type === "sftp" ? (
-                  <ExplorerPage sftpSessionId={activeTab.id} transport={activeTab.transport ?? "sftp"} />
-                ) : activeTab.type === "s3" ? (
-                  <ExplorerPage s3SessionId={activeTab.id} />
-                ) : activePageType === "hosts" ? (
+                {activePageType === "hosts" ? (
                   <HostsDashboard />
                 ) : activePageType === "snippets" ? (
                   <SnippetsPage />

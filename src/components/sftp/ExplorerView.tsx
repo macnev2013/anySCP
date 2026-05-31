@@ -16,9 +16,13 @@ interface ExplorerViewProps {
    * same command surface and session store, differing only in dispatch.
    */
   transport?: Transport;
+  /** Whether this explorer's tab is currently active/visible. Explorer tabs
+   *  stay mounted (issue #17), so document-level listeners are gated to the
+   *  active instance to avoid every open explorer reacting to one event. */
+  isActive?: boolean;
 }
 
-export function ExplorerView({ sessionId, transport = "sftp" }: ExplorerViewProps) {
+export function ExplorerView({ sessionId, transport = "sftp", isActive = true }: ExplorerViewProps) {
   const session = useSftpStore((s) => s.sessions.get(sessionId));
   const setEntries = useSftpStore((s) => s.setEntries);
   const setLoading = useSftpStore((s) => s.setLoading);
@@ -230,6 +234,10 @@ export function ExplorerView({ sessionId, transport = "sftp" }: ExplorerViewProp
   const [creatingFile, setCreatingFile] = useState(false);
 
   useEffect(() => {
+    // Only the active (visible) explorer should react to the document-level
+    // new-folder/new-file events, otherwise every mounted explorer would open
+    // an inline create input at once (issue #17 keeps them all mounted).
+    if (!isActive) return;
     const folderHandler = () => setCreatingFolder(true);
     const fileHandler = () => setCreatingFile(true);
     document.addEventListener("sftp:new-folder", folderHandler);
@@ -242,7 +250,7 @@ export function ExplorerView({ sessionId, transport = "sftp" }: ExplorerViewProp
       document.removeEventListener("explorer:new-folder", folderHandler);
       document.removeEventListener("explorer:new-file", fileHandler);
     };
-  }, []);
+  }, [isActive]);
 
   const handleCreateFile = useCallback(
     async (name: string) => {

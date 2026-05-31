@@ -8,9 +8,13 @@ import { createS3Provider, toS3ExplorerEntry } from "../../providers/s3-provider
 
 interface S3BrowserProps {
   sessionId: string;
+  /** Whether this explorer's tab is currently active/visible. S3 tabs stay
+   *  mounted (issue #17), so document-level listeners are gated to the active
+   *  instance to avoid every open explorer reacting to one event. */
+  isActive?: boolean;
 }
 
-export function S3Browser({ sessionId }: S3BrowserProps) {
+export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
   const session = useS3Store((s) => s.sessions.get(sessionId));
   const setEntries = useS3Store((s) => s.setEntries);
   const setBuckets = useS3Store((s) => s.setBuckets);
@@ -197,6 +201,9 @@ export function S3Browser({ sessionId }: S3BrowserProps) {
   const [creatingFile, setCreatingFile] = useState(false);
 
   useEffect(() => {
+    // Only the active (visible) explorer reacts to document-level new-folder/
+    // new-file events — S3 tabs now stay mounted (issue #17).
+    if (!isActive) return;
     const folderHandler = () => setCreatingFolder(true);
     const fileHandler = () => setCreatingFile(true);
     document.addEventListener("explorer:new-folder", folderHandler);
@@ -205,7 +212,7 @@ export function S3Browser({ sessionId }: S3BrowserProps) {
       document.removeEventListener("explorer:new-folder", folderHandler);
       document.removeEventListener("explorer:new-file", fileHandler);
     };
-  }, []);
+  }, [isActive]);
 
   const handleCreateFile = useCallback(async (name: string) => {
     setCreatingFile(false);

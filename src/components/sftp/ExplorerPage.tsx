@@ -11,9 +11,12 @@ interface ExplorerPageProps {
   /** Defaults to "sftp"; "scp" when the host fell back to SCP. */
   transport?: Transport;
   s3SessionId?: string;
+  /** Whether this tab is the active/visible one. Explorer tabs stay mounted
+   *  (issue #17), so document-level listeners must only fire for the active one. */
+  isActive?: boolean;
 }
 
-export function ExplorerPage({ sftpSessionId, transport = "sftp", s3SessionId }: ExplorerPageProps) {
+export function ExplorerPage({ sftpSessionId, transport = "sftp", s3SessionId, isActive = true }: ExplorerPageProps) {
   const sftpSession = useSftpStore((s) => sftpSessionId ? s.sessions.get(sftpSessionId) : null);
   const s3Session = useS3Store((s) => s3SessionId ? s.sessions.get(s3SessionId) : null);
 
@@ -40,8 +43,8 @@ export function ExplorerPage({ sftpSessionId, transport = "sftp", s3SessionId }:
           className="flex-1 min-h-0 bg-bg-base"
           data-explorer-transport={sftpSessionId ? transport : s3SessionId ? "s3" : undefined}
         >
-          {sftpSessionId && <ExplorerView sessionId={sftpSessionId} transport={transport} />}
-          {s3SessionId && <S3Browser sessionId={s3SessionId} />}
+          {sftpSessionId && <ExplorerView sessionId={sftpSessionId} transport={transport} isActive={isActive} />}
+          {s3SessionId && <S3Browser sessionId={s3SessionId} isActive={isActive} />}
         </div>
       </div>
     </div>
