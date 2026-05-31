@@ -41,7 +41,7 @@ export const useHealthStore = create<HealthState>((set, get) => ({
     const setHealth = (h: HostHealth) =>
       set((s) => ({ byHostId: { ...s.byHostId, [hostId]: h } }));
 
-    setHealth({ status: "checking", message: "Checking host health...", latencyMs: null });
+    setHealth({ status: "checking", message: "Pinging host...", latencyMs: null });
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const result = await invoke<HostHealthCheckResult>("ssh_health_check_saved_host", {
@@ -52,7 +52,7 @@ export const useHealthStore = create<HealthState>((set, get) => ({
       const msg =
         err && typeof err === "object" && "message" in err
           ? String((err as { message: string }).message)
-          : "Health check failed";
+          : "Ping failed";
       setHealth({ status: "error", message: msg, latencyMs: null });
     }
   },

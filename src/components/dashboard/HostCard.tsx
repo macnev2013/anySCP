@@ -102,7 +102,7 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
 
   const contextItems = [
     {
-      label: "Health Check",
+      label: "Ping",
       icon: Activity,
       onClick: () => void checkHealth(host.id),
     },
@@ -148,13 +148,13 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
 
   const healthLabel = (() => {
     if (health.status === "idle") return null;
-    if (health.status === "checking") return "Checking...";
+    if (health.status === "checking") return "Pinging...";
     const latency = health.latencyMs !== null ? ` · ${health.latencyMs}ms` : "";
     if (health.status === "reachable") return `SSH reachable${latency}`;
     if (health.status === "dnsFailed") return "DNS failed";
     if (health.status === "portClosed") return "Port unreachable";
     if (health.status === "sshFailed") return "SSH failed";
-    return "Check failed";
+    return "Ping failed";
   })();
 
   return (
@@ -195,8 +195,8 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
             onClick={stopAnd(() => void checkHealth(host.id))}
             disabled={health.status === "checking"}
             aria-busy={health.status === "checking"}
-            title={health.message ?? "Check host health"}
-            aria-label={`Check health for ${displayName}`}
+            title={health.message ?? "Ping host"}
+            aria-label={`Ping ${displayName}`}
             className={[
               "flex items-center h-8 px-2 rounded-md",
               statusColor(health.status),
