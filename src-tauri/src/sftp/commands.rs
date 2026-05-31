@@ -131,11 +131,14 @@ pub async fn sftp_open(
             .exec(true, "sudo -n true")
             .await
             .map_err(|e| SftpError::ChannelError(e.to_string()))?;
+        // Read until the channel closes. NB: the server often sends `Eof`
+        // BEFORE the `exit-status` request, so we must NOT break on `Eof` or
+        // we'd miss the status and treat a passwordless host as a failure.
         let mut sudo_exit = None;
         while let Some(msg) = check.wait().await {
             match msg {
                 russh::ChannelMsg::ExitStatus { exit_status } => sudo_exit = Some(exit_status),
-                russh::ChannelMsg::Eof | russh::ChannelMsg::Close => break,
+                russh::ChannelMsg::Close => break,
                 _ => {}
             }
         }
