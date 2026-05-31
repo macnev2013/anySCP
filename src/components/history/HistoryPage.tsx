@@ -12,7 +12,7 @@ import type { ConnectionHistoryEntry } from "../../types";
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function formatDateTime(iso: string): string {
-  const d = new Date(iso);
+  const d = new Date(iso.endsWith("Z") ? iso : iso + "Z");
   return d.toLocaleString(undefined, {
     month: "short",
     day: "numeric",
@@ -23,12 +23,12 @@ function formatDateTime(iso: string): string {
 }
 
 function formatTime(iso: string): string {
-  const d = new Date(iso);
+  const d = new Date(iso.endsWith("Z") ? iso : iso + "Z");
   return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
 function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
+  const diff = Date.now() - new Date(iso.endsWith("Z") ? iso : iso + "Z").getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return "Just now";
   if (mins < 60) return `${mins}m ago`;
@@ -371,7 +371,8 @@ function groupByDate(entries: ConnectionHistoryEntry[]): DateGroup[] {
   const yesterdayStr = yesterday.toDateString();
 
   for (const entry of entries) {
-    const d = new Date(entry.connected_at);
+    const raw = entry.connected_at;
+    const d = new Date(raw.endsWith("Z") ? raw : raw + "Z");
     const dateStr = d.toDateString();
 
     const label = dateStr === todayStr
