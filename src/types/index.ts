@@ -13,6 +13,8 @@ export type {
   SshConfigEntry,
   ImportResult,
   SshKeyInfo,
+  HostHealthStatus,
+  HostHealthCheckResult,
   StoredCredential,
 } from "./ssh";
 

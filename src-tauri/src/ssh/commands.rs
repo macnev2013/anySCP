@@ -16,7 +16,7 @@ use tokio::time::timeout;
 pub struct HostHealthCheckResult {
     pub status: HostHealthStatus,
     pub message: String,
-    pub latency_ms: Option<u128>,
+    pub latency_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,7 +48,7 @@ pub async fn ssh_disconnect(
     let result = state.disconnect(&session_id, app_handle).await;
     if result.is_ok() {
         crate::telemetry::capture("ssh_disconnected", serde_json::json!({}));
-    };
+    }
     result
 }
 
@@ -82,7 +82,7 @@ pub async fn ssh_split_session(
     let result = state.split_session(&source_session_id, app_handle).await;
     if result.is_ok() {
         crate::telemetry::capture("ssh_split_pane", serde_json::json!({}));
-    };
+    }
     result
 }
 
@@ -103,8 +103,10 @@ pub async fn inspect_ssh_key(path: String) -> Result<SshKeyInfo, SshError> {
 }
 
 /// Check whether a saved host is reachable without opening a terminal or using
-/// stored credentials. The check resolves DNS, opens the TCP port, then performs
-/// an SSH handshake. Authentication is intentionally skipped.
+/// stored credentials. Loads the host from the DB and delegates to
+/// [`probe_host_health`]. Authentication is intentionally skipped, so a
+/// `Reachable` result only means the endpoint speaks SSH — not that the host
+/// identity is verified or that the stored credentials would be accepted.
 #[tauri::command]
 pub async fn ssh_health_check_saved_host(
     host_id: String,
@@ -118,41 +120,63 @@ pub async fn ssh_health_check_saved_host(
         .map_err(|e| SshError::IoError(e.to_string()))?
         .ok_or_else(|| SshError::SessionNotFound(format!("host not found: {host_id}")))?;
 
-    let started = Instant::now();
-    let addr = format!("{}:{}", saved_host.host, saved_host.port);
+    Ok(probe_host_health(&saved_host.host, saved_host.port).await)
+}
 
+/// Probe a host's SSH reachability: DNS resolution → TCP connect → SSH transport
+/// handshake (no authentication). Each stage is bounded by `HEALTH_CHECK_TIMEOUT`;
+/// crucially the TCP stage shares a *single* budget across all resolved addresses
+/// so a host that resolves to many (or black-holed) addresses cannot stall the
+/// probe for `N * HEALTH_CHECK_TIMEOUT`. The connected TCP stream is reused for the
+/// handshake, so a reachable host is connected to only once. Never returns an
+/// error — every failure mode maps to a structured `HostHealthCheckResult`.
+async fn probe_host_health(host: &str, port: u16) -> HostHealthCheckResult {
+    let started = Instant::now();
+    let elapsed_ms = || started.elapsed().as_millis() as u64;
+    let addr = format!("{host}:{port}");
+
+    // ── DNS ────────────────────────────────────────────────────────────────
     let resolved = match timeout(HEALTH_CHECK_TIMEOUT, lookup_host(&addr)).await {
         Ok(Ok(addrs)) => addrs.collect::<Vec<_>>(),
         Ok(Err(e)) => {
-            return Ok(HostHealthCheckResult {
+            return HostHealthCheckResult {
                 status: HostHealthStatus::DnsFailed,
                 message: format!("DNS lookup failed: {e}"),
                 latency_ms: None,
-            });
+            };
         }
         Err(_) => {
-            return Ok(HostHealthCheckResult {
+            return HostHealthCheckResult {
                 status: HostHealthStatus::DnsFailed,
                 message: "DNS lookup timed out".to_string(),
                 latency_ms: None,
-            });
+            };
         }
     };
 
     if resolved.is_empty() {
-        return Ok(HostHealthCheckResult {
+        return HostHealthCheckResult {
             status: HostHealthStatus::DnsFailed,
             message: "DNS lookup returned no addresses".to_string(),
             latency_ms: None,
-        });
+        };
     }
 
+    // ── TCP ──────────────────────────────────────────────────────────────
+    // Try each resolved address in turn, but bound the whole loop to a single
+    // HEALTH_CHECK_TIMEOUT budget so address count can't multiply the wait.
+    let tcp_deadline = started + HEALTH_CHECK_TIMEOUT;
     let mut tcp_error = None;
-    let mut reachable_addr = None;
+    let mut reachable_stream = None;
     for socket_addr in resolved {
-        match timeout(HEALTH_CHECK_TIMEOUT, TcpStream::connect(socket_addr)).await {
-            Ok(Ok(_stream)) => {
-                reachable_addr = Some(socket_addr);
+        let remaining = tcp_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            tcp_error = Some("TCP connection timed out".to_string());
+            break;
+        }
+        match timeout(remaining, TcpStream::connect(socket_addr)).await {
+            Ok(Ok(stream)) => {
+                reachable_stream = Some(stream);
                 break;
             }
             Ok(Err(e)) => tcp_error = Some(e.to_string()),
@@ -160,24 +184,25 @@ pub async fn ssh_health_check_saved_host(
         }
     }
 
-    let Some(socket_addr) = reachable_addr else {
-        return Ok(HostHealthCheckResult {
+    let Some(stream) = reachable_stream else {
+        return HostHealthCheckResult {
             status: HostHealthStatus::PortClosed,
             message: tcp_error
                 .map(|e| format!("TCP port is not reachable: {e}"))
                 .unwrap_or_else(|| "TCP port is not reachable".to_string()),
-            latency_ms: Some(started.elapsed().as_millis()),
-        });
+            latency_ms: Some(elapsed_ms()),
+        };
     };
 
-    let russh_config = Arc::new(client::Config {
-        inactivity_timeout: Some(HEALTH_CHECK_TIMEOUT),
-        ..Default::default()
-    });
+    // ── SSH transport handshake (no auth) ────────────────────────────────
+    // Reuse the already-connected TCP stream via `connect_stream` so we don't
+    // open a second connection to the host. The handshake bound is the outer
+    // `timeout`, so no `inactivity_timeout` is needed on the throwaway config.
+    let russh_config = Arc::new(client::Config::default());
     let handler = super::handler::SshClientHandler;
     match timeout(
         HEALTH_CHECK_TIMEOUT,
-        client::connect(russh_config, socket_addr, handler),
+        client::connect_stream(russh_config, stream, handler),
     )
     .await
     {
@@ -185,22 +210,62 @@ pub async fn ssh_health_check_saved_host(
             let _ = handle
                 .disconnect(russh::Disconnect::ByApplication, "", "en")
                 .await;
-            Ok(HostHealthCheckResult {
+            HostHealthCheckResult {
                 status: HostHealthStatus::Reachable,
-                message: "SSH handshake succeeded".to_string(),
-                latency_ms: Some(started.elapsed().as_millis()),
-            })
+                message: "SSH service responded to handshake (not authenticated)".to_string(),
+                latency_ms: Some(elapsed_ms()),
+            }
         }
-        Ok(Err(e)) => Ok(HostHealthCheckResult {
+        Ok(Err(e)) => HostHealthCheckResult {
             status: HostHealthStatus::SshFailed,
             message: format!("SSH handshake failed: {e}"),
-            latency_ms: Some(started.elapsed().as_millis()),
-        }),
-        Err(_) => Ok(HostHealthCheckResult {
+            latency_ms: Some(elapsed_ms()),
+        },
+        Err(_) => HostHealthCheckResult {
             status: HostHealthStatus::SshFailed,
             message: "SSH handshake timed out".to_string(),
-            latency_ms: Some(started.elapsed().as_millis()),
-        }),
+            latency_ms: Some(elapsed_ms()),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    /// A hostname under the reserved `.invalid` TLD (RFC 6761) never resolves,
+    /// so the probe must short-circuit at the DNS stage with no latency reading.
+    #[tokio::test]
+    async fn probe_reports_dns_failed_for_unresolvable_host() {
+        let result = probe_host_health("anyscp-nonexistent.invalid", 22).await;
+        assert!(
+            matches!(result.status, HostHealthStatus::DnsFailed),
+            "expected DnsFailed, got {:?} ({})",
+            result.status,
+            result.message,
+        );
+        assert!(result.latency_ms.is_none());
+    }
+
+    /// Binding an ephemeral port then dropping the listener yields a port that is
+    /// guaranteed closed, so the TCP stage must report PortClosed.
+    #[tokio::test]
+    async fn probe_reports_port_closed_for_closed_port() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral port");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+
+        let result = probe_host_health("127.0.0.1", port).await;
+        assert!(
+            matches!(result.status, HostHealthStatus::PortClosed),
+            "expected PortClosed, got {:?} ({})",
+            result.status,
+            result.message,
+        );
+        assert!(result.latency_ms.is_some());
     }
 }
 

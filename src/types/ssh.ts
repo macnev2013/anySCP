@@ -104,6 +104,18 @@ export interface SshKeyInfo {
   has_passphrase: boolean;
 }
 
+// ─── Host health check ──────────────────────────────────────────────────────
+
+/** Mirrors the Rust `HostHealthStatus` enum (serde camelCase). */
+export type HostHealthStatus = "reachable" | "dnsFailed" | "portClosed" | "sshFailed";
+
+/** Result of `ssh_health_check_saved_host`. Mirrors the Rust struct. */
+export interface HostHealthCheckResult {
+  status: HostHealthStatus;
+  message: string;
+  latencyMs: number | null;
+}
+
 // ─── SSH Config Import ────────────────────────────────────────────────────────
 
 export interface SshConfigEntry {

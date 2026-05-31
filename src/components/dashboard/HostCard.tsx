@@ -1,15 +1,19 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Activity, Pencil, TerminalSquare, Copy, Trash2, FolderOpen } from "lucide-react";
-import type { SavedHost } from "../../types";
+import type { HostHealthCheckResult, SavedHost } from "../../types";
 import { relativeTime } from "../../utils/time";
 import { ContextMenu } from "../shared/ContextMenu";
 
+// UI-only superset of the backend `HostHealthStatus`: adds the local view states
+// (`idle` before any check, `checking` while in flight, `error` for IPC failures).
 type HealthStatus = "idle" | "checking" | "reachable" | "dnsFailed" | "portClosed" | "sshFailed" | "error";
 
-interface HostHealthCheckResult {
-  status: "reachable" | "dnsFailed" | "portClosed" | "sshFailed";
-  message: string;
-  latencyMs: number | null;
+// Single source of truth for status → colour, shared by the button and the label.
+function statusColor(status: HealthStatus): string {
+  if (status === "reachable") return "text-status-connected";
+  if (status === "checking") return "text-status-connecting";
+  if (status === "idle") return "text-text-muted";
+  return "text-status-error";
 }
 
 interface HostCardProps {
@@ -75,6 +79,10 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
     message: string | null;
     latencyMs: number | null;
   }>({ status: "idle", message: null, latencyMs: null });
+  // Guards against overlapping checks (button + context menu) so a stale result
+  // can't clobber a newer one. A ref (not state) so concurrent clicks in the
+  // same render frame are also rejected.
+  const checkInFlight = useRef(false);
 
   // Build subtitle segments
   const subtitleParts: string[] = [`SSH, ${host.username}`];
@@ -147,6 +155,8 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
   };
 
   const checkHealth = async () => {
+    if (checkInFlight.current) return;
+    checkInFlight.current = true;
     setHealth({ status: "checking", message: "Checking host health...", latencyMs: null });
     try {
       const { invoke } = await import("@tauri-apps/api/core");
@@ -163,6 +173,8 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
         ? String((err as { message: string }).message)
         : "Health check failed";
       setHealth({ status: "error", message: msg, latencyMs: null });
+    } finally {
+      checkInFlight.current = false;
     }
   };
 
@@ -170,18 +182,12 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
     if (health.status === "idle") return null;
     if (health.status === "checking") return "Checking...";
     const latency = health.latencyMs !== null ? ` · ${health.latencyMs}ms` : "";
-    if (health.status === "reachable") return `Reachable${latency}`;
+    if (health.status === "reachable") return `SSH reachable${latency}`;
     if (health.status === "dnsFailed") return "DNS failed";
     if (health.status === "portClosed") return "Port unreachable";
     if (health.status === "sshFailed") return "SSH failed";
     return "Check failed";
   })();
-
-  const healthClass = health.status === "reachable"
-    ? "text-status-connected"
-    : health.status === "checking"
-      ? "text-status-connecting"
-      : "text-status-error";
 
   return (
     <>
@@ -219,16 +225,17 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
             type="button"
             data-testid={`host-card-${host.id}-health`}
             onClick={stopAnd(() => void checkHealth())}
+            disabled={health.status === "checking"}
+            aria-busy={health.status === "checking"}
             title={health.message ?? "Check host health"}
             aria-label={`Check health for ${displayName}`}
             className={[
-              "group/btn flex items-center h-8 px-2 rounded-md",
-              health.status === "reachable" ? "text-status-connected" :
-              health.status === "checking" ? "text-status-connecting" :
-              health.status === "idle" ? "text-text-muted" : "text-status-error",
+              "flex items-center h-8 px-2 rounded-md",
+              statusColor(health.status),
               "hover:text-text-primary hover:bg-bg-overlay",
               "transition-[background-color,color] duration-[var(--duration-fast)]",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "disabled:cursor-not-allowed",
             ].join(" ")}
           >
             <Activity
@@ -321,17 +328,21 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
               </span>
             )}
           </div>
-          {healthLabel && (
-            <p
-              className={[
-                "mt-1 text-[length:var(--text-xs)] font-medium truncate",
-                healthClass,
-              ].join(" ")}
-              title={health.message ?? healthLabel}
-            >
-              {healthLabel}
-            </p>
-          )}
+          {/* Always-mounted live region: announces the result to screen
+              readers and reserves a line so checking a host doesn't shift the
+              card height (and its row neighbours in the stretch grid). */}
+          <p
+            data-testid={`host-card-${host.id}-health-status`}
+            role="status"
+            aria-live="polite"
+            className={[
+              "mt-1 min-h-[1rem] text-[length:var(--text-xs)] font-medium truncate",
+              healthLabel ? statusColor(health.status) : "",
+            ].join(" ")}
+            title={health.message ?? undefined}
+          >
+            {healthLabel}
+          </p>
         </div>
 
       </div>
