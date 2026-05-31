@@ -1,12 +1,9 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { Activity, Pencil, TerminalSquare, Copy, Trash2, FolderOpen } from "lucide-react";
-import type { HostHealthCheckResult, SavedHost } from "../../types";
+import type { SavedHost } from "../../types";
 import { relativeTime } from "../../utils/time";
 import { ContextMenu } from "../shared/ContextMenu";
-
-// UI-only superset of the backend `HostHealthStatus`: adds the local view states
-// (`idle` before any check, `checking` while in flight, `error` for IPC failures).
-type HealthStatus = "idle" | "checking" | "reachable" | "dnsFailed" | "portClosed" | "sshFailed" | "error";
+import { useHealthStore, IDLE_HEALTH, type HealthStatus } from "../../stores/health-store";
 
 // Single source of truth for status → colour, shared by the button and the label.
 function statusColor(status: HealthStatus): string {
@@ -74,15 +71,10 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
   const initial = displayName.charAt(0).toUpperCase();
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
-  const [health, setHealth] = useState<{
-    status: HealthStatus;
-    message: string | null;
-    latencyMs: number | null;
-  }>({ status: "idle", message: null, latencyMs: null });
-  // Guards against overlapping checks (button + context menu) so a stale result
-  // can't clobber a newer one. A ref (not state) so concurrent clicks in the
-  // same render frame are also rejected.
-  const checkInFlight = useRef(false);
+  // Health lives in a store (keyed by host id), not local state, so a status
+  // survives the dashboard unmounting when a terminal/other tab becomes active.
+  const health = useHealthStore((s) => s.byHostId[host.id] ?? IDLE_HEALTH);
+  const checkHealth = useHealthStore((s) => s.checkHealth);
 
   // Build subtitle segments
   const subtitleParts: string[] = [`SSH, ${host.username}`];
@@ -112,7 +104,7 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
     {
       label: "Health Check",
       icon: Activity,
-      onClick: () => void checkHealth(),
+      onClick: () => void checkHealth(host.id),
     },
     {
       label: "Terminal",
@@ -152,30 +144,6 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
   const stopAnd = (fn: () => void) => (e: React.MouseEvent) => {
     e.stopPropagation();
     fn();
-  };
-
-  const checkHealth = async () => {
-    if (checkInFlight.current) return;
-    checkInFlight.current = true;
-    setHealth({ status: "checking", message: "Checking host health...", latencyMs: null });
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const result = await invoke<HostHealthCheckResult>("ssh_health_check_saved_host", {
-        hostId: host.id,
-      });
-      setHealth({
-        status: result.status,
-        message: result.message,
-        latencyMs: result.latencyMs,
-      });
-    } catch (err) {
-      const msg = err && typeof err === "object" && "message" in err
-        ? String((err as { message: string }).message)
-        : "Health check failed";
-      setHealth({ status: "error", message: msg, latencyMs: null });
-    } finally {
-      checkInFlight.current = false;
-    }
   };
 
   const healthLabel = (() => {
@@ -224,7 +192,7 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
           <button
             type="button"
             data-testid={`host-card-${host.id}-health`}
-            onClick={stopAnd(() => void checkHealth())}
+            onClick={stopAnd(() => void checkHealth(host.id))}
             disabled={health.status === "checking"}
             aria-busy={health.status === "checking"}
             title={health.message ?? "Check host health"}
