@@ -198,7 +198,7 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
             title={health.message ?? "Ping host"}
             aria-label={`Ping ${displayName}`}
             className={[
-              "flex items-center h-8 px-2 rounded-md",
+              "group/btn flex items-center h-8 px-2 rounded-md",
               statusColor(health.status),
               "hover:text-text-primary hover:bg-bg-overlay",
               "transition-[background-color,color] duration-[var(--duration-fast)]",
@@ -212,6 +212,15 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
               aria-hidden="true"
               className={health.status === "checking" ? "shrink-0 motion-safe:animate-pulse" : "shrink-0"}
             />
+            <span
+              className={[
+                "overflow-hidden whitespace-nowrap text-[length:var(--text-xs)] font-medium",
+                "max-w-0 ml-0 group-hover/btn:max-w-[70px] group-hover/btn:ml-1",
+                "transition-[max-width,margin-left] duration-200 ease-out",
+              ].join(" ")}
+            >
+              Ping
+            </span>
           </button>
           <button
             type="button"
