@@ -178,6 +178,7 @@ export function ExplorerToolbar({
 
       {onToggleSudo && (
         <button
+          data-testid="explorer-sudo-toggle"
           onClick={onToggleSudo}
           disabled={sudoBusy}
           aria-busy={sudoBusy}

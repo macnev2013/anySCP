@@ -45,6 +45,29 @@ export async function navigateExplorerHome(): Promise<void> {
     await btn.click();
 }
 
+/** Current pressed-state of the sudo toggle ("true"/"false"), or null if the
+ *  button isn't rendered (e.g. SCP transport or a root login). */
+export async function sudoToggleState(): Promise<string | null> {
+    const btn = await $("[data-testid='explorer-sudo-toggle']");
+    if (!(await btn.isExisting())) return null;
+    return await btn.getAttribute("aria-pressed");
+}
+
+/** Click the sudo toggle and wait until the (remounted) explorer reports the
+ *  expected pressed state. Toggling reopens the SFTP session over `sudo
+ *  sftp-server` and remounts the view, so the button element is replaced. */
+export async function toggleSudo(expectOn: boolean): Promise<void> {
+    const btn = await $("[data-testid='explorer-sudo-toggle']");
+    await btn.waitForClickable({ timeout: 10_000 });
+    await btn.click();
+    await browser.waitUntil(async () => (await sudoToggleState()) === String(expectOn), {
+        timeout: 30_000,
+        timeoutMsg: `sudo toggle never reached aria-pressed=${expectOn}`,
+    });
+    // The reopened session re-lists its directory; wait for the toolbar to settle.
+    await waitForExplorer();
+}
+
 /** Create a folder via the toolbar. Waits for the new entry to appear. */
 export async function createFolder(name: string): Promise<void> {
     await (await $("[data-testid='explorer-new-folder']")).click();
