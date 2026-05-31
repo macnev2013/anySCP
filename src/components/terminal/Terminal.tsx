@@ -9,6 +9,49 @@ import { useSettingsStore } from "../../stores/settings-store";
 import type { SessionId } from "../../types";
 
 /**
+ * ANSI 16-color palettes. xterm.js falls back to its built-in palette when these
+ * are unset, and that default green (#0DBC79) is nearly illegible on a light
+ * background — so we ship palettes tuned for each background's contrast.
+ */
+const ANSI_PALETTE_DARK = {
+  black: "#2e3436",
+  red: "#cd3131",
+  green: "#0dbc79",
+  yellow: "#e5e510",
+  blue: "#2472c8",
+  magenta: "#bc3fbc",
+  cyan: "#11a8cd",
+  white: "#e5e5e5",
+  brightBlack: "#666666",
+  brightRed: "#f14c4c",
+  brightGreen: "#23d18b",
+  brightYellow: "#f5f543",
+  brightBlue: "#3b8eea",
+  brightMagenta: "#d670d6",
+  brightCyan: "#29b8db",
+  brightWhite: "#ffffff",
+};
+
+const ANSI_PALETTE_LIGHT = {
+  black: "#24292e",
+  red: "#cf222e",
+  green: "#116329",
+  yellow: "#953800",
+  blue: "#0969da",
+  magenta: "#8250df",
+  cyan: "#1b7c83",
+  white: "#6e7781",
+  brightBlack: "#57606a",
+  brightRed: "#a40e26",
+  brightGreen: "#1a7f37",
+  brightYellow: "#633c01",
+  brightBlue: "#0550ae",
+  brightMagenta: "#8250df",
+  brightCyan: "#3192aa",
+  brightWhite: "#8c959f",
+};
+
+/**
  * Read OKLCH CSS custom properties and convert to hex for xterm.js.
  */
 function getTerminalTheme(): Record<string, string> {
@@ -28,6 +71,9 @@ function getTerminalTheme(): Record<string, string> {
     return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
   }
 
+  const ansi =
+    document.documentElement.dataset.theme === "light" ? ANSI_PALETTE_LIGHT : ANSI_PALETTE_DARK;
+
   return {
     background: toHex("--color-bg-base"),
     foreground: toHex("--color-text-primary"),
@@ -35,6 +81,7 @@ function getTerminalTheme(): Record<string, string> {
     cursorAccent: toHex("--color-bg-base"),
     selectionBackground: toHex("--color-accent-muted"),
     selectionForeground: toHex("--color-text-primary"),
+    ...ansi,
   };
 }
 
