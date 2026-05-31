@@ -212,7 +212,7 @@ async fn probe_host_health(host: &str, port: u16) -> HostHealthCheckResult {
                 .await;
             HostHealthCheckResult {
                 status: HostHealthStatus::Reachable,
-                message: "SSH service responded to handshake (not authenticated)".to_string(),
+                message: "Ping".to_string(),
                 latency_ms: Some(elapsed_ms()),
             }
         }
