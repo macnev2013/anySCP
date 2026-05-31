@@ -142,7 +142,7 @@ export function HistoryPage() {
         }
       }
 
-      useSftpStore.getState().openSession(explorerSessionId, sessionId, label);
+      useSftpStore.getState().openSession(explorerSessionId, sessionId, label, entry.username);
       useTabStore.getState().addTab({ type: "sftp", id: explorerSessionId, label, transport });
     } catch {
       // Errors surface via SFTP page

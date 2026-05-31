@@ -14,14 +14,14 @@ export function SftpSessionPicker() {
     (s) => s.status === "Connected",
   );
 
-  const handleOpenSftp = async (sshSessionId: string, label: string) => {
+  const handleOpenSftp = async (sshSessionId: string, label: string, username: string) => {
     setOpeningId(sshSessionId);
     setError(null);
 
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const sftpSessionId = await invoke<string>("sftp_open", { sessionId: sshSessionId });
-      openSession(sftpSessionId, sshSessionId, label);
+      openSession(sftpSessionId, sshSessionId, label, username);
     } catch (err: unknown) {
       const msg =
         err && typeof err === "object" && "message" in err
@@ -119,7 +119,7 @@ export function SftpSessionPicker() {
 
                     {/* Open SFTP button */}
                     <button
-                      onClick={() => void handleOpenSftp(session.id, session.label)}
+                      onClick={() => void handleOpenSftp(session.id, session.label, session.hostConfig.username)}
                       disabled={isOpening}
                       title={`Open SFTP for ${session.label}`}
                       aria-label={`Open file browser for ${session.label}`}

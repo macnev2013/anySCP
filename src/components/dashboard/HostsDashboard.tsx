@@ -287,7 +287,7 @@ export function HostsDashboard() {
           }
         }
 
-        useSftpStore.getState().openSession(explorerSessionId, sessionId, label);
+        useSftpStore.getState().openSession(explorerSessionId, sessionId, label, host.username);
 
         setConnectingHost(null);
         useTabStore.getState().addTab({ type: "sftp", id: explorerSessionId, label, transport });

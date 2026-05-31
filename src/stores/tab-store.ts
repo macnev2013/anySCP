@@ -28,6 +28,8 @@ interface TabState {
   removeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
   updateTabLabel: (id: string, label: string) => void;
+  /** Swap a tab's ID in-place (used by SFTP sudo toggle when session reopens). */
+  replaceTabId: (oldId: string, newId: string) => void;
   /** Activate or create a singleton page tab. */
   openPageTab: (page: PageId, label: string) => void;
   /** Find the most recent tab of a given type and activate it. Returns false if none found. */
@@ -102,6 +104,18 @@ export const useTabStore = create<TabState>((set, get) => ({
       const tabs = new Map(state.tabs);
       tabs.set(id, { ...tab, label });
       return { tabs };
+    }),
+
+  replaceTabId: (oldId, newId) =>
+    set((state) => {
+      const tab = state.tabs.get(oldId);
+      if (!tab) return state;
+      const tabs = new Map(state.tabs);
+      tabs.delete(oldId);
+      tabs.set(newId, { ...tab, id: newId });
+      const tabOrder = state.tabOrder.map((t) => (t === oldId ? newId : t));
+      const activeTabId = state.activeTabId === oldId ? newId : state.activeTabId;
+      return { tabs, tabOrder, activeTabId };
     }),
 
   openPageTab: (page, label) => {
