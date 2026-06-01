@@ -443,9 +443,7 @@ pub async fn scp_edit_in_vscode(
     transfer::download_file(handle.clone(), &remote_path, &local_path, &token, |_| {}).await?;
 
     // 2. Open VS Code (non-blocking).
-    tokio::process::Command::new("code")
-        .arg(&local_path)
-        .spawn()
+    crate::vscode::launch_vscode(&local_path)
         .map_err(|e| {
             ScpError::LocalIoError(format!(
                 "Failed to open VS Code: {e}. Is 'code' in your PATH?"

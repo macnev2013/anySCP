@@ -10,6 +10,7 @@ mod ssh;
 pub mod telemetry;
 mod types;
 mod vault;
+mod vscode;
 
 use db::HostDb;
 use portforward::manager::PortForwardManager;
