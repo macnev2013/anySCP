@@ -231,31 +231,39 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, transport]);
 
-  // ─── Download (enqueue) ───────────────────────────────────────────────────
+  // ─── Download ─────────────────────────────────────────────────────────────
 
   const handleDownload = useCallback(async (entry: ExplorerEntry) => {
     try {
-      const { open, save } = await import("@tauri-apps/plugin-dialog");
-      let localDir: string | null = null;
-
       if (entry.entryType === "Directory") {
-        localDir = await open({ directory: true, title: `Download "${entry.name}" to…` }) as string | null;
+        const { open } = await import("@tauri-apps/plugin-dialog");
+        const localDir = await open({
+          directory: true,
+          title: `Download "${entry.name}" to…`,
+        }) as string | null;
+        if (!localDir) return;
+
+        await explorerInvoke(transport, "enqueue_download", sessionId, {
+          remotePaths: [entry.id],
+          localDir,
+        });
       } else {
-        const savePath = await save({ defaultPath: entry.name, title: `Save "${entry.name}" as…` });
-        if (savePath) {
-          const lastSlash = savePath.lastIndexOf("/");
-          localDir = lastSlash > 0 ? savePath.substring(0, lastSlash) : savePath;
-        }
+        const { save } = await import("@tauri-apps/plugin-dialog");
+        const savePath = await save({
+          defaultPath: entry.name,
+          title: `Save "${entry.name}" as…`,
+        });
+        if (!savePath) return;
+
+        // Use the single-file download API with the full user-chosen path,
+        // so a renamed file is saved under the name the user picked.
+        await explorerInvoke(transport, "download", sessionId, {
+          remotePath: entry.id,
+          localPath: savePath,
+        });
       }
-
-      if (!localDir) return;
-
-      await explorerInvoke(transport, "enqueue_download", sessionId, {
-        remotePaths: [entry.id],
-        localDir,
-      });
     } catch (err) {
-      console.error("Download enqueue failed:", err);
+      console.error("Download failed:", err);
     }
   }, [sessionId, transport]);
 

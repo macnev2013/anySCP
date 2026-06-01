@@ -262,14 +262,13 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
       const savePath = await save({ defaultPath: entry.name, title: `Download "${entry.name}"` });
       if (!savePath) return;
 
-      const lastSlash = savePath.lastIndexOf("/");
-      const localDir = lastSlash > 0 ? savePath.substring(0, lastSlash) : savePath;
-
+      // Use the single-file download so a renamed file is saved under the
+      // name the user picked in the dialog, not the remote key name.
       const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("s3_enqueue_download", {
+      await invoke("s3_download_file", {
         s3SessionId: sessionId,
-        keys: [entry.id],
-        localDir,
+        key: entry.id,
+        localPath: savePath,
       });
     } catch { /* best-effort */ }
   }, [sessionId]);
