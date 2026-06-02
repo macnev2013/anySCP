@@ -65,3 +65,95 @@ impl From<russh_keys::Error> for SshError {
         SshError::KeyParseError(e.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn serialize(err: &SshError) -> serde_json::Value {
+        serde_json::to_value(err).expect("serialize SshError")
+    }
+
+    #[test]
+    fn display_uses_human_readable_prefix() {
+        let err = SshError::ConnectionFailed("timed out".to_string());
+        assert_eq!(err.to_string(), "Connection failed: timed out");
+    }
+
+    #[test]
+    fn serialize_emits_kind_and_message() {
+        // The frontend dispatches on the `kind` discriminator, so its exact
+        // value is part of the public IPC contract.
+        let cases: &[(SshError, &str, &str)] = &[
+            (
+                SshError::ConnectionFailed("host unreachable".into()),
+                "connection_failed",
+                "Connection failed: host unreachable",
+            ),
+            (
+                SshError::AuthenticationFailed("bad password".into()),
+                "authentication_failed",
+                "Authentication failed: bad password",
+            ),
+            (
+                SshError::SessionNotFound("abc-123".into()),
+                "session_not_found",
+                "Session not found: abc-123",
+            ),
+            (
+                SshError::ChannelError("closed early".into()),
+                "channel_error",
+                "Channel error: closed early",
+            ),
+            (
+                SshError::KeyParseError("invalid pem".into()),
+                "key_parse_error",
+                "Key parse error: invalid pem",
+            ),
+            (
+                SshError::IoError("permission denied".into()),
+                "io_error",
+                "I/O error: permission denied",
+            ),
+            (
+                SshError::AlreadyDisconnected,
+                "already_disconnected",
+                "Session already disconnected",
+            ),
+        ];
+
+        for (err, expected_kind, expected_msg) in cases {
+            let value = serialize(err);
+            assert_eq!(
+                value["kind"], *expected_kind,
+                "wrong kind for {err:?}"
+            );
+            assert_eq!(
+                value["message"], *expected_msg,
+                "wrong message for {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn serialize_payload_has_exactly_two_fields() {
+        // Guards against accidentally widening the payload (e.g. exposing
+        // internal context the frontend isn't ready for).
+        let value = serialize(&SshError::IoError("x".into()));
+        let obj = value.as_object().expect("object");
+        assert_eq!(obj.len(), 2);
+        assert!(obj.contains_key("kind"));
+        assert!(obj.contains_key("message"));
+    }
+
+    #[test]
+    fn from_io_error_maps_to_io_variant() {
+        let io_err =
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "nope");
+        let ssh_err: SshError = io_err.into();
+        match ssh_err {
+            SshError::IoError(msg) => assert!(msg.contains("nope")),
+            other => panic!("expected IoError, got {other:?}"),
+        }
+    }
+}
