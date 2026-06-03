@@ -17,17 +17,14 @@ pub fn launch_vscode(path: &Path) -> Result<tokio::process::Child, std::io::Erro
     #[cfg(target_os = "macos")]
     {
         // 1. Standard CLI (works when user ran "Install 'code' command in PATH")
-        match tokio::process::Command::new("code").arg(path).spawn() {
-            Ok(child) => return Ok(child),
-            Err(_) => {}
+        if let Ok(child) = tokio::process::Command::new("code").arg(path).spawn() {
+            return Ok(child);
         }
 
         // 2. Full path to the bundled CLI inside the .app
-        let bundled =
-            "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code";
-        match tokio::process::Command::new(bundled).arg(path).spawn() {
-            Ok(child) => return Ok(child),
-            Err(_) => {}
+        let bundled = "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code";
+        if let Ok(child) = tokio::process::Command::new(bundled).arg(path).spawn() {
+            return Ok(child);
         }
 
         // 3. macOS `open` command — last resort (doesn't support --wait, but we

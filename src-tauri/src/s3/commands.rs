@@ -914,8 +914,7 @@ pub async fn s3_edit_in_vscode(
     }
 
     // 2. Open in VS Code (without --wait so it returns immediately).
-    crate::vscode::launch_vscode(&local_path)
-        .map_err(|e| {
+    crate::vscode::launch_vscode(&local_path).map_err(|e| {
             S3Error::IoError(format!(
                 "Failed to open VS Code: {e}. Is 'code' in your PATH?"
             ))

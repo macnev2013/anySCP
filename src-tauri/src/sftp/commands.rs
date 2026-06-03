@@ -811,8 +811,7 @@ pub async fn sftp_edit_in_vscode(
     }
 
     // 2. Open in VS Code (without --wait so it returns immediately)
-    crate::vscode::launch_vscode(&local_path)
-        .map_err(|e| {
+    crate::vscode::launch_vscode(&local_path).map_err(|e| {
             SftpError::LocalIoError(format!(
                 "Failed to open VS Code: {e}. Is 'code' in your PATH?"
             ))
