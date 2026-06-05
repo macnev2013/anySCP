@@ -141,9 +141,11 @@ fn timestamp_now() -> String {
 ///
 /// SSH config ProxyJump values come in several shapes: a bare `Host` alias
 /// (`database`), `user@host`, or `user@host:port`. We try, in order:
+///
 ///   1. an exact alias match among the just-imported hosts,
 ///   2. a label match among all saved hosts,
 ///   3. a hostname match (after stripping any `user@` and `:port`).
+///
 /// Returns `None` when nothing matches — the import then leaves the free-text
 /// `proxy_jump` field untouched.
 fn resolve_jump_target(

@@ -217,13 +217,8 @@ impl SshManager {
                     key_data
                 };
 
-                Self::auth_with_key_data(
-                    handle,
-                    &config.username,
-                    &key_data,
-                    passphrase.as_deref(),
-                )
-                .await?
+                Self::auth_with_key_data(handle, &config.username, &key_data, passphrase.as_deref())
+                    .await?
             }
             AuthMethod::PrivateKeyData {
                 key_data,

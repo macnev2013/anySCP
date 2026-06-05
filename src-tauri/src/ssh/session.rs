@@ -46,6 +46,8 @@ pub struct SshSession {
 impl SshSession {
     /// Open a PTY channel on an authenticated connection, start the output
     /// reader loop, and return the session wrapper.
+    // ProxyJump support added `jump_handle`, pushing this one over the 7-arg lint.
+    #[allow(clippy::too_many_arguments)]
     pub async fn open_pty(
         handle: Handle<SshClientHandler>,
         jump_handle: Option<Handle<SshClientHandler>>,
