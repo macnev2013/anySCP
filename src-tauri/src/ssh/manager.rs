@@ -185,8 +185,9 @@ impl SshManager {
     }
 
     /// Authenticate an already-connected handle using the config's auth method.
-    /// Shared by direct and tunnelled connection paths.
-    async fn authenticate_handle(
+    /// Shared by direct and tunnelled connection paths (and the health-check
+    /// probe, which authenticates the jump host before tunnelling to the target).
+    pub(crate) async fn authenticate_handle(
         handle: &mut client::Handle<SshClientHandler>,
         config: &HostConfig,
     ) -> Result<(), SshError> {

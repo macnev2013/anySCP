@@ -102,11 +102,16 @@ pub async fn inspect_ssh_key(path: String) -> Result<SshKeyInfo, SshError> {
         .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
 }
 
-/// Check whether a saved host is reachable without opening a terminal or using
-/// stored credentials. Loads the host from the DB and delegates to
-/// [`probe_host_health`]. Authentication is intentionally skipped, so a
-/// `Reachable` result only means the endpoint speaks SSH — not that the host
-/// identity is verified or that the stored credentials would be accepted.
+/// Check whether a saved host is reachable without opening a terminal.
+///
+/// The full [`HostConfig`] is resolved first (including any ProxyJump chain and
+/// the credentials needed to authenticate the jump host), then delegated to
+/// [`probe_host_health`]. For a direct host, target authentication is
+/// intentionally skipped, so a `Reachable` result only means the endpoint speaks
+/// SSH — not that the host identity is verified or that the stored credentials
+/// would be accepted. For a tunnelled host, the jump host *is* authenticated
+/// (there is no other way to open the tunnel), but the target handshake is still
+/// unauthenticated.
 #[tauri::command]
 pub async fn ssh_health_check_saved_host(
     host_id: String,
@@ -114,84 +119,42 @@ pub async fn ssh_health_check_saved_host(
 ) -> Result<HostHealthCheckResult, SshError> {
     let db_clone = Arc::clone(&db);
     let id_for_db = host_id.clone();
-    let saved_host = tokio::task::spawn_blocking(move || db_clone.get_host(&id_for_db))
-        .await
-        .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
-        .map_err(|e| SshError::IoError(e.to_string()))?
-        .ok_or_else(|| SshError::SessionNotFound(format!("host not found: {host_id}")))?;
+    let config = tokio::task::spawn_blocking(move || {
+        build_host_config_blocking(&id_for_db, &db_clone, &mut Vec::new())
+    })
+    .await
+    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))??;
 
-    Ok(probe_host_health(&saved_host.host, saved_host.port).await)
+    Ok(probe_host_health(&config).await)
 }
 
-/// Probe a host's SSH reachability: DNS resolution → TCP connect → SSH transport
-/// handshake (no authentication). Each stage is bounded by `HEALTH_CHECK_TIMEOUT`;
-/// crucially the TCP stage shares a *single* budget across all resolved addresses
-/// so a host that resolves to many (or black-holed) addresses cannot stall the
-/// probe for `N * HEALTH_CHECK_TIMEOUT`. The connected TCP stream is reused for the
-/// handshake, so a reachable host is connected to only once. Never returns an
-/// error — every failure mode maps to a structured `HostHealthCheckResult`.
-async fn probe_host_health(host: &str, port: u16) -> HostHealthCheckResult {
+/// Probe a saved host's reachability, routing through its ProxyJump host when one
+/// is configured. A direct host is probed straight against `host:port`; a
+/// tunnelled host is reached by connecting + authenticating to the jump host and
+/// opening a `direct-tcpip` channel to the target (mirroring how a real
+/// connection is established). Never returns an error — every failure mode maps
+/// to a structured [`HostHealthCheckResult`].
+async fn probe_host_health(config: &HostConfig) -> HostHealthCheckResult {
+    match &config.jump_host {
+        Some(jump) => probe_via_jump(config, jump).await,
+        None => probe_direct(&config.host, config.port).await,
+    }
+}
+
+/// Probe a host directly: DNS resolution → TCP connect → SSH transport handshake
+/// (no authentication). Each stage is bounded by `HEALTH_CHECK_TIMEOUT`; crucially
+/// the TCP stage shares a *single* budget across all resolved addresses so a host
+/// that resolves to many (or black-holed) addresses cannot stall the probe for
+/// `N * HEALTH_CHECK_TIMEOUT`. The connected TCP stream is reused for the
+/// handshake, so a reachable host is connected to only once.
+async fn probe_direct(host: &str, port: u16) -> HostHealthCheckResult {
     let started = Instant::now();
     let elapsed_ms = || started.elapsed().as_millis() as u64;
-    let addr = format!("{host}:{port}");
 
-    // ── DNS ────────────────────────────────────────────────────────────────
-    let resolved = match timeout(HEALTH_CHECK_TIMEOUT, lookup_host(&addr)).await {
-        Ok(Ok(addrs)) => addrs.collect::<Vec<_>>(),
-        Ok(Err(e)) => {
-            return HostHealthCheckResult {
-                status: HostHealthStatus::DnsFailed,
-                message: format!("DNS lookup failed: {e}"),
-                latency_ms: None,
-            };
-        }
-        Err(_) => {
-            return HostHealthCheckResult {
-                status: HostHealthStatus::DnsFailed,
-                message: "DNS lookup timed out".to_string(),
-                latency_ms: None,
-            };
-        }
-    };
-
-    if resolved.is_empty() {
-        return HostHealthCheckResult {
-            status: HostHealthStatus::DnsFailed,
-            message: "DNS lookup returned no addresses".to_string(),
-            latency_ms: None,
-        };
-    }
-
-    // ── TCP ──────────────────────────────────────────────────────────────
-    // Try each resolved address in turn, but bound the whole loop to a single
-    // HEALTH_CHECK_TIMEOUT budget so address count can't multiply the wait.
-    let tcp_deadline = started + HEALTH_CHECK_TIMEOUT;
-    let mut tcp_error = None;
-    let mut reachable_stream = None;
-    for socket_addr in resolved {
-        let remaining = tcp_deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            tcp_error = Some("TCP connection timed out".to_string());
-            break;
-        }
-        match timeout(remaining, TcpStream::connect(socket_addr)).await {
-            Ok(Ok(stream)) => {
-                reachable_stream = Some(stream);
-                break;
-            }
-            Ok(Err(e)) => tcp_error = Some(e.to_string()),
-            Err(_) => tcp_error = Some("TCP connection timed out".to_string()),
-        }
-    }
-
-    let Some(stream) = reachable_stream else {
-        return HostHealthCheckResult {
-            status: HostHealthStatus::PortClosed,
-            message: tcp_error
-                .map(|e| format!("TCP port is not reachable: {e}"))
-                .unwrap_or_else(|| "TCP port is not reachable".to_string()),
-            latency_ms: Some(elapsed_ms()),
-        };
+    // ── DNS + TCP ────────────────────────────────────────────────────────
+    let stream = match resolve_and_connect_tcp(host, port, started).await {
+        Ok(stream) => stream,
+        Err(result) => return result,
     };
 
     // ── SSH transport handshake (no auth) ────────────────────────────────
@@ -229,6 +192,200 @@ async fn probe_host_health(host: &str, port: u16) -> HostHealthCheckResult {
     }
 }
 
+/// Probe a host that is only reachable through a ProxyJump/bastion host. Mirrors
+/// the real connection path in `SshManager::establish`: reach + authenticate the
+/// jump host, open a `direct-tcpip` channel to the target, then run an
+/// (unauthenticated) SSH handshake on the target over that tunnel.
+///
+/// Failure stages are attributed so the result is actionable: problems reaching
+/// or authenticating the jump host say so explicitly, while a refused tunnel to
+/// the target maps to `PortClosed`.
+async fn probe_via_jump(target: &HostConfig, jump: &HostConfig) -> HostHealthCheckResult {
+    let started = Instant::now();
+    let elapsed_ms = || started.elapsed().as_millis() as u64;
+    let russh_config = Arc::new(client::Config::default());
+
+    // ── 1. DNS + TCP to the jump host ────────────────────────────────────
+    let jump_stream = match resolve_and_connect_tcp(&jump.host, jump.port, started).await {
+        Ok(stream) => stream,
+        // Re-label so it's clear the *tunnel host* is the unreachable hop.
+        Err(mut result) => {
+            result.message = format!("tunnel host {}: {}", jump.host, result.message);
+            return result;
+        }
+    };
+
+    // ── 2. SSH handshake + authentication to the jump host ───────────────
+    let mut jump_handle = match timeout(
+        HEALTH_CHECK_TIMEOUT,
+        client::connect_stream(
+            russh_config.clone(),
+            jump_stream,
+            super::handler::SshClientHandler,
+        ),
+    )
+    .await
+    {
+        Ok(Ok(handle)) => handle,
+        Ok(Err(e)) => {
+            return HostHealthCheckResult {
+                status: HostHealthStatus::SshFailed,
+                message: format!("tunnel host {} SSH handshake failed: {e}", jump.host),
+                latency_ms: Some(elapsed_ms()),
+            };
+        }
+        Err(_) => {
+            return HostHealthCheckResult {
+                status: HostHealthStatus::SshFailed,
+                message: format!("tunnel host {} SSH handshake timed out", jump.host),
+                latency_ms: Some(elapsed_ms()),
+            };
+        }
+    };
+
+    if let Err(e) = SshManager::authenticate_handle(&mut jump_handle, jump).await {
+        return HostHealthCheckResult {
+            status: HostHealthStatus::SshFailed,
+            message: format!("tunnel host {} authentication failed: {e}", jump.host),
+            latency_ms: Some(elapsed_ms()),
+        };
+    }
+
+    // ── 3. Open a direct-tcpip channel through the jump host to the target ─
+    let channel = match timeout(
+        HEALTH_CHECK_TIMEOUT,
+        jump_handle.channel_open_direct_tcpip(
+            target.host.clone(),
+            target.port as u32,
+            "127.0.0.1".to_string(),
+            0,
+        ),
+    )
+    .await
+    {
+        Ok(Ok(channel)) => channel,
+        Ok(Err(e)) => {
+            return HostHealthCheckResult {
+                status: HostHealthStatus::PortClosed,
+                message: format!(
+                    "{}:{} is not reachable through the tunnel: {e}",
+                    target.host, target.port
+                ),
+                latency_ms: Some(elapsed_ms()),
+            };
+        }
+        Err(_) => {
+            return HostHealthCheckResult {
+                status: HostHealthStatus::PortClosed,
+                message: format!(
+                    "opening tunnel to {}:{} timed out",
+                    target.host, target.port
+                ),
+                latency_ms: Some(elapsed_ms()),
+            };
+        }
+    };
+
+    // ── 4. SSH transport handshake on the target (no auth) over the tunnel ─
+    match timeout(
+        HEALTH_CHECK_TIMEOUT,
+        client::connect_stream(
+            russh_config,
+            channel.into_stream(),
+            super::handler::SshClientHandler,
+        ),
+    )
+    .await
+    {
+        Ok(Ok(handle)) => {
+            let _ = handle
+                .disconnect(russh::Disconnect::ByApplication, "", "en")
+                .await;
+            HostHealthCheckResult {
+                status: HostHealthStatus::Reachable,
+                message: "Ping (via tunnel)".to_string(),
+                latency_ms: Some(elapsed_ms()),
+            }
+        }
+        Ok(Err(e)) => HostHealthCheckResult {
+            status: HostHealthStatus::SshFailed,
+            message: format!("SSH handshake failed: {e}"),
+            latency_ms: Some(elapsed_ms()),
+        },
+        Err(_) => HostHealthCheckResult {
+            status: HostHealthStatus::SshFailed,
+            message: "SSH handshake timed out".to_string(),
+            latency_ms: Some(elapsed_ms()),
+        },
+    }
+}
+
+/// Resolve `host:port` and open a TCP connection, returning the connected stream.
+/// On failure returns a ready-made [`HostHealthCheckResult`] (DnsFailed or
+/// PortClosed). The TCP stage shares a single `HEALTH_CHECK_TIMEOUT` budget
+/// (measured from `started`) across all resolved addresses.
+async fn resolve_and_connect_tcp(
+    host: &str,
+    port: u16,
+    started: Instant,
+) -> Result<TcpStream, HostHealthCheckResult> {
+    let elapsed_ms = || started.elapsed().as_millis() as u64;
+    let addr = format!("{host}:{port}");
+
+    // ── DNS ────────────────────────────────────────────────────────────────
+    let resolved = match timeout(HEALTH_CHECK_TIMEOUT, lookup_host(&addr)).await {
+        Ok(Ok(addrs)) => addrs.collect::<Vec<_>>(),
+        Ok(Err(e)) => {
+            return Err(HostHealthCheckResult {
+                status: HostHealthStatus::DnsFailed,
+                message: format!("DNS lookup failed: {e}"),
+                latency_ms: None,
+            });
+        }
+        Err(_) => {
+            return Err(HostHealthCheckResult {
+                status: HostHealthStatus::DnsFailed,
+                message: "DNS lookup timed out".to_string(),
+                latency_ms: None,
+            });
+        }
+    };
+
+    if resolved.is_empty() {
+        return Err(HostHealthCheckResult {
+            status: HostHealthStatus::DnsFailed,
+            message: "DNS lookup returned no addresses".to_string(),
+            latency_ms: None,
+        });
+    }
+
+    // ── TCP ──────────────────────────────────────────────────────────────
+    // Try each resolved address in turn, but bound the whole loop to a single
+    // HEALTH_CHECK_TIMEOUT budget so address count can't multiply the wait.
+    let tcp_deadline = started + HEALTH_CHECK_TIMEOUT;
+    let mut tcp_error = None;
+    for socket_addr in resolved {
+        let remaining = tcp_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            tcp_error = Some("TCP connection timed out".to_string());
+            break;
+        }
+        match timeout(remaining, TcpStream::connect(socket_addr)).await {
+            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Err(e)) => tcp_error = Some(e.to_string()),
+            Err(_) => tcp_error = Some("TCP connection timed out".to_string()),
+        }
+    }
+
+    Err(HostHealthCheckResult {
+        status: HostHealthStatus::PortClosed,
+        message: tcp_error
+            .map(|e| format!("TCP port is not reachable: {e}"))
+            .unwrap_or_else(|| "TCP port is not reachable".to_string()),
+        latency_ms: Some(elapsed_ms()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,7 +395,7 @@ mod tests {
     /// so the probe must short-circuit at the DNS stage with no latency reading.
     #[tokio::test]
     async fn probe_reports_dns_failed_for_unresolvable_host() {
-        let result = probe_host_health("anyscp-nonexistent.invalid", 22).await;
+        let result = probe_direct("anyscp-nonexistent.invalid", 22).await;
         assert!(
             matches!(result.status, HostHealthStatus::DnsFailed),
             "expected DnsFailed, got {:?} ({})",
@@ -258,7 +415,7 @@ mod tests {
         let port = listener.local_addr().expect("local addr").port();
         drop(listener);
 
-        let result = probe_host_health("127.0.0.1", port).await;
+        let result = probe_direct("127.0.0.1", port).await;
         assert!(
             matches!(result.status, HostHealthStatus::PortClosed),
             "expected PortClosed, got {:?} ({})",
