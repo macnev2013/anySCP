@@ -11,9 +11,43 @@ use super::{ConnectionHistoryEntry, DbError, HostDb, HostGroup, RecentConnection
 #[instrument(skip(state), fields(id = %host.id))]
 pub async fn save_host(host: SavedHost, state: State<'_, Arc<HostDb>>) -> Result<(), DbError> {
     let db = Arc::clone(&state);
-    task::spawn_blocking(move || db.save_host(&host))
-        .await
-        .map_err(|e| DbError::InitError(format!("task panicked: {e}")))?
+    task::spawn_blocking(move || {
+        validate_no_proxy_jump_cycle(&db, &host)?;
+        db.save_host(&host)
+    })
+    .await
+    .map_err(|e| DbError::InitError(format!("task panicked: {e}")))?
+}
+
+/// Reject ProxyJump configurations that would form a cycle (e.g. A → B → A) or
+/// a self-reference (A → A). Walks the existing jump chain starting at the
+/// host's proposed `proxy_jump_host_id`; if it ever points back at the host
+/// being saved, the configuration is circular.
+fn validate_no_proxy_jump_cycle(db: &HostDb, host: &SavedHost) -> Result<(), DbError> {
+    let Some(first) = host.proxy_jump_host_id.as_deref().filter(|s| !s.is_empty()) else {
+        return Ok(());
+    };
+    if first == host.id {
+        return Err(DbError::Validation(
+            "A host cannot tunnel through itself".to_string(),
+        ));
+    }
+
+    let mut current = Some(first.to_string());
+    // Bound the walk to avoid runaway loops on pre-existing corrupt chains.
+    for _ in 0..64 {
+        let Some(cid) = current else { return Ok(()) };
+        if cid == host.id {
+            return Err(DbError::Validation(
+                "Circular tunnel configuration detected".to_string(),
+            ));
+        }
+        current = db
+            .get_host(&cid)?
+            .and_then(|h| h.proxy_jump_host_id)
+            .filter(|s| !s.is_empty());
+    }
+    Ok(())
 }
 
 /// Return all saved hosts, ordered by label.

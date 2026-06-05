@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Activity, Pencil, TerminalSquare, Copy, Trash2, FolderOpen } from "lucide-react";
+import { Activity, Pencil, TerminalSquare, Copy, Trash2, FolderOpen, Waypoints } from "lucide-react";
 import type { SavedHost } from "../../types";
 import { relativeTime } from "../../utils/time";
 import { ContextMenu } from "../shared/ContextMenu";
 import { useHealthStore, IDLE_HEALTH, type HealthStatus } from "../../stores/health-store";
+import { useHostsStore } from "../../stores/hosts-store";
 
 // Single source of truth for status → colour, shared by the button and the label.
 function statusColor(status: HealthStatus): string {
@@ -75,6 +76,14 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
   // survives the dashboard unmounting when a terminal/other tab becomes active.
   const health = useHealthStore((s) => s.byHostId[host.id] ?? IDLE_HEALTH);
   const checkHealth = useHealthStore((s) => s.checkHealth);
+
+  // Resolve the ProxyJump / tunnel host (if any) for the "via …" badge.
+  const jumpHost = useHostsStore((s) =>
+    host.proxy_jump_host_id
+      ? s.hosts.find((h) => h.id === host.proxy_jump_host_id) ?? null
+      : null,
+  );
+  const jumpLabel = jumpHost ? jumpHost.label || jumpHost.host : null;
 
   // Build subtitle segments
   const subtitleParts: string[] = [`SSH, ${host.username}`];
@@ -305,6 +314,16 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
               </span>
             )}
           </div>
+          {jumpLabel && (
+            <div
+              data-testid={`host-card-${host.id}-tunnel`}
+              className="flex items-center gap-1 mt-0.5 text-[length:var(--text-xs)] text-text-muted truncate"
+              title={`Tunnels through ${jumpLabel}`}
+            >
+              <Waypoints size={11} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+              <span className="truncate">via {jumpLabel}</span>
+            </div>
+          )}
           {/* Always-mounted live region: announces the result to screen
               readers and reserves a line so checking a host doesn't shift the
               card height (and its row neighbours in the stretch grid). */}

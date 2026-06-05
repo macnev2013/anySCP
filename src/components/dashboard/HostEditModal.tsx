@@ -26,6 +26,7 @@ interface FormState {
   groupId: string;
   keyPath: string;
   proxyJump: string;
+  proxyJumpHostId: string;
   keepAliveInterval: string;
   defaultShell: string;
   startupCommand: string;
@@ -49,6 +50,7 @@ const EMPTY_FORM: FormState = {
   groupId: "",
   keyPath: "",
   proxyJump: "",
+  proxyJumpHostId: "",
   keepAliveInterval: "",
   defaultShell: "",
   startupCommand: "",
@@ -81,6 +83,7 @@ function savedHostToForm(host: SavedHost): FormState {
     groupId: host.group_id ?? "",
     keyPath: host.key_path ?? "",
     proxyJump: host.proxy_jump ?? "",
+    proxyJumpHostId: host.proxy_jump_host_id ?? "",
     keepAliveInterval: host.keep_alive_interval != null ? String(host.keep_alive_interval) : "",
     defaultShell: host.default_shell ?? "",
     startupCommand: host.startup_command ?? "",
@@ -114,9 +117,14 @@ export function HostEditModal() {
 
   const saveHost = useHostsStore((s) => s.saveHost);
   const deleteHost = useHostsStore((s) => s.deleteHost);
+  const hosts = useHostsStore((s) => s.hosts);
+  const loadHosts = useHostsStore((s) => s.loadHosts);
   const groups = useGroupsStore((s) => s.groups);
   const loadGroups = useGroupsStore((s) => s.loadGroups);
   const addSession = useSessionStore((s) => s.addSession);
+
+  // Whether "Connect through SSH tunnel" is enabled for this host.
+  const [tunnelEnabled, setTunnelEnabled] = useState(false);
 
   // Animation gate — separate from editingHostId to allow exit animation
   const [visible, setVisible] = useState(false);
@@ -184,9 +192,11 @@ export function HostEditModal() {
     setForm(EMPTY_FORM);
     setHasSavedCred(false);
     setCredCleared(false);
+    setTunnelEnabled(false);
 
-    // Load groups in parallel
+    // Load groups + hosts (for the tunnel dropdown) in parallel
     loadGroups().catch(() => {/* non-fatal */});
+    loadHosts().catch(() => {/* non-fatal */});
 
     if (isNewHost) {
       // New host — no fetch needed
@@ -207,6 +217,7 @@ export function HostEditModal() {
         setOriginalHost(host);
         setForm(savedHostToForm(host));
         setHasSavedCred(hasCred);
+        setTunnelEnabled(!!host.proxy_jump_host_id);
       } catch (err) {
         setError(extractError(err, "Failed to load host data"));
       } finally {
@@ -214,7 +225,7 @@ export function HostEditModal() {
         requestAnimationFrame(() => setVisible(true));
       }
     })();
-  }, [isOpen, editingHostId, isNewHost, loadGroups]);
+  }, [isOpen, editingHostId, isNewHost, loadGroups, loadHosts]);
 
   // Scroll to top and focus Host field when modal opens
   useEffect(() => {
@@ -265,6 +276,9 @@ export function HostEditModal() {
       const kai = parseInt(form.keepAliveInterval, 10);
       if (isNaN(kai) || kai < 0) return "Keep Alive must be a positive number";
     }
+    if (tunnelEnabled && !form.proxyJumpHostId) {
+      return "Select a tunnel host or disable the SSH tunnel";
+    }
     return null;
   };
 
@@ -288,6 +302,7 @@ export function HostEditModal() {
       os_type: null,
       startup_command: null,
       proxy_jump: null,
+      proxy_jump_host_id: null,
       keep_alive_interval: null,
       default_shell: null,
       font_size: null,
@@ -307,6 +322,8 @@ export function HostEditModal() {
         ? form.keyPath.trim()
         : null,
       proxy_jump: form.proxyJump.trim() || null,
+      proxy_jump_host_id:
+        tunnelEnabled && form.proxyJumpHostId ? form.proxyJumpHostId : null,
       keep_alive_interval: form.keepAliveInterval.trim()
         ? parseInt(form.keepAliveInterval, 10)
         : null,
@@ -735,7 +752,23 @@ export function HostEditModal() {
                 </>
               )}
 
-              {/* TODO: Proxy / Jump Host — hidden until backend support is implemented */}
+              {/* ════════════════ TUNNEL ════════════════ */}
+              <SectionHeader>Tunnel</SectionHeader>
+
+              <TunnelSection
+                enabled={tunnelEnabled}
+                onToggle={(on) => {
+                  setError(null);
+                  setTunnelEnabled(on);
+                  if (!on) setField("proxyJumpHostId", "");
+                }}
+                value={form.proxyJumpHostId}
+                onChange={(v) => setField("proxyJumpHostId", v)}
+                hosts={hosts}
+                currentHostId={originalHost?.id ?? null}
+                disabled={isBusy}
+                labelClass={labelClass}
+              />
 
               {/* Keep Alive + Default Shell row */}
               <div className="flex gap-3">
@@ -1017,6 +1050,97 @@ function GroupSelect({ id, value, onChange, groups, disabled }: GroupSelectProps
         })),
       ]}
     />
+  );
+}
+
+// ─── TunnelSection ────────────────────────────────────────────────────────────
+
+interface TunnelSectionProps {
+  enabled: boolean;
+  onToggle: (on: boolean) => void;
+  value: string;
+  onChange: (val: string) => void;
+  hosts: SavedHost[];
+  /** Id of the host being edited — excluded from the dropdown. Null for new. */
+  currentHostId: string | null;
+  disabled: boolean;
+  labelClass: string;
+}
+
+/**
+ * "Connect through SSH tunnel" toggle plus a dropdown of saved hosts to use as
+ * the ProxyJump / bastion host. The currently-edited host is excluded so a host
+ * can't tunnel through itself.
+ */
+function TunnelSection({
+  enabled,
+  onToggle,
+  value,
+  onChange,
+  hosts,
+  currentHostId,
+  disabled,
+  labelClass,
+}: TunnelSectionProps) {
+  const candidates = hosts.filter((h) => h.id !== currentHostId);
+
+  const options = candidates.map((h) => ({
+    value: h.id,
+    label: h.label
+      ? `${h.label} (${h.host}:${h.port})`
+      : `${h.host}:${h.port}`,
+  }));
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      {/* Checkbox row */}
+      <label className="flex items-center gap-2.5 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          data-testid="host-modal-tunnel-enabled"
+          checked={enabled}
+          disabled={disabled}
+          onChange={(e) => onToggle(e.target.checked)}
+          className="h-4 w-4 rounded border-border bg-bg-base text-accent accent-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 cursor-pointer"
+        />
+        <span className="text-[length:var(--text-sm)] text-text-primary">
+          Connect through SSH tunnel
+        </span>
+      </label>
+
+      {/* Tunnel host dropdown — only when enabled */}
+      {enabled && (
+        <div>
+          <label htmlFor="hem-tunnel-host" className={labelClass}>
+            Tunnel Host <span className="ml-0.5 text-status-error" aria-hidden="true">*</span>
+          </label>
+          {candidates.length > 0 ? (
+            <CustomSelect
+              id="hem-tunnel-host"
+              data-testid="host-modal-tunnel-host"
+              value={value}
+              onChange={onChange}
+              disabled={disabled}
+              placeholder="Select a host…"
+              options={options}
+            />
+          ) : (
+            <p className="text-[length:var(--text-xs)] text-text-muted px-3 py-2 rounded-lg bg-bg-base border border-border">
+              No other saved hosts available to tunnel through. Create another
+              host first.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Divider separating tunnel config from the fields below */}
+      <div className="flex items-center gap-3 my-1">
+        <span className="text-[length:var(--text-xs)] font-semibold uppercase tracking-widest text-text-muted whitespace-nowrap">
+          Advanced
+        </span>
+        <div className="flex-1 h-px bg-border" aria-hidden="true" />
+      </div>
+    </div>
   );
 }
 

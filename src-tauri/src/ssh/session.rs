@@ -35,6 +35,12 @@ pub struct SshSession {
     #[allow(dead_code)]
     session_id: String,
     split_config: SplitConfig,
+    /// When this session is reached through a ProxyJump, the jump-host handle is
+    /// held here so the tunnel underneath stays open for the session's lifetime.
+    /// Never accessed — merely keeping it alive prevents russh from tearing down
+    /// the tunnel.
+    #[allow(dead_code)]
+    jump_handle: Option<Handle<SshClientHandler>>,
 }
 
 impl SshSession {
@@ -42,6 +48,7 @@ impl SshSession {
     /// reader loop, and return the session wrapper.
     pub async fn open_pty(
         handle: Handle<SshClientHandler>,
+        jump_handle: Option<Handle<SshClientHandler>>,
         session_id: String,
         cols: u32,
         rows: u32,
@@ -162,6 +169,7 @@ impl SshSession {
             reader_task,
             session_id,
             split_config: SplitConfig { default_shell },
+            jump_handle,
         })
     }
 
@@ -268,6 +276,9 @@ impl SshSession {
             reader_task,
             session_id,
             split_config: SplitConfig { default_shell },
+            // Split panes reuse the parent connection, which already keeps any
+            // ProxyJump tunnel alive — no separate jump handle needed here.
+            jump_handle: None,
         })
     }
 

@@ -289,60 +289,108 @@ pub async fn connect_saved_host(
     app_handle: AppHandle,
 ) -> Result<SessionId, SshError> {
     // -----------------------------------------------------------------
-    // 1. Load the SavedHost record from SQLite.
+    // Resolve the full HostConfig (credentials + ProxyJump chain) entirely
+    // inside one blocking task — DB and keychain access are synchronous.
     // -----------------------------------------------------------------
     let db_clone = Arc::clone(&db);
     let id_for_db = host_id.clone();
+    let config = tokio::task::spawn_blocking(move || {
+        build_host_config_blocking(&id_for_db, &db_clone, &mut Vec::new())
+    })
+    .await
+    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))??;
 
-    let saved_host = tokio::task::spawn_blocking(move || db_clone.get_host(&id_for_db))
-        .await
-        .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
+    let auth_type = auth_method_label(&config.auth_method).to_string();
+    let session_id = state.connect(config, app_handle).await?;
+
+    crate::telemetry::capture(
+        "ssh_connected",
+        serde_json::json!({
+            "auth_type": auth_type,
+        }),
+    );
+
+    Ok(session_id)
+}
+
+/// Short label for an AuthMethod variant, used for telemetry only.
+fn auth_method_label(auth: &AuthMethod) -> &'static str {
+    match auth {
+        AuthMethod::Password { .. } => "password",
+        AuthMethod::PrivateKey { .. } => "privateKey",
+        AuthMethod::PrivateKeyData { .. } => "privateKeyData",
+    }
+}
+
+/// Resolve the AuthMethod for a saved host, pulling secrets from the keychain.
+/// An empty password / absent passphrase means the keychain entry is missing;
+/// the SSH handshake then fails with AuthenticationFailed rather than a vault
+/// error.
+fn resolve_auth_method(host_id: &str, auth_type: &str, key_path: Option<String>) -> AuthMethod {
+    match auth_type {
+        "privateKey" => {
+            let path = key_path.unwrap_or_default();
+            let passphrase = match vault::get_credential(host_id) {
+                Ok(vault::StoredCredential::KeyPassphrase { passphrase }) => Some(passphrase),
+                _ => None,
+            };
+            AuthMethod::PrivateKey {
+                key_path: path,
+                passphrase,
+            }
+        }
+        _ => {
+            let password = match vault::get_credential(host_id) {
+                Ok(vault::StoredCredential::Password { password }) => password,
+                _ => String::new(),
+            };
+            AuthMethod::Password { password }
+        }
+    }
+}
+
+/// Recursively build a [`HostConfig`] for a saved host, including its
+/// credentials and its full ProxyJump chain (`jump_host`). Runs entirely
+/// synchronously (DB + keychain only) so it can be called inside a single
+/// `spawn_blocking`. `visited` guards against cyclic ProxyJump references.
+///
+/// A missing jump host surfaces as a clear `"tunnel host ... not found"` error
+/// rather than the generic not-found message used for the top-level host.
+fn build_host_config_blocking(
+    host_id: &str,
+    db: &HostDb,
+    visited: &mut Vec<String>,
+) -> Result<HostConfig, SshError> {
+    if visited.iter().any(|v| v == host_id) {
+        return Err(SshError::ConnectionFailed(
+            "circular ProxyJump configuration detected".to_string(),
+        ));
+    }
+    visited.push(host_id.to_string());
+
+    let saved_host = db
+        .get_host(host_id)
         .map_err(|e| SshError::IoError(e.to_string()))?
         .ok_or_else(|| SshError::SessionNotFound(format!("host not found: {host_id}")))?;
 
-    // -----------------------------------------------------------------
-    // 2. Resolve the AuthMethod, pulling the secret from the keychain.
-    //
-    //    We move the fields we need into the blocking task so that neither
-    //    the SavedHost nor the vault reference cross an await point.
-    // -----------------------------------------------------------------
-    let id_for_vault = host_id.clone();
-    let auth_type = saved_host.auth_type.clone();
-    let key_path = saved_host.key_path.clone();
+    let auth_method = resolve_auth_method(host_id, &saved_host.auth_type, saved_host.key_path);
 
-    let auth_method = tokio::task::spawn_blocking(move || -> AuthMethod {
-        match auth_type.as_str() {
-            "privateKey" => {
-                let path = key_path.unwrap_or_default();
-                // A passphrase is optional — a key without encryption is valid.
-                let passphrase = match vault::get_credential(&id_for_vault) {
-                    Ok(vault::StoredCredential::KeyPassphrase { passphrase }) => Some(passphrase),
-                    _ => None,
-                };
-                AuthMethod::PrivateKey {
-                    key_path: path,
-                    passphrase,
-                }
-            }
-            _ => {
-                // Default: password auth.  An empty password means the
-                // keychain entry is missing; the SSH handshake will fail
-                // with AuthenticationFailed rather than a vault error.
-                let password = match vault::get_credential(&id_for_vault) {
-                    Ok(vault::StoredCredential::Password { password }) => password,
-                    _ => String::new(),
-                };
-                AuthMethod::Password { password }
-            }
+    // Resolve the ProxyJump target (if any) into a nested HostConfig.
+    let jump_host = match saved_host.proxy_jump_host_id.as_deref() {
+        Some(jump_id) if !jump_id.is_empty() => {
+            let jump_cfg =
+                build_host_config_blocking(jump_id, db, visited).map_err(|e| match e {
+                    SshError::SessionNotFound(_) => SshError::ConnectionFailed(format!(
+                        "tunnel host not found in saved hosts (id {jump_id})"
+                    )),
+                    other => other,
+                })?;
+            Some(Box::new(jump_cfg))
         }
-    })
-    .await
-    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?;
+        _ => None,
+    };
 
-    // -----------------------------------------------------------------
-    // 3. Build HostConfig and open the SSH connection.
-    // -----------------------------------------------------------------
-    let config = HostConfig {
+    Ok(HostConfig {
         host: saved_host.host,
         port: saved_host.port,
         username: saved_host.username,
@@ -355,18 +403,8 @@ pub async fn connect_saved_host(
         keep_alive_interval: saved_host.keep_alive_interval,
         default_shell: saved_host.default_shell,
         startup_command: saved_host.startup_command,
-    };
-
-    let session_id = state.connect(config, app_handle).await?;
-
-    crate::telemetry::capture(
-        "ssh_connected",
-        serde_json::json!({
-            "auth_type": saved_host.auth_type,
-        }),
-    );
-
-    Ok(session_id)
+        jump_host,
+    })
 }
 
 /// Connect to a saved host without opening a PTY.
@@ -380,56 +418,11 @@ pub async fn connect_saved_host_no_pty(
 ) -> Result<SessionId, SshError> {
     let db_clone = Arc::clone(&db);
     let id_for_db = host_id.clone();
-
-    let saved_host = tokio::task::spawn_blocking(move || db_clone.get_host(&id_for_db))
-        .await
-        .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
-        .map_err(|e| SshError::IoError(e.to_string()))?
-        .ok_or_else(|| SshError::SessionNotFound(format!("host not found: {host_id}")))?;
-
-    let id_for_vault = host_id.clone();
-    let auth_type = saved_host.auth_type.clone();
-    let key_path = saved_host.key_path.clone();
-
-    let auth_method = tokio::task::spawn_blocking(move || -> AuthMethod {
-        match auth_type.as_str() {
-            "privateKey" => {
-                let path = key_path.unwrap_or_default();
-                let passphrase = match vault::get_credential(&id_for_vault) {
-                    Ok(vault::StoredCredential::KeyPassphrase { passphrase }) => Some(passphrase),
-                    _ => None,
-                };
-                AuthMethod::PrivateKey {
-                    key_path: path,
-                    passphrase,
-                }
-            }
-            _ => {
-                let password = match vault::get_credential(&id_for_vault) {
-                    Ok(vault::StoredCredential::Password { password }) => password,
-                    _ => String::new(),
-                };
-                AuthMethod::Password { password }
-            }
-        }
+    let config = tokio::task::spawn_blocking(move || {
+        build_host_config_blocking(&id_for_db, &db_clone, &mut Vec::new())
     })
     .await
-    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?;
-
-    let config = HostConfig {
-        host: saved_host.host,
-        port: saved_host.port,
-        username: saved_host.username,
-        auth_method,
-        label: if saved_host.label.is_empty() {
-            None
-        } else {
-            Some(saved_host.label)
-        },
-        keep_alive_interval: None,
-        default_shell: None,
-        startup_command: None,
-    };
+    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))??;
 
     state.connect_no_pty(config).await
 }

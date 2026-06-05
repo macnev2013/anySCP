@@ -70,6 +70,8 @@ export interface SavedHost {
   os_type: string | null;              // "linux" | "macos" | "windows" | "freebsd"
   startup_command: string | null;
   proxy_jump: string | null;
+  /** Id of another saved host to tunnel through (ProxyJump). */
+  proxy_jump_host_id: string | null;
   keep_alive_interval: number | null;
   default_shell: string | null;
   font_size: number | null;

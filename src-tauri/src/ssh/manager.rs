@@ -10,12 +10,21 @@ use tracing::info;
 use super::handler::SshClientHandler;
 use super::session::SshSession;
 
+/// A bare (PTY-less) SSH connection used by the SFTP layer.
+struct BareConn {
+    /// The authenticated target handle, shared with the SFTP layer.
+    handle: Arc<tokio::sync::Mutex<client::Handle<SshClientHandler>>>,
+    /// When the target is reached through a ProxyJump, the jump-host handle is
+    /// stored here so the tunnel underneath stays open. It is never locked —
+    /// merely keeping it alive prevents russh from tearing down the tunnel.
+    _jump_handle: Option<client::Handle<SshClientHandler>>,
+}
+
 /// Manages all active SSH sessions. Stored as Tauri managed state.
 pub struct SshManager {
     sessions: DashMap<String, SshSession>,
     /// Bare SSH handles for SFTP-only connections (no PTY).
-    bare_handles:
-        DashMap<String, Arc<tokio::sync::Mutex<client::Handle<super::handler::SshClientHandler>>>>,
+    bare_handles: DashMap<String, BareConn>,
 }
 
 impl SshManager {
@@ -53,70 +62,16 @@ impl SshManager {
             ..Default::default()
         });
 
-        let addr = format!("{}:{}", config.host, config.port);
-        let handler = SshClientHandler;
-        let mut handle = client::connect(russh_config, &addr, handler)
-            .await
-            .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
-
-        let authenticated = match &config.auth_method {
-            AuthMethod::Password { password } => handle
-                .authenticate_password(&config.username, password)
-                .await
-                .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?,
-            AuthMethod::PrivateKey {
-                key_path,
-                passphrase,
-            } => {
-                let key_data = tokio::fs::read_to_string(key_path)
-                    .await
-                    .map_err(|e| SshError::IoError(e.to_string()))?;
-
-                // Auto-convert PPK to OpenSSH if detected
-                let key_data = if super::keys::is_ppk_format(&key_data) {
-                    let kp = key_path.clone();
-                    let pp = passphrase.clone();
-                    tokio::task::spawn_blocking(move || {
-                        super::keys::convert_ppk_to_openssh(&kp, pp.as_deref())
-                    })
-                    .await
-                    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))??
-                } else {
-                    key_data
-                };
-
-                Self::auth_with_key_data(
-                    &mut handle,
-                    &config.username,
-                    &key_data,
-                    passphrase.as_deref(),
-                )
-                .await?
-            }
-            AuthMethod::PrivateKeyData {
-                key_data,
-                passphrase,
-            } => {
-                Self::auth_with_key_data(
-                    &mut handle,
-                    &config.username,
-                    key_data,
-                    passphrase.as_deref(),
-                )
-                .await?
-            }
-        };
-
-        if !authenticated {
-            return Err(SshError::AuthenticationFailed(
-                "server rejected credentials".to_string(),
-            ));
-        }
+        // Establish the connection — directly or tunnelled through a ProxyJump
+        // host. `jump_handle` (when present) must outlive the target session,
+        // so it is handed to the SshSession to keep alive.
+        let (handle, jump_handle) = Self::establish(&config, russh_config).await?;
 
         info!(session_id = %sid, host = %config.host, "SSH authenticated");
 
         let session = SshSession::open_pty(
             handle,
+            jump_handle,
             sid.clone(),
             80,
             24,
@@ -143,12 +98,98 @@ impl SshManager {
             ..Default::default()
         });
 
-        let addr = format!("{}:{}", config.host, config.port);
-        let handler = SshClientHandler;
-        let mut handle = client::connect(russh_config, &addr, handler)
-            .await
-            .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
+        // Establish the connection — directly or tunnelled through a ProxyJump.
+        let (handle, jump_handle) = Self::establish(&config, russh_config).await?;
 
+        info!(session_id = %sid, host = %config.host, "SSH authenticated (no PTY, for SFTP)");
+
+        self.bare_handles.insert(
+            sid.clone(),
+            BareConn {
+                handle: Arc::new(tokio::sync::Mutex::new(handle)),
+                _jump_handle: jump_handle,
+            },
+        );
+
+        Ok(session_id)
+    }
+
+    /// Establish a connected + authenticated russh handle for `config`.
+    ///
+    /// When `config.jump_host` is set, the connection is tunnelled: an SSH
+    /// session to the jump host is opened first, a `direct-tcpip` channel to the
+    /// target is opened over it, and the target SSH session runs over that
+    /// channel (`ssh -J jump target`). The returned jump handle MUST be kept
+    /// alive for as long as the target session is in use — dropping it tears
+    /// down the tunnel. For direct connections the second element is `None`.
+    async fn establish(
+        config: &HostConfig,
+        russh_config: Arc<client::Config>,
+    ) -> Result<
+        (
+            client::Handle<SshClientHandler>,
+            Option<client::Handle<SshClientHandler>>,
+        ),
+        SshError,
+    > {
+        if let Some(jump) = &config.jump_host {
+            // 1. Connect + authenticate to the jump host.
+            let jump_addr = format!("{}:{}", jump.host, jump.port);
+            let mut jump_handle =
+                client::connect(russh_config.clone(), &jump_addr, SshClientHandler)
+                    .await
+                    .map_err(|e| {
+                        SshError::ConnectionFailed(format!("tunnel host {}: {e}", jump.host))
+                    })?;
+            Self::authenticate_handle(&mut jump_handle, jump)
+                .await
+                .map_err(|e| match e {
+                    SshError::AuthenticationFailed(m) => {
+                        SshError::AuthenticationFailed(format!("tunnel host: {m}"))
+                    }
+                    other => other,
+                })?;
+
+            // 2. Open a direct-tcpip channel through the jump host to the target.
+            let channel = jump_handle
+                .channel_open_direct_tcpip(
+                    config.host.clone(),
+                    config.port as u32,
+                    "127.0.0.1".to_string(),
+                    0,
+                )
+                .await
+                .map_err(|e| {
+                    SshError::ConnectionFailed(format!(
+                        "failed to open tunnel to {}:{}: {e}",
+                        config.host, config.port
+                    ))
+                })?;
+
+            // 3. Run the target SSH session over the tunnelled channel.
+            let mut handle =
+                client::connect_stream(russh_config, channel.into_stream(), SshClientHandler)
+                    .await
+                    .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
+            Self::authenticate_handle(&mut handle, config).await?;
+
+            Ok((handle, Some(jump_handle)))
+        } else {
+            let addr = format!("{}:{}", config.host, config.port);
+            let mut handle = client::connect(russh_config, &addr, SshClientHandler)
+                .await
+                .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
+            Self::authenticate_handle(&mut handle, config).await?;
+            Ok((handle, None))
+        }
+    }
+
+    /// Authenticate an already-connected handle using the config's auth method.
+    /// Shared by direct and tunnelled connection paths.
+    async fn authenticate_handle(
+        handle: &mut client::Handle<SshClientHandler>,
+        config: &HostConfig,
+    ) -> Result<(), SshError> {
         let authenticated = match &config.auth_method {
             AuthMethod::Password { password } => handle
                 .authenticate_password(&config.username, password)
@@ -176,7 +217,7 @@ impl SshManager {
                 };
 
                 Self::auth_with_key_data(
-                    &mut handle,
+                    handle,
                     &config.username,
                     &key_data,
                     passphrase.as_deref(),
@@ -187,13 +228,8 @@ impl SshManager {
                 key_data,
                 passphrase,
             } => {
-                Self::auth_with_key_data(
-                    &mut handle,
-                    &config.username,
-                    key_data,
-                    passphrase.as_deref(),
-                )
-                .await?
+                Self::auth_with_key_data(handle, &config.username, key_data, passphrase.as_deref())
+                    .await?
             }
         };
 
@@ -202,13 +238,7 @@ impl SshManager {
                 "server rejected credentials".to_string(),
             ));
         }
-
-        info!(session_id = %sid, host = %config.host, "SSH authenticated (no PTY, for SFTP)");
-
-        self.bare_handles
-            .insert(sid.clone(), Arc::new(tokio::sync::Mutex::new(handle)));
-
-        Ok(session_id)
+        Ok(())
     }
 
     async fn auth_with_key_data(
@@ -241,7 +271,7 @@ impl SshManager {
             return Ok(entry.value().ssh_handle());
         }
         if let Some(entry) = self.bare_handles.get(session_id) {
-            return Ok(entry.value().clone());
+            return Ok(entry.value().handle.clone());
         }
         Err(SshError::SessionNotFound(session_id.to_string()))
     }

@@ -21,6 +21,9 @@ pub enum DbError {
 
     #[error("Failed to initialize database: {0}")]
     InitError(String),
+
+    #[error("{0}")]
+    Validation(String),
 }
 
 /// Serialize DbError as `{ kind, message }` so the frontend can pattern-match
@@ -36,6 +39,7 @@ impl Serialize for DbError {
             DbError::Sqlite(_) => "sqlite",
             DbError::NotFound(_) => "not_found",
             DbError::InitError(_) => "init_error",
+            DbError::Validation(_) => "validation",
         };
         state.serialize_field("kind", kind)?;
         state.serialize_field("message", &self.to_string())?;
@@ -105,6 +109,11 @@ pub struct SavedHost {
     pub startup_command: Option<String>,
     /// ProxyJump / bastion host in `user@host:port` form.
     pub proxy_jump: Option<String>,
+    /// Id of another saved host to tunnel through (ProxyJump). When set, the
+    /// connection is established by first opening an SSH session to this jump
+    /// host and tunnelling a `direct-tcpip` channel to the target. Takes
+    /// precedence over the free-text `proxy_jump` field above.
+    pub proxy_jump_host_id: Option<String>,
     /// Seconds between SSH keepalive pings (0 = disabled).
     pub keep_alive_interval: Option<u32>,
     /// Default login shell, e.g. "/bin/zsh".
@@ -452,6 +461,24 @@ impl HostDb {
             );
         }
 
+        if version < 12 {
+            // Idempotent: only add the column if it doesn't already exist.
+            let has_proxy_jump_host_id: bool = conn
+                .prepare("SELECT proxy_jump_host_id FROM saved_hosts LIMIT 0")
+                .is_ok();
+            if !has_proxy_jump_host_id {
+                conn.execute(
+                    "ALTER TABLE saved_hosts ADD COLUMN proxy_jump_host_id TEXT REFERENCES saved_hosts(id) ON DELETE SET NULL",
+                    [],
+                )?;
+            }
+            conn.execute(
+                "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '12')",
+                [],
+            )?;
+            tracing::info!("migration 11→12 applied: added saved_hosts.proxy_jump_host_id");
+        }
+
         Ok(())
     }
 
@@ -472,13 +499,13 @@ impl HostDb {
                  id, label, host, port, username, auth_type, group_id, created_at, updated_at,
                  key_path, color, notes, environment, os_type,
                  startup_command, proxy_jump, keep_alive_interval, default_shell,
-                 font_size, last_connected_at, connection_count
+                 font_size, last_connected_at, connection_count, proxy_jump_host_id
              )
              VALUES (
                  ?1,  ?2,  ?3,  ?4,  ?5,  ?6,  ?7,  ?8,  ?9,
                  ?10, ?11, ?12, ?13, ?14,
                  ?15, ?16, ?17, ?18,
-                 ?19, ?20, ?21
+                 ?19, ?20, ?21, ?22
              )
              ON CONFLICT(id) DO UPDATE SET
                  label                = excluded.label,
@@ -499,7 +526,8 @@ impl HostDb {
                  default_shell        = excluded.default_shell,
                  font_size            = excluded.font_size,
                  last_connected_at    = excluded.last_connected_at,
-                 connection_count     = excluded.connection_count",
+                 connection_count     = excluded.connection_count,
+                 proxy_jump_host_id   = excluded.proxy_jump_host_id",
             params![
                 host.id,
                 host.label,
@@ -522,6 +550,7 @@ impl HostDb {
                 host.font_size,
                 host.last_connected_at,
                 host.connection_count,
+                host.proxy_jump_host_id,
             ],
         )?;
         Ok(())
@@ -538,7 +567,7 @@ impl HostDb {
             "SELECT id, label, host, port, username, auth_type, group_id, created_at, updated_at,
                     key_path, color, notes, environment, os_type,
                     startup_command, proxy_jump, keep_alive_interval, default_shell,
-                    font_size, last_connected_at, connection_count
+                    font_size, last_connected_at, connection_count, proxy_jump_host_id
              FROM saved_hosts
              ORDER BY label ASC",
         )?;
@@ -566,6 +595,7 @@ impl HostDb {
                 font_size: row.get(18)?,
                 last_connected_at: row.get(19)?,
                 connection_count: row.get(20)?,
+                proxy_jump_host_id: row.get(21)?,
             })
         })?;
 
@@ -599,7 +629,7 @@ impl HostDb {
             "SELECT id, label, host, port, username, auth_type, group_id, created_at, updated_at,
                     key_path, color, notes, environment, os_type,
                     startup_command, proxy_jump, keep_alive_interval, default_shell,
-                    font_size, last_connected_at, connection_count
+                    font_size, last_connected_at, connection_count, proxy_jump_host_id
              FROM saved_hosts
              WHERE id = ?1",
         )?;
@@ -627,6 +657,7 @@ impl HostDb {
                 font_size: row.get(18)?,
                 last_connected_at: row.get(19)?,
                 connection_count: row.get(20)?,
+                proxy_jump_host_id: row.get(21)?,
             })
         })?;
 
@@ -635,6 +666,28 @@ impl HostDb {
             Some(Err(e)) => Err(DbError::from(e)),
             None => Ok(None),
         }
+    }
+
+    /// Set (or clear) the ProxyJump target host id for a saved host.
+    /// Returns `DbError::NotFound` if the host id does not exist.
+    #[instrument(skip(self), fields(id = %id))]
+    pub fn set_proxy_jump_host(
+        &self,
+        id: &str,
+        proxy_jump_host_id: Option<&str>,
+    ) -> Result<(), DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let affected = conn.execute(
+            "UPDATE saved_hosts SET proxy_jump_host_id = ?2, updated_at = datetime('now') WHERE id = ?1",
+            params![id, proxy_jump_host_id],
+        )?;
+        if affected == 0 {
+            return Err(DbError::NotFound(id.to_string()));
+        }
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -1470,6 +1523,7 @@ mod tests {
             os_type: None,
             startup_command: None,
             proxy_jump: None,
+            proxy_jump_host_id: None,
             keep_alive_interval: None,
             default_shell: None,
             font_size: None,
@@ -1519,6 +1573,32 @@ mod tests {
 
         let fetched = db.get_host("host-2").expect("get").expect("Some");
         assert_eq!(fetched.label, "Renamed");
+    }
+
+    #[test]
+    fn proxy_jump_host_id_round_trips() {
+        let (db, _dir) = test_db();
+
+        // Jump host first, then the target that tunnels through it.
+        db.save_host(&sample_host("jump-1")).expect("save jump");
+        let target = SavedHost {
+            proxy_jump_host_id: Some("jump-1".to_string()),
+            ..sample_host("target-1")
+        };
+        db.save_host(&target).expect("save target");
+
+        let fetched = db.get_host("target-1").expect("get").expect("Some");
+        assert_eq!(fetched.proxy_jump_host_id.as_deref(), Some("jump-1"));
+
+        // list_hosts must surface the column too.
+        let listed = db.list_hosts().expect("list");
+        let t = listed.iter().find(|h| h.id == "target-1").expect("present");
+        assert_eq!(t.proxy_jump_host_id.as_deref(), Some("jump-1"));
+
+        // Clearing it via the dedicated setter works.
+        db.set_proxy_jump_host("target-1", None).expect("clear");
+        let cleared = db.get_host("target-1").expect("get").expect("Some");
+        assert!(cleared.proxy_jump_host_id.is_none());
     }
 
     #[test]
