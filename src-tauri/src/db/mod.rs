@@ -488,12 +488,100 @@ impl HostDb {
 
     /// Upsert a host record.  If a row with the same `id` already exists it
     /// is fully replaced; `created_at` is preserved by the caller-supplied value.
+    ///
+    /// This is the raw write with no ProxyJump validation — use
+    /// [`save_host_validated`](Self::save_host_validated) for the user-facing save
+    /// path that must reject cycles. This variant is retained for callers that
+    /// either don't set `proxy_jump_host_id` (e.g. the first pass of an import) or
+    /// validate separately.
     #[instrument(skip(self), fields(id = %host.id))]
     pub fn save_host(&self, host: &SavedHost) -> Result<(), DbError> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        Self::upsert_host(&conn, host)?;
+        Ok(())
+    }
+
+    /// Upsert a host, atomically rejecting ProxyJump configurations that would
+    /// form a cycle (`A → B → A`), a self-reference (`A → A`), or point at a
+    /// non-existent tunnel host. The chain walk and the write share a single
+    /// `IMMEDIATE` transaction so a concurrent writer cannot slip a cycle in
+    /// between the check and the write (closing the TOCTOU window).
+    #[instrument(skip(self), fields(id = %host.id))]
+    pub fn save_host_validated(&self, host: &SavedHost) -> Result<(), DbError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        Self::check_proxy_jump_chain(&tx, &host.id, host.proxy_jump_host_id.as_deref())?;
+        Self::upsert_host(&tx, host)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Walk the ProxyJump chain starting at `proxy` (the proposed
+    /// `proxy_jump_host_id` for `host_id`) and reject self-references, cycles, and
+    /// dangling immediate targets. Operates on a single connection/transaction so
+    /// it can be composed atomically with a write. The walk is bounded so a
+    /// pre-existing corrupt chain can never loop forever.
+    fn check_proxy_jump_chain(
+        conn: &Connection,
+        host_id: &str,
+        proxy: Option<&str>,
+    ) -> Result<(), DbError> {
+        let Some(first) = proxy.filter(|s| !s.is_empty()) else {
+            return Ok(());
+        };
+        if first == host_id {
+            return Err(DbError::Validation(
+                "A host cannot tunnel through itself".to_string(),
+            ));
+        }
+
+        // The immediate target must exist — otherwise the FK would reject the
+        // write with an opaque error. Surface a friendly message instead.
+        let exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM saved_hosts WHERE id = ?1",
+                params![first],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !exists {
+            return Err(DbError::Validation(
+                "The selected tunnel host no longer exists".to_string(),
+            ));
+        }
+
+        let mut current = Some(first.to_string());
+        // Bound the walk to avoid runaway loops on pre-existing corrupt chains.
+        for _ in 0..64 {
+            let Some(cid) = current else { return Ok(()) };
+            if cid == host_id {
+                return Err(DbError::Validation(
+                    "Circular tunnel configuration detected".to_string(),
+                ));
+            }
+            current = conn
+                .query_row(
+                    "SELECT proxy_jump_host_id FROM saved_hosts WHERE id = ?1",
+                    params![cid],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten()
+                .filter(|s| !s.is_empty());
+        }
+        Ok(())
+    }
+
+    /// Shared upsert used by both the raw and validated save paths. Takes a bare
+    /// connection so it can run inside a transaction.
+    fn upsert_host(conn: &Connection, host: &SavedHost) -> Result<(), DbError> {
         conn.execute(
             "INSERT INTO saved_hosts (
                  id, label, host, port, username, auth_type, group_id, created_at, updated_at,
@@ -668,25 +756,28 @@ impl HostDb {
         }
     }
 
-    /// Set (or clear) the ProxyJump target host id for a saved host.
-    /// Returns `DbError::NotFound` if the host id does not exist.
+    /// Link `id` to tunnel through `jump_id`, atomically rejecting links that
+    /// would form a cycle or self-reference (the same guard the UI save path
+    /// enforces). Used by the SSH-config import so a config with mutually
+    /// referencing `ProxyJump` directives cannot persist a connect-breaking cycle.
+    /// Returns `DbError::Validation` on a cycle/self-reference and
+    /// `DbError::NotFound` if `id` does not exist.
     #[instrument(skip(self), fields(id = %id))]
-    pub fn set_proxy_jump_host(
-        &self,
-        id: &str,
-        proxy_jump_host_id: Option<&str>,
-    ) -> Result<(), DbError> {
-        let conn = self
+    pub fn set_proxy_jump_host_validated(&self, id: &str, jump_id: &str) -> Result<(), DbError> {
+        let mut conn = self
             .conn
             .lock()
             .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
-        let affected = conn.execute(
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        Self::check_proxy_jump_chain(&tx, id, Some(jump_id))?;
+        let affected = tx.execute(
             "UPDATE saved_hosts SET proxy_jump_host_id = ?2, updated_at = datetime('now') WHERE id = ?1",
-            params![id, proxy_jump_host_id],
+            params![id, jump_id],
         )?;
         if affected == 0 {
             return Err(DbError::NotFound(id.to_string()));
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1575,17 +1666,22 @@ mod tests {
         assert_eq!(fetched.label, "Renamed");
     }
 
+    /// Helper: build a host that tunnels through `jump_id`.
+    fn host_with_jump(id: &str, jump_id: &str) -> SavedHost {
+        SavedHost {
+            proxy_jump_host_id: Some(jump_id.to_string()),
+            ..sample_host(id)
+        }
+    }
+
     #[test]
     fn proxy_jump_host_id_round_trips() {
         let (db, _dir) = test_db();
 
         // Jump host first, then the target that tunnels through it.
         db.save_host(&sample_host("jump-1")).expect("save jump");
-        let target = SavedHost {
-            proxy_jump_host_id: Some("jump-1".to_string()),
-            ..sample_host("target-1")
-        };
-        db.save_host(&target).expect("save target");
+        db.save_host_validated(&host_with_jump("target-1", "jump-1"))
+            .expect("save target");
 
         let fetched = db.get_host("target-1").expect("get").expect("Some");
         assert_eq!(fetched.proxy_jump_host_id.as_deref(), Some("jump-1"));
@@ -1595,10 +1691,114 @@ mod tests {
         let t = listed.iter().find(|h| h.id == "target-1").expect("present");
         assert_eq!(t.proxy_jump_host_id.as_deref(), Some("jump-1"));
 
-        // Clearing it via the dedicated setter works.
-        db.set_proxy_jump_host("target-1", None).expect("clear");
+        // Re-point the target at a different jump host: exercises the UPSERT
+        // `DO UPDATE SET proxy_jump_host_id` branch the UI save path uses.
+        db.save_host(&sample_host("jump-2")).expect("save jump-2");
+        db.save_host_validated(&host_with_jump("target-1", "jump-2"))
+            .expect("re-point");
+        let repointed = db.get_host("target-1").expect("get").expect("Some");
+        assert_eq!(repointed.proxy_jump_host_id.as_deref(), Some("jump-2"));
+
+        // Clearing it via the real upsert path (proxy_jump_host_id: None) works.
+        db.save_host_validated(&sample_host("target-1"))
+            .expect("clear");
         let cleared = db.get_host("target-1").expect("get").expect("Some");
         assert!(cleared.proxy_jump_host_id.is_none());
+    }
+
+    #[test]
+    fn save_rejects_self_referential_proxy_jump() {
+        let (db, _dir) = test_db();
+        db.save_host(&sample_host("a")).expect("save a");
+        let err = db
+            .save_host_validated(&host_with_jump("a", "a"))
+            .expect_err("self-reference must be rejected");
+        assert!(matches!(err, DbError::Validation(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn save_rejects_two_hop_cycle() {
+        let (db, _dir) = test_db();
+        // a (no jump), b → a.
+        db.save_host(&sample_host("a")).expect("save a");
+        db.save_host_validated(&host_with_jump("b", "a"))
+            .expect("save b→a");
+        // Now a → b would close the loop a → b → a.
+        let err = db
+            .save_host_validated(&host_with_jump("a", "b"))
+            .expect_err("cycle must be rejected");
+        assert!(matches!(err, DbError::Validation(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn save_accepts_valid_linear_chain() {
+        let (db, _dir) = test_db();
+        db.save_host(&sample_host("a")).expect("save a");
+        db.save_host_validated(&host_with_jump("b", "a"))
+            .expect("b→a");
+        db.save_host_validated(&host_with_jump("c", "b"))
+            .expect("c→b (linear chain a←b←c is valid)");
+        let c = db.get_host("c").expect("get").expect("Some");
+        assert_eq!(c.proxy_jump_host_id.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn save_rejects_dangling_jump_target() {
+        let (db, _dir) = test_db();
+        // No host "ghost" exists; the FK would reject this, but we want a friendly
+        // Validation error rather than a raw sqlite constraint failure.
+        let err = db
+            .save_host_validated(&host_with_jump("a", "ghost"))
+            .expect_err("dangling target must be rejected");
+        assert!(matches!(err, DbError::Validation(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn deleting_jump_host_nulls_dependent() {
+        let (db, _dir) = test_db();
+        db.save_host(&sample_host("jump")).expect("save jump");
+        db.save_host_validated(&host_with_jump("target", "jump"))
+            .expect("save target→jump");
+
+        // ON DELETE SET NULL (with foreign_keys=ON) must clear the dependent link.
+        db.delete_host("jump").expect("delete jump");
+        let target = db.get_host("target").expect("get").expect("Some");
+        assert!(
+            target.proxy_jump_host_id.is_none(),
+            "deleting the jump host should NULL the dependent proxy_jump_host_id",
+        );
+    }
+
+    #[test]
+    fn validated_setter_rejects_cycle() {
+        let (db, _dir) = test_db();
+        db.save_host(&sample_host("a")).expect("save a");
+        db.save_host(&sample_host("b")).expect("save b");
+        db.set_proxy_jump_host_validated("a", "b").expect("a→b");
+        // b → a would form a cycle; the import path must reject it.
+        let err = db
+            .set_proxy_jump_host_validated("b", "a")
+            .expect_err("cycle via setter must be rejected");
+        assert!(matches!(err, DbError::Validation(_)), "got {err:?}");
+        // Self-reference too.
+        let err = db
+            .set_proxy_jump_host_validated("a", "a")
+            .expect_err("self-reference via setter must be rejected");
+        assert!(matches!(err, DbError::Validation(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn migrations_are_idempotent_across_reopen() {
+        let dir = std::env::temp_dir().join(format!("anyscp_test_{}", uuid::Uuid::new_v4()));
+        {
+            let db = HostDb::new(&dir).expect("first open");
+            db.save_host(&sample_host("persisted")).expect("save");
+        }
+        // Re-opening the same directory re-runs migrations against an already
+        // up-to-date schema; it must not error and must preserve data.
+        let db2 = HostDb::new(&dir).expect("second open re-runs migrations cleanly");
+        let h = db2.get_host("persisted").expect("get").expect("Some");
+        assert_eq!(h.id, "persisted");
     }
 
     #[test]

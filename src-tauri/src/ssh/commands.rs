@@ -193,65 +193,57 @@ async fn probe_direct(host: &str, port: u16) -> HostHealthCheckResult {
 }
 
 /// Probe a host that is only reachable through a ProxyJump/bastion host. Mirrors
-/// the real connection path in `SshManager::establish`: reach + authenticate the
-/// jump host, open a `direct-tcpip` channel to the target, then run an
-/// (unauthenticated) SSH handshake on the target over that tunnel.
+/// the real connection path by reusing [`SshManager::establish`] to bring up the
+/// *entire* jump chain (so a multi-hop `a → b → target` is traversed in full,
+/// not just the first hop), then opens a `direct-tcpip` channel to the target and
+/// runs an (unauthenticated) SSH handshake on it over that tunnel.
+///
+/// Authenticating the jump chain is unavoidable — a bastion cannot open a tunnel
+/// without a login — so unlike the direct probe this performs a real auth against
+/// every jump hop using stored credentials. Each phase is bounded by a timeout so
+/// a stalled auth on any hop cannot hang the probe (the jump-chain bring-up gets a
+/// larger budget because it may legitimately span several sequential handshakes).
 ///
 /// Failure stages are attributed so the result is actionable: problems reaching
-/// or authenticating the jump host say so explicitly, while a refused tunnel to
-/// the target maps to `PortClosed`.
+/// or authenticating a jump hop are prefixed `tunnel host …`, while a refused
+/// tunnel to the target maps to `PortClosed`.
 async fn probe_via_jump(target: &HostConfig, jump: &HostConfig) -> HostHealthCheckResult {
     let started = Instant::now();
     let elapsed_ms = || started.elapsed().as_millis() as u64;
+    // Throwaway config: no keepalive/inactivity timeout needed for a one-shot probe.
     let russh_config = Arc::new(client::Config::default());
 
-    // ── 1. DNS + TCP to the jump host ────────────────────────────────────
-    let jump_stream = match resolve_and_connect_tcp(&jump.host, jump.port, started).await {
-        Ok(stream) => stream,
-        // Re-label so it's clear the *tunnel host* is the unreachable hop.
-        Err(mut result) => {
-            result.message = format!("tunnel host {}: {}", jump.host, result.message);
-            return result;
-        }
-    };
-
-    // ── 2. SSH handshake + authentication to the jump host ───────────────
-    let mut jump_handle = match timeout(
-        HEALTH_CHECK_TIMEOUT,
-        client::connect_stream(
-            russh_config.clone(),
-            jump_stream,
-            super::handler::SshClientHandler,
-        ),
+    // ── 1. Bring up the full jump chain (connect + auth every hop) ─────────
+    // Bounded so a tarpit/stalled auth on any hop can't hang the probe. The
+    // budget is a small multiple of HEALTH_CHECK_TIMEOUT to accommodate the
+    // sequential handshakes a multi-hop chain requires.
+    let jump_bringup_budget = HEALTH_CHECK_TIMEOUT.saturating_mul(3);
+    let (jump_handle, _chain) = match timeout(
+        jump_bringup_budget,
+        SshManager::establish(jump, russh_config.clone()),
     )
     .await
     {
-        Ok(Ok(handle)) => handle,
+        Ok(Ok(established)) => established,
+        // establish() already prefixes nested hops with "tunnel host …"; add the
+        // immediate hop's identity and surface the underlying reason.
         Ok(Err(e)) => {
             return HostHealthCheckResult {
                 status: HostHealthStatus::SshFailed,
-                message: format!("tunnel host {} SSH handshake failed: {e}", jump.host),
+                message: format!("tunnel host {}: {e}", jump.host),
                 latency_ms: Some(elapsed_ms()),
             };
         }
         Err(_) => {
             return HostHealthCheckResult {
                 status: HostHealthStatus::SshFailed,
-                message: format!("tunnel host {} SSH handshake timed out", jump.host),
+                message: format!("tunnel host {} timed out", jump.host),
                 latency_ms: Some(elapsed_ms()),
             };
         }
     };
 
-    if let Err(e) = SshManager::authenticate_handle(&mut jump_handle, jump).await {
-        return HostHealthCheckResult {
-            status: HostHealthStatus::SshFailed,
-            message: format!("tunnel host {} authentication failed: {e}", jump.host),
-            latency_ms: Some(elapsed_ms()),
-        };
-    }
-
-    // ── 3. Open a direct-tcpip channel through the jump host to the target ─
+    // ── 2. Open a direct-tcpip channel through the jump host to the target ─
     let channel = match timeout(
         HEALTH_CHECK_TIMEOUT,
         jump_handle.channel_open_direct_tcpip(
@@ -268,7 +260,7 @@ async fn probe_via_jump(target: &HostConfig, jump: &HostConfig) -> HostHealthChe
             return HostHealthCheckResult {
                 status: HostHealthStatus::PortClosed,
                 message: format!(
-                    "{}:{} is not reachable through the tunnel: {e}",
+                    "{}:{} could not be reached through the tunnel: {e}",
                     target.host, target.port
                 ),
                 latency_ms: Some(elapsed_ms()),
@@ -286,8 +278,8 @@ async fn probe_via_jump(target: &HostConfig, jump: &HostConfig) -> HostHealthChe
         }
     };
 
-    // ── 4. SSH transport handshake on the target (no auth) over the tunnel ─
-    match timeout(
+    // ── 3. SSH transport handshake on the target (no auth) over the tunnel ─
+    let result = match timeout(
         HEALTH_CHECK_TIMEOUT,
         client::connect_stream(
             russh_config,
@@ -317,7 +309,16 @@ async fn probe_via_jump(target: &HostConfig, jump: &HostConfig) -> HostHealthChe
             message: "SSH handshake timed out".to_string(),
             latency_ms: Some(elapsed_ms()),
         },
-    }
+    };
+
+    // Cleanly tear the jump chain down rather than dropping the sockets, so the
+    // bastion logs a graceful disconnect. Holding `_chain` until here keeps the
+    // tunnel alive for the duration of the probe.
+    let _ = jump_handle
+        .disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await;
+    drop(_chain);
+    result
 }
 
 /// Resolve `host:port` and open a TCP connection, returning the connected stream.
@@ -423,6 +424,86 @@ mod tests {
             result.message,
         );
         assert!(result.latency_ms.is_some());
+    }
+
+    /// Build a minimal direct HostConfig for probe tests.
+    fn cfg(host: &str, port: u16) -> HostConfig {
+        HostConfig {
+            host: host.to_string(),
+            port,
+            username: "u".to_string(),
+            auth_method: AuthMethod::Password {
+                password: String::new(),
+            },
+            label: None,
+            keep_alive_interval: None,
+            default_shell: None,
+            startup_command: None,
+            jump_host: None,
+        }
+    }
+
+    /// When the jump host itself is unreachable, the tunnelled probe must blame
+    /// the *tunnel host* explicitly (prefix `tunnel host …`) rather than the
+    /// target, so the user knows which hop failed.
+    #[tokio::test]
+    async fn probe_via_jump_blames_unreachable_tunnel_host() {
+        // A closed ephemeral port stands in for an unreachable bastion.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral port");
+        let jump_port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+
+        let target = cfg("198.51.100.1", 22); // never reached
+        let jump = cfg("127.0.0.1", jump_port);
+
+        let result = probe_via_jump(&target, &jump).await;
+        assert!(
+            matches!(result.status, HostHealthStatus::SshFailed),
+            "expected SshFailed, got {:?} ({})",
+            result.status,
+            result.message,
+        );
+        assert!(
+            result.message.contains("tunnel host"),
+            "message should blame the tunnel host, got: {}",
+            result.message,
+        );
+    }
+
+    /// Multi-hop: a chain `target → mid → deep` must recurse all the way to the
+    /// DEEPEST hop. We make `deep` an unresolvable host; the failure must name
+    /// it, proving `establish` descended through the whole chain rather than
+    /// stopping at the first jump (the bug the recursive rewrite fixed — the old
+    /// code would only ever touch `mid`).
+    #[tokio::test]
+    async fn probe_via_jump_recurses_through_multi_hop_chain() {
+        // deep (unresolvable, reserved .invalid TLD) ← mid ← target.
+        let deep = cfg("anyscp-deep-hop.invalid", 22);
+        let mid = HostConfig {
+            jump_host: Some(Box::new(deep)),
+            ..cfg("anyscp-mid-hop.invalid", 22)
+        };
+        let target = HostConfig {
+            jump_host: Some(Box::new(mid.clone())),
+            ..cfg("anyscp-target.invalid", 22)
+        };
+
+        let result = probe_via_jump(&target, &mid).await;
+        assert!(
+            matches!(result.status, HostHealthStatus::SshFailed),
+            "expected SshFailed, got {:?} ({})",
+            result.status,
+            result.message,
+        );
+        // The deepest hop's identity in the message proves the recursion reached
+        // it; the old single-hop code never would have.
+        assert!(
+            result.message.contains("anyscp-deep-hop.invalid"),
+            "message should name the deepest hop, got: {}",
+            result.message,
+        );
     }
 }
 

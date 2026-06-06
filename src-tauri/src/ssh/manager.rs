@@ -3,6 +3,8 @@ use crate::types::{
 };
 use dashmap::DashMap;
 use russh::client;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tracing::info;
@@ -10,14 +12,27 @@ use tracing::info;
 use super::handler::SshClientHandler;
 use super::session::SshSession;
 
+/// The target handle plus the chain of jump-host handles that must outlive it
+/// (deepest hop first, empty for a direct connection).
+type EstablishedConn = (
+    client::Handle<SshClientHandler>,
+    Vec<client::Handle<SshClientHandler>>,
+);
+
+/// Boxed, `Send` future for the recursive [`SshManager::establish`]. Boxing is
+/// required because the recursion makes the future type self-referential.
+type EstablishFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<EstablishedConn, SshError>> + Send + 'a>>;
+
 /// A bare (PTY-less) SSH connection used by the SFTP layer.
 struct BareConn {
     /// The authenticated target handle, shared with the SFTP layer.
     handle: Arc<tokio::sync::Mutex<client::Handle<SshClientHandler>>>,
-    /// When the target is reached through a ProxyJump, the jump-host handle is
-    /// stored here so the tunnel underneath stays open. It is never locked —
-    /// merely keeping it alive prevents russh from tearing down the tunnel.
-    _jump_handle: Option<client::Handle<SshClientHandler>>,
+    /// When the target is reached through a ProxyJump chain, the jump-host
+    /// handles (one per hop) are stored here so the tunnel underneath stays
+    /// open. They are never locked — merely keeping them alive prevents russh
+    /// from tearing down the tunnel.
+    _jump_handles: Vec<client::Handle<SshClientHandler>>,
 }
 
 /// Manages all active SSH sessions. Stored as Tauri managed state.
@@ -54,24 +69,32 @@ impl SshManager {
 
         let keepalive_secs = config.keep_alive_interval.unwrap_or(0) as u64;
         let russh_config = Arc::new(client::Config {
-            inactivity_timeout: if keepalive_secs > 0 {
+            // Send SSH keepalive probes rather than arming an inactivity GC timer.
+            // `inactivity_timeout` only tears the session down after a quiet
+            // window (and sends nothing to prevent it), which would also collapse
+            // any ProxyJump tunnel beneath an idle session. `keepalive_interval`
+            // proactively keeps the connection — and the tunnel — alive, while
+            // `keepalive_max` unanswered probes still detect a genuinely dead peer.
+            keepalive_interval: if keepalive_secs > 0 {
                 Some(std::time::Duration::from_secs(keepalive_secs))
             } else {
-                None // No timeout — connection stays alive until explicitly closed
+                None // No keepalive — connection stays alive until explicitly closed
             },
+            keepalive_max: 3,
             ..Default::default()
         });
 
         // Establish the connection — directly or tunnelled through a ProxyJump
-        // host. `jump_handle` (when present) must outlive the target session,
-        // so it is handed to the SshSession to keep alive.
-        let (handle, jump_handle) = Self::establish(&config, russh_config).await?;
+        // chain. The jump handles must outlive the target session, so they are
+        // handed (shared) to the SshSession to keep alive; sharing via Arc lets
+        // split panes on the same connection hold the tunnel open too.
+        let (handle, jump_handles) = Self::establish(&config, russh_config).await?;
 
         info!(session_id = %sid, host = %config.host, "SSH authenticated");
 
         let session = SshSession::open_pty(
             handle,
-            jump_handle,
+            Arc::new(jump_handles),
             sid.clone(),
             80,
             24,
@@ -99,7 +122,7 @@ impl SshManager {
         });
 
         // Establish the connection — directly or tunnelled through a ProxyJump.
-        let (handle, jump_handle) = Self::establish(&config, russh_config).await?;
+        let (handle, jump_handles) = Self::establish(&config, russh_config).await?;
 
         info!(session_id = %sid, host = %config.host, "SSH authenticated (no PTY, for SFTP)");
 
@@ -107,45 +130,54 @@ impl SshManager {
             sid.clone(),
             BareConn {
                 handle: Arc::new(tokio::sync::Mutex::new(handle)),
-                _jump_handle: jump_handle,
+                _jump_handles: jump_handles,
             },
         );
 
         Ok(session_id)
     }
 
-    /// Establish a connected + authenticated russh handle for `config`.
+    /// Establish a connected + authenticated russh handle for `config`, returning
+    /// the target handle plus the chain of jump-host handles that must be kept
+    /// alive beneath it (empty for a direct connection).
     ///
-    /// When `config.jump_host` is set, the connection is tunnelled: an SSH
-    /// session to the jump host is opened first, a `direct-tcpip` channel to the
-    /// target is opened over it, and the target SSH session runs over that
-    /// channel (`ssh -J jump target`). The returned jump handle MUST be kept
-    /// alive for as long as the target session is in use — dropping it tears
-    /// down the tunnel. For direct connections the second element is `None`.
-    async fn establish(
+    /// When `config.jump_host` is set the connection is tunnelled, and because a
+    /// jump host may itself be reached through its own ProxyJump this recurses to
+    /// build the *entire* chain (`ssh -J a,b,c target`): each hop opens a
+    /// `direct-tcpip` channel to the next over the already-authenticated handle
+    /// below it. Every returned jump handle MUST outlive the target session —
+    /// dropping one tears down the tunnel above it. Recursion depth is bounded by
+    /// the cyclic-reference guard in `build_host_config_blocking`, which resolves
+    /// the chain before this runs.
+    ///
+    /// Returns a boxed future because the recursion makes the future type
+    /// self-referential (an `async fn` calling itself cannot size its own future).
+    pub(crate) fn establish(
         config: &HostConfig,
         russh_config: Arc<client::Config>,
-    ) -> Result<
-        (
-            client::Handle<SshClientHandler>,
-            Option<client::Handle<SshClientHandler>>,
-        ),
-        SshError,
-    > {
-        if let Some(jump) = &config.jump_host {
-            // 1. Connect + authenticate to the jump host.
-            let jump_addr = format!("{}:{}", jump.host, jump.port);
-            let mut jump_handle =
-                client::connect(russh_config.clone(), &jump_addr, SshClientHandler)
+    ) -> EstablishFuture<'_> {
+        Box::pin(async move {
+            let Some(jump) = config.jump_host.as_deref() else {
+                // Direct connection — no tunnel.
+                let addr = format!("{}:{}", config.host, config.port);
+                let mut handle = client::connect(russh_config, &addr, SshClientHandler)
                     .await
-                    .map_err(|e| {
-                        SshError::ConnectionFailed(format!("tunnel host {}: {e}", jump.host))
-                    })?;
-            Self::authenticate_handle(&mut jump_handle, jump)
+                    .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
+                Self::authenticate_handle(&mut handle, config).await?;
+                return Ok((handle, Vec::new()));
+            };
+
+            // 1. Recursively establish the jump connection (it may itself be
+            //    tunnelled through its own ProxyJump). Reaching/auth errors are
+            //    re-labelled so the failing hop is identifiable.
+            let (jump_handle, mut chain) = Self::establish(jump, russh_config.clone())
                 .await
                 .map_err(|e| match e {
+                    SshError::ConnectionFailed(m) => {
+                        SshError::ConnectionFailed(format!("tunnel host {}: {m}", jump.host))
+                    }
                     SshError::AuthenticationFailed(m) => {
-                        SshError::AuthenticationFailed(format!("tunnel host: {m}"))
+                        SshError::AuthenticationFailed(format!("tunnel host {}: {m}", jump.host))
                     }
                     other => other,
                 })?;
@@ -173,15 +205,11 @@ impl SshManager {
                     .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
             Self::authenticate_handle(&mut handle, config).await?;
 
-            Ok((handle, Some(jump_handle)))
-        } else {
-            let addr = format!("{}:{}", config.host, config.port);
-            let mut handle = client::connect(russh_config, &addr, SshClientHandler)
-                .await
-                .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
-            Self::authenticate_handle(&mut handle, config).await?;
-            Ok((handle, None))
-        }
+            // Keep this hop's handle and everything beneath it alive under the
+            // target session.
+            chain.push(jump_handle);
+            Ok((handle, chain))
+        })
     }
 
     /// Authenticate an already-connected handle using the config's auth method.
@@ -279,13 +307,20 @@ impl SshManager {
         source_session_id: &str,
         app_handle: AppHandle,
     ) -> Result<SessionId, SshError> {
-        // Get the shared handle and host config from the source session
-        let (handle, host_config) = {
+        // Get the shared handle, host config, and the ProxyJump tunnel chain from
+        // the source session. The jump handles are shared (Arc) so the tunnel
+        // stays open as long as the parent OR any split pane is alive — closing
+        // the parent tab no longer tears the tunnel out from under its children.
+        let (handle, host_config, jump_handles) = {
             let entry = self
                 .sessions
                 .get(source_session_id)
                 .ok_or_else(|| SshError::SessionNotFound(source_session_id.to_string()))?;
-            (entry.value().ssh_handle(), entry.value().host_config())
+            (
+                entry.value().ssh_handle(),
+                entry.value().host_config(),
+                entry.value().jump_handles(),
+            )
         };
 
         let new_id = SessionId::new();
@@ -293,6 +328,7 @@ impl SshManager {
 
         let session = SshSession::open_split_pty(
             handle,
+            jump_handles,
             sid.clone(),
             80,
             24,

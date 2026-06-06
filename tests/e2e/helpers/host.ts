@@ -122,6 +122,26 @@ export async function clickSave(): Promise<void> {
     await btn.click();
 }
 
+/** Toggle the "Connect through SSH tunnel" checkbox to the desired state. */
+export async function setTunnelEnabled(on: boolean): Promise<void> {
+    const cb = await $("[data-testid='host-modal-tunnel-enabled']");
+    await cb.waitForExist({ timeout: 5_000 });
+    if ((await cb.isSelected()) !== on) {
+        await cb.click();
+    }
+}
+
+/** Pick a tunnel host by its id from the tunnel CustomSelect. Modal must be open
+ *  and the tunnel toggle enabled. */
+export async function selectTunnelHost(hostId: string): Promise<void> {
+    const trigger = await $("[data-testid='host-modal-tunnel-host']");
+    await trigger.waitForClickable({ timeout: 5_000 });
+    await trigger.click();
+    const opt = await $(`[data-testid='host-modal-tunnel-host-option-${hostId}']`);
+    await opt.waitForDisplayed({ timeout: 5_000 });
+    await opt.click();
+}
+
 export async function clickConnect(): Promise<void> {
     const btn = await $("[data-testid='host-modal-connect']");
     await btn.waitForClickable({ timeout: 5_000 });

@@ -276,8 +276,16 @@ export function HostEditModal() {
       const kai = parseInt(form.keepAliveInterval, 10);
       if (isNaN(kai) || kai < 0) return "Keep Alive must be a positive number";
     }
-    if (tunnelEnabled && !form.proxyJumpHostId) {
-      return "Select a tunnel host or disable the SSH tunnel";
+    if (tunnelEnabled) {
+      const candidates = hosts.filter((h) => h.id !== originalHost?.id);
+      if (candidates.length === 0) {
+        return "No other saved hosts are available to tunnel through";
+      }
+      // Rejects both an empty selection and a stale one whose host no longer
+      // exists in the dropdown (e.g. it was deleted while the modal was open).
+      if (!candidates.some((h) => h.id === form.proxyJumpHostId)) {
+        return "Select a tunnel host or disable the SSH tunnel";
+      }
     }
     return null;
   };
@@ -1083,6 +1091,10 @@ function TunnelSection({
   labelClass,
 }: TunnelSectionProps) {
   const candidates = hosts.filter((h) => h.id !== currentHostId);
+  const hasCandidates = candidates.length > 0;
+  // A selected value that isn't among the candidates is stale (its host was
+  // deleted, or it's a corrupt self-reference that got excluded).
+  const selectedIsStale = !!value && !candidates.some((h) => h.id === value);
 
   const options = candidates.map((h) => ({
     value: h.id,
@@ -1093,13 +1105,18 @@ function TunnelSection({
 
   return (
     <div className="flex flex-col gap-2.5">
-      {/* Checkbox row */}
-      <label className="flex items-center gap-2.5 cursor-pointer select-none">
+      {/* Checkbox row. Disabled when there's nothing to tunnel through (and not
+          already enabled) so the user can't enter a dead-end required-field state. */}
+      <label
+        className={`flex items-center gap-2.5 select-none ${
+          disabled || (!enabled && !hasCandidates) ? "cursor-not-allowed" : "cursor-pointer"
+        }`}
+      >
         <input
           type="checkbox"
           data-testid="host-modal-tunnel-enabled"
           checked={enabled}
-          disabled={disabled}
+          disabled={disabled || (!enabled && !hasCandidates)}
           onChange={(e) => onToggle(e.target.checked)}
           className="h-4 w-4 rounded border-border bg-bg-base text-accent accent-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 cursor-pointer"
         />
@@ -1108,22 +1125,37 @@ function TunnelSection({
         </span>
       </label>
 
+      {/* Hint when the toggle is unavailable because no other hosts exist yet. */}
+      {!enabled && !hasCandidates && (
+        <p className="text-[length:var(--text-xs)] text-text-muted">
+          Create another saved host first to tunnel through it.
+        </p>
+      )}
+
       {/* Tunnel host dropdown — only when enabled */}
       {enabled && (
         <div>
           <label htmlFor="hem-tunnel-host" className={labelClass}>
             Tunnel Host <span className="ml-0.5 text-status-error" aria-hidden="true">*</span>
           </label>
-          {candidates.length > 0 ? (
-            <CustomSelect
-              id="hem-tunnel-host"
-              data-testid="host-modal-tunnel-host"
-              value={value}
-              onChange={onChange}
-              disabled={disabled}
-              placeholder="Select a host…"
-              options={options}
-            />
+          {hasCandidates ? (
+            <>
+              <CustomSelect
+                id="hem-tunnel-host"
+                data-testid="host-modal-tunnel-host"
+                value={selectedIsStale ? "" : value}
+                onChange={onChange}
+                disabled={disabled}
+                placeholder="Select a host…"
+                options={options}
+              />
+              {selectedIsStale && (
+                <p className="mt-1 text-[length:var(--text-xs)] text-status-error">
+                  The previously selected tunnel host is no longer available.
+                  Pick another or disable the tunnel.
+                </p>
+              )}
+            </>
           ) : (
             <p className="text-[length:var(--text-xs)] text-text-muted px-3 py-2 rounded-lg bg-bg-base border border-border">
               No other saved hosts available to tunnel through. Create another

@@ -35,22 +35,24 @@ pub struct SshSession {
     #[allow(dead_code)]
     session_id: String,
     split_config: SplitConfig,
-    /// When this session is reached through a ProxyJump, the jump-host handle is
-    /// held here so the tunnel underneath stays open for the session's lifetime.
-    /// Never accessed — merely keeping it alive prevents russh from tearing down
-    /// the tunnel.
+    /// When this session is reached through a ProxyJump chain, the jump-host
+    /// handles (one per hop) are held here so the tunnel underneath stays open
+    /// for the session's lifetime. Shared via `Arc` so split panes on the same
+    /// connection keep the tunnel alive even after the parent session is closed.
+    /// Never locked/accessed for I/O — merely held to prevent russh from tearing
+    /// the tunnel down. Empty for a direct (non-tunnelled) connection.
     #[allow(dead_code)]
-    jump_handle: Option<Handle<SshClientHandler>>,
+    jump_handles: Arc<Vec<Handle<SshClientHandler>>>,
 }
 
 impl SshSession {
     /// Open a PTY channel on an authenticated connection, start the output
     /// reader loop, and return the session wrapper.
-    // ProxyJump support added `jump_handle`, pushing this one over the 7-arg lint.
+    // ProxyJump support added `jump_handles`, pushing this one over the 7-arg lint.
     #[allow(clippy::too_many_arguments)]
     pub async fn open_pty(
         handle: Handle<SshClientHandler>,
-        jump_handle: Option<Handle<SshClientHandler>>,
+        jump_handles: Arc<Vec<Handle<SshClientHandler>>>,
         session_id: String,
         cols: u32,
         rows: u32,
@@ -171,14 +173,16 @@ impl SshSession {
             reader_task,
             session_id,
             split_config: SplitConfig { default_shell },
-            jump_handle,
+            jump_handles,
         })
     }
 
     /// Open a new PTY channel on the same authenticated connection.
     /// Used for split panes — avoids re-authentication.
+    #[allow(clippy::too_many_arguments)]
     pub async fn open_split_pty(
         handle: Arc<Mutex<Handle<SshClientHandler>>>,
+        jump_handles: Arc<Vec<Handle<SshClientHandler>>>,
         session_id: String,
         cols: u32,
         rows: u32,
@@ -278,9 +282,9 @@ impl SshSession {
             reader_task,
             session_id,
             split_config: SplitConfig { default_shell },
-            // Split panes reuse the parent connection, which already keeps any
-            // ProxyJump tunnel alive — no separate jump handle needed here.
-            jump_handle: None,
+            // Share the parent's ProxyJump tunnel chain so it stays alive for as
+            // long as this split pane lives, independent of the parent session.
+            jump_handles,
         })
     }
 
@@ -288,6 +292,12 @@ impl SshSession {
     /// its own channel on the same authenticated connection.
     pub fn ssh_handle(&self) -> Arc<Mutex<Handle<SshClientHandler>>> {
         self.handle.clone()
+    }
+
+    /// Return the shared ProxyJump tunnel chain so a split pane can keep the same
+    /// tunnel alive for its own lifetime. Empty for a direct connection.
+    pub fn jump_handles(&self) -> Arc<Vec<Handle<SshClientHandler>>> {
+        self.jump_handles.clone()
     }
 
     /// Return the config needed to open additional split channels.

@@ -54,10 +54,13 @@ services:
       keygen:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "ss -ltn | grep -q :2222"]
+      # `ss` (iproute2) may not be in the image; fall back to busybox netstat so
+      # the check reflects "sshd is listening on 2222" regardless of tooling.
+      test: ["CMD-SHELL", "ss -ltn 2>/dev/null | grep -q :2222 || netstat -lnt 2>/dev/null | grep -q :2222"]
       interval: 2s
-      timeout: 2s
-      retries: 30
+      timeout: 3s
+      retries: 40
+      start_period: 5s
 
   # SCP-only target — SFTP subsystem stripped (see tests/scp-server). Exercises
   # the transparent SFTP→SCP fallback: sftp_open fails here, the app retries
@@ -88,6 +91,114 @@ services:
     image: anyscp-test-scp-busybox:latest
     container_name: anyscp-e2e-sshd-scp-busybox
     networks: [e2e]
+
+  # ─── ProxyJump / tunnel pair ────────────────────────────────────────────────
+  # Proves a connection is genuinely tunnelled. `sshd-bastion` bridges the
+  # runner-reachable `e2e` network and an isolated `e2e-internal` network.
+  # `sshd-tunnel-target` lives ONLY on `e2e-internal`, so the runner shares no
+  # network with it and cannot resolve or reach it directly — a working shell on
+  # it can only mean the connection was tunnelled through the bastion. Distinct
+  # hostnames let the test assert which host the shell actually landed on.
+  # NB: the tunnel opens a `direct-tcpip` channel on the bastion, which needs
+  # `AllowTcpForwarding yes`. The stock linuxserver image ships it as `no`, so the
+  # bastions are built from tests/bastion-server (which flips it on). Targets are
+  # endpoints (they don't forward), so they keep the stock image.
+  sshd-bastion:
+    build:
+      context: ../bastion-server
+      dockerfile: Dockerfile
+    image: anyscp-test-bastion:latest
+    container_name: anyscp-e2e-sshd-bastion
+    hostname: anyscp-bastion
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      USER_NAME: testuser
+      USER_PASSWORD: testpass
+      PASSWORD_ACCESS: "true"
+      SUDO_ACCESS: "true"
+    networks: [e2e, e2e-internal]
+
+  sshd-tunnel-target:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: anyscp-e2e-sshd-tunnel-target
+    hostname: anyscp-tunnel-target
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      USER_NAME: testuser
+      USER_PASSWORD: testpass
+      PASSWORD_ACCESS: "true"
+      SUDO_ACCESS: "true"
+    # Intentionally NOT on `e2e` → unreachable from the runner except via the
+    # bastion tunnel. The runner can't TCP-probe it, so readiness is gated by a
+    # healthcheck + `service_healthy` rather than the entrypoint's wait_for.
+    networks: [e2e-internal]
+    healthcheck:
+      # `ss` (iproute2) may not be in the image; fall back to busybox netstat so
+      # the check reflects "sshd is listening on 2222" regardless of tooling.
+      test: ["CMD-SHELL", "ss -ltn 2>/dev/null | grep -q :2222 || netstat -lnt 2>/dev/null | grep -q :2222"]
+      interval: 2s
+      timeout: 3s
+      retries: 40
+      start_period: 5s
+
+  # ─── Multi-hop (chained bastion) pair ───────────────────────────────────────
+  # Proves a connection traverses MORE THAN ONE jump. A second bastion bridges
+  # `e2e-internal` (shared with bastion1) and a third network `e2e-internal2`;
+  # `sshd-deep-target` lives only on `e2e-internal2`. So the only path is
+  #   runner → sshd-bastion (e2e) → sshd-bastion2 (e2e-internal) → sshd-deep-target (e2e-internal2).
+  # Neither bastion2 nor the deep target is on `e2e`, so the runner can't reach
+  # either directly — this would FAIL on the old single-hop code, which tried to
+  # connect to the immediate jump (bastion2) directly.
+  sshd-bastion2:
+    build:
+      context: ../bastion-server
+      dockerfile: Dockerfile
+    image: anyscp-test-bastion:latest
+    container_name: anyscp-e2e-sshd-bastion2
+    hostname: anyscp-bastion2
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      USER_NAME: testuser
+      USER_PASSWORD: testpass
+      PASSWORD_ACCESS: "true"
+      SUDO_ACCESS: "true"
+    networks: [e2e-internal, e2e-internal2]
+    healthcheck:
+      # `ss` (iproute2) may not be in the image; fall back to busybox netstat so
+      # the check reflects "sshd is listening on 2222" regardless of tooling.
+      test: ["CMD-SHELL", "ss -ltn 2>/dev/null | grep -q :2222 || netstat -lnt 2>/dev/null | grep -q :2222"]
+      interval: 2s
+      timeout: 3s
+      retries: 40
+      start_period: 5s
+
+  sshd-deep-target:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: anyscp-e2e-sshd-deep-target
+    hostname: anyscp-deep-target
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      USER_NAME: testuser
+      USER_PASSWORD: testpass
+      PASSWORD_ACCESS: "true"
+      SUDO_ACCESS: "true"
+    networks: [e2e-internal2]
+    healthcheck:
+      # `ss` (iproute2) may not be in the image; fall back to busybox netstat so
+      # the check reflects "sshd is listening on 2222" regardless of tooling.
+      test: ["CMD-SHELL", "ss -ltn 2>/dev/null | grep -q :2222 || netstat -lnt 2>/dev/null | grep -q :2222"]
+      interval: 2s
+      timeout: 3s
+      retries: 40
+      start_period: 5s
 
   # ─── S3-compatible storage (MinIO) ──────────────────────────────────────────
   minio:
@@ -161,6 +272,14 @@ services:
         condition: service_started
       sshd-scp-busybox:
         condition: service_started
+      sshd-bastion:
+        condition: service_started
+      sshd-tunnel-target:
+        condition: service_healthy
+      sshd-bastion2:
+        condition: service_healthy
+      sshd-deep-target:
+        condition: service_healthy
       minio-seed:
         condition: service_completed_successfully
     environment:
@@ -174,6 +293,16 @@ services:
       SSHD_SCP_PORT: "2222"
       SSHD_SCP_BUSYBOX_HOST: sshd-scp-busybox
       SSHD_SCP_BUSYBOX_PORT: "2222"
+      # ProxyJump pair: bastion is runner-reachable; the tunnel target is not.
+      SSHD_BASTION_HOST: sshd-bastion
+      SSHD_BASTION_PORT: "2222"
+      SSHD_TUNNEL_TARGET_HOST: sshd-tunnel-target
+      SSHD_TUNNEL_TARGET_PORT: "2222"
+      # Multi-hop chain: target behind bastion2 behind bastion1.
+      SSHD_BASTION2_HOST: sshd-bastion2
+      SSHD_BASTION2_PORT: "2222"
+      SSHD_DEEP_TARGET_HOST: sshd-deep-target
+      SSHD_DEEP_TARGET_PORT: "2222"
       SSH_USER: testuser
       SSH_PASS: testpass
       SSH_KEY_PATH: /keys/id_ed25519
@@ -214,6 +343,17 @@ services:
 
 networks:
   e2e:
+  # Isolated tier for the ProxyJump target. Isolation comes from the runner NOT
+  # being attached (Docker doesn't route between separate bridge networks, and
+  # its embedded DNS only resolves names within shared networks) — NOT from
+  # `internal: true`. We deliberately avoid `internal: true` because it blocks
+  # the linuxserver image's first-boot init (which needs internet), leaving sshd
+  # unhealthy. The target still can't be reached from the runner.
+  e2e-internal:
+  # Second tier for the multi-hop chain. Only bastion2 and the deep target sit
+  # here, so reaching the deep target requires hopping bastion1 → bastion2
+  # (neither bastion1 nor the runner is attached).
+  e2e-internal2:
 
 volumes:
   cargo-cache:

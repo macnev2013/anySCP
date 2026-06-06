@@ -105,11 +105,15 @@ pub fn parse_ssh_config(
             .and_then(|files| files.first())
             .map(|p| resolve_key_path(p, &home));
 
+        // Preserve the FULL ProxyJump directive (OpenSSH allows a comma-separated
+        // multi-hop list `jump1,jump2`). Keeping every hop avoids silently losing
+        // the chain; the importer auto-links only the single-hop case (see
+        // `resolve_jump_target`), so multi-hop values survive here as provenance.
         let proxy_jump = params
             .proxy_jump
             .as_ref()
-            .and_then(|jumps| jumps.first())
-            .map(|j| j.to_string());
+            .filter(|jumps| !jumps.is_empty())
+            .map(|jumps| jumps.join(","));
 
         let keep_alive_interval = params.server_alive_interval.map(|d| d.as_secs() as u32);
 
