@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSettingsStore } from "../../stores/settings-store";
-import { RefreshCw, CheckCircle2, AlertCircle, Download, Palette, SquareTerminal, ArrowUpDown } from "lucide-react";
+import { RefreshCw, CheckCircle2, AlertCircle, Download, Palette, SquareTerminal, ArrowUpDown, Info, ExternalLink } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { CursorStyle, ThemeMode } from "../../stores/settings-store";
 
@@ -16,24 +16,26 @@ const INPUT_CLASS = [
   "transition-[border-color,box-shadow] duration-[var(--duration-fast)]",
 ].join(" ");
 
+const REPO_URL = "https://github.com/macnev2013/anySCP";
+
 // ─── Sections ─────────────────────────────────────────────────────────────────
 // Each settings category is a section here. To add a new category, add an entry
 // to SECTIONS, a description, and render its content in <SectionContent />.
 
-type SectionId = "appearance" | "terminal" | "transfers" | "updates";
+type SectionId = "appearance" | "terminal" | "transfers" | "about";
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "terminal", label: "Terminal", icon: SquareTerminal },
   { id: "transfers", label: "Transfers", icon: ArrowUpDown },
-  { id: "updates", label: "Updates", icon: Download },
+  { id: "about", label: "About & Updates", icon: Info },
 ];
 
 const SECTION_DESCRIPTIONS: Record<SectionId, string> = {
   appearance: "Theme and interface look.",
   terminal: "Font, cursor, and scrollback history.",
   transfers: "Control how files are transferred.",
-  updates: "Check for and install app updates.",
+  about: "App information, links, and updates.",
 };
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -114,8 +116,8 @@ function SectionContent({ section }: { section: SectionId }) {
       return <TerminalSettings />;
     case "transfers":
       return <TransferSettings />;
-    case "updates":
-      return <UpdateSettings />;
+    case "about":
+      return <AboutSettings />;
   }
 }
 
@@ -237,11 +239,72 @@ function TransferSettings() {
   );
 }
 
-function UpdateSettings() {
+function AboutSettings() {
   return (
-    <SettingsGroup>
-      <UpdateChecker />
-    </SettingsGroup>
+    <>
+      <SettingsGroup label="About">
+        <AboutCard />
+      </SettingsGroup>
+      <SettingsGroup label="Updates">
+        <UpdateChecker />
+      </SettingsGroup>
+    </>
+  );
+}
+
+function AboutCard() {
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+
+  // Real app version (injected from git tags at build).
+  useEffect(() => {
+    void (async () => {
+      try {
+        const { getVersion } = await import("@tauri-apps/api/app");
+        setAppVersion(await getVersion());
+      } catch { /* best-effort */ }
+    })();
+  }, []);
+
+  const openRepo = useCallback(async () => {
+    try {
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl(REPO_URL);
+    } catch { /* best-effort */ }
+  }, []);
+
+  return (
+    <div className="px-4 py-3 rounded-xl bg-bg-surface border border-border/50">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-[length:var(--text-base)] font-semibold text-text-primary">anySCP</p>
+          <p className={DESC_CLASS}>A modern desktop client for SSH, SFTP, and S3</p>
+        </div>
+        <span className="shrink-0 text-[length:var(--text-xs)] tabular-nums text-text-muted">
+          {appVersion ? `v${appVersion}` : ""}
+        </span>
+      </div>
+
+      <div className="mt-3 pt-3 border-t border-border/50 flex items-center justify-between gap-4">
+        <div>
+          <p className={LABEL_CLASS}>Repository</p>
+          <p className={DESC_CLASS}>Source code, issues, and releases on GitHub</p>
+        </div>
+        <button
+          onClick={() => void openRepo()}
+          className={[
+            "flex items-center gap-1.5 px-3 py-1.5 rounded-lg shrink-0",
+            "text-[length:var(--text-sm)] font-medium",
+            "bg-bg-base border border-border text-text-secondary",
+            "hover:text-text-primary hover:border-border-focus",
+            "transition-all duration-[var(--duration-fast)]",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          ].join(" ")}
+        >
+          <ExternalLink size={13} strokeWidth={2} />
+          GitHub
+        </button>
+      </div>
+    </div>
   );
 }
 
