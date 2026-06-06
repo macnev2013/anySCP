@@ -149,7 +149,7 @@ export function HostEditModal() {
   const [credCleared, setCredCleared] = useState(false);
 
   const backdropRef = useRef<HTMLDivElement>(null);
-  const hostInputRef = useRef<HTMLInputElement>(null);
+  const firstInputRef = useRef<HTMLInputElement>(null);
   const scrollBodyRef = useRef<HTMLDivElement>(null);
 
   const isOpen = editingHostId !== null;
@@ -230,12 +230,12 @@ export function HostEditModal() {
     })();
   }, [isOpen, editingHostId, isNewHost, loadGroups, loadHosts]);
 
-  // Scroll to top and focus Host field when modal opens
+  // Scroll to top and focus the first field (Label) when the modal opens.
   useEffect(() => {
     if (visible && !loadingHost) {
       requestAnimationFrame(() => {
         scrollBodyRef.current?.scrollTo(0, 0);
-        hostInputRef.current?.focus();
+        firstInputRef.current?.focus();
       });
     }
   }, [visible, loadingHost]);
@@ -530,6 +530,7 @@ export function HostEditModal() {
                   <span className="ml-1 text-text-muted font-normal">(optional)</span>
                 </label>
                 <input
+                  ref={firstInputRef}
                   id="hem-label"
                   data-testid="host-modal-label"
                   type="text"
@@ -548,7 +549,6 @@ export function HostEditModal() {
                     Host <RequiredMark />
                   </label>
                   <input
-                    ref={hostInputRef}
                     id="hem-host"
                     data-testid="host-modal-host"
                     type="text"

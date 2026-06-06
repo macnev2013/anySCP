@@ -217,6 +217,7 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
               onChange={(e) => setLabel(e.target.value)}
               placeholder="My S3 Bucket"
               className={inputClass}
+              autoFocus
             />
           </div>
 
@@ -237,7 +238,6 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
               onChange={(e) => setAccessKey(e.target.value)}
               placeholder={isEdit ? "••••••••••••" : "AKIAIOSFODNN7EXAMPLE"}
               className={`${inputClass} font-mono`}
-              autoFocus={!isEdit}
             />
           </div>
 
