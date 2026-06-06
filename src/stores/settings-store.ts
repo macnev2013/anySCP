@@ -13,6 +13,10 @@ interface SettingsState {
   accentCustom: AccentCustom | null;
   interfaceFont: string;
 
+  // Updates
+  autoUpdate: boolean;
+  skippedUpdateVersion: string | null;
+
   // Terminal appearance
   terminalFontSize: number;
   terminalFontFamily: string;
@@ -32,6 +36,8 @@ interface SettingsState {
   setAccentHue: (hue: number) => void;
   setAccentCustom: (custom: AccentCustom | null) => void;
   setInterfaceFont: (font: string) => void;
+  setAutoUpdate: (enabled: boolean) => void;
+  setSkippedUpdateVersion: (version: string) => void;
   setTerminalFontSize: (size: number) => void;
   setTerminalFontFamily: (family: string) => void;
   setTerminalCursorStyle: (style: CursorStyle) => void;
@@ -48,6 +54,8 @@ const DEFAULTS = {
   accentHue: 250,
   accentCustom: null as AccentCustom | null,
   interfaceFont: "'Geist', system-ui, sans-serif",
+  autoUpdate: true,
+  skippedUpdateVersion: null as string | null,
   terminalFontSize: 14,
   terminalFontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
   terminalCursorStyle: "bar" as CursorStyle,
@@ -156,6 +164,16 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     persist("app_interface_font", font);
   },
 
+  setAutoUpdate: (enabled) => {
+    set({ autoUpdate: enabled });
+    persist("app_auto_update", String(enabled));
+  },
+
+  setSkippedUpdateVersion: (version) => {
+    set({ skippedUpdateVersion: version });
+    persist("app_skipped_update", version);
+  },
+
   setTerminalFontSize: (size) => {
     const clamped = Math.max(8, Math.min(42, size));
     set({ terminalFontSize: clamped });
@@ -227,6 +245,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           case "terminal_scrollback": updates.terminalScrollback = Number(value) || DEFAULTS.terminalScrollback; break;
           case "transfer_concurrency": updates.transferConcurrency = Number(value) || DEFAULTS.transferConcurrency; break;
           case "app_interface_font": updates.interfaceFont = value || DEFAULTS.interfaceFont; break;
+          case "app_auto_update": updates.autoUpdate = value !== "false"; break;
+          case "app_skipped_update": updates.skippedUpdateVersion = value || null; break;
         }
       }
 

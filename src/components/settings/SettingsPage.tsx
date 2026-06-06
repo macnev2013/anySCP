@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSettingsStore } from "../../stores/settings-store";
 import { CustomSelect, type SelectOption } from "../shared/CustomSelect";
-import { RefreshCw, CheckCircle2, AlertCircle, Download, Palette, SquareTerminal, ArrowUpDown, Info, ExternalLink, Check } from "lucide-react";
+import { useUpdaterStore } from "../../stores/updater-store";
+import { RefreshCw, CheckCircle2, AlertCircle, Palette, SquareTerminal, ArrowUpDown, Info, ExternalLink, Check } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { CursorStyle, ThemeMode } from "../../stores/settings-store";
 
@@ -584,12 +585,22 @@ function TransferSettings() {
 }
 
 function AboutSettings() {
+  const autoUpdate = useSettingsStore((s) => s.autoUpdate);
+  const setAutoUpdate = useSettingsStore((s) => s.setAutoUpdate);
+
   return (
     <>
       <SettingsGroup label="About">
         <AboutCard />
       </SettingsGroup>
       <SettingsGroup label="Updates">
+        <SettingRow>
+          <div>
+            <label htmlFor="s-auto-update" className={LABEL_CLASS}>Automatic Updates</label>
+            <p className={DESC_CLASS}>Download and install updates in the background, applied on the next launch</p>
+          </div>
+          <Toggle id="s-auto-update" checked={autoUpdate} onChange={setAutoUpdate} />
+        </SettingRow>
         <UpdateChecker />
       </SettingsGroup>
     </>
@@ -744,84 +755,21 @@ function SegmentedControl<T extends string>({ id, value, onChange, options }: {
 
 // ─── Update checker ─────────────────────────────────────────────────────────
 
-type UpdateStatus = "idle" | "checking" | "available" | "up-to-date" | "downloading" | "ready" | "error";
-
 function UpdateChecker() {
-  const [status, setStatus] = useState<UpdateStatus>("idle");
-  const [version, setVersion] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState(0);
-  const [appVersion, setAppVersion] = useState<string | null>(null);
+  const status = useUpdaterStore((s) => s.status);
+  const version = useUpdaterStore((s) => s.version);
+  const error = useUpdaterStore((s) => s.error);
+  const progress = useUpdaterStore((s) => s.progress);
+  const appVersion = useUpdaterStore((s) => s.appVersion);
+  const checkManually = useUpdaterStore((s) => s.checkManually);
+  const relaunchNow = useUpdaterStore((s) => s.relaunchNow);
 
-  // Read the real app version (injected from git tags at build) instead of hardcoding.
   useEffect(() => {
-    void (async () => {
-      try {
-        const { getVersion } = await import("@tauri-apps/api/app");
-        setAppVersion(await getVersion());
-      } catch { /* best-effort */ }
-    })();
+    void useUpdaterStore.getState().loadAppVersion();
   }, []);
 
-  const checkForUpdate = useCallback(async () => {
-    setStatus("checking");
-    setError(null);
-    try {
-      const { check } = await import("@tauri-apps/plugin-updater");
-      const update = await check();
-
-      if (update) {
-        setVersion(update.version);
-        setStatus("available");
-      } else {
-        setStatus("up-to-date");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to check for updates");
-      setStatus("error");
-    }
-  }, []);
-
-  const installUpdate = useCallback(async () => {
-    setStatus("downloading");
-    setProgress(0);
-    try {
-      const { check } = await import("@tauri-apps/plugin-updater");
-      const update = await check();
-      if (!update) return;
-
-      let downloaded = 0;
-      let totalBytes = 0;
-
-      await update.downloadAndInstall((event) => {
-        if (event.event === "Started") {
-          totalBytes = event.data.contentLength ?? 0;
-        } else if (event.event === "Progress") {
-          downloaded += event.data.chunkLength;
-          if (totalBytes > 0) {
-            setProgress(Math.round((downloaded / totalBytes) * 100));
-          }
-        } else if (event.event === "Finished") {
-          setStatus("ready");
-        }
-      });
-
-      setStatus("ready");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Download failed");
-      setStatus("error");
-    }
-  }, []);
-
-  const handleRelaunch = useCallback(async () => {
-    try {
-      const { relaunch } = await import("@tauri-apps/plugin-process");
-      await relaunch();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't restart automatically — please reopen the app");
-      setStatus("error");
-    }
-  }, []);
+  const showCheck =
+    status === "idle" || status === "up-to-date" || status === "error" || status === "available";
 
   return (
     <div className="px-4 py-3 rounded-xl bg-bg-surface border border-border/50">
@@ -834,12 +782,11 @@ function UpdateChecker() {
             {status === "downloading" && `Downloading update... ${progress}%`}
             {status === "ready" && "Update downloaded. Restart to apply."}
             {status === "error" && (error ?? "Something went wrong")}
-            {(status === "idle" || status === "checking") && (appVersion ? `Current: v${appVersion}` : "Reading version…")}
+            {(status === "idle" || status === "checking") && (appVersion ? `Current: v${appVersion}` : "Reading version\u2026")}
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Status icon */}
           {status === "up-to-date" && (
             <CheckCircle2 size={15} strokeWidth={2} className="text-status-connected shrink-0" />
           )}
@@ -847,10 +794,9 @@ function UpdateChecker() {
             <AlertCircle size={15} strokeWidth={2} className="text-status-error shrink-0" />
           )}
 
-          {/* Action button */}
-          {(status === "idle" || status === "up-to-date" || status === "error") && (
+          {showCheck && (
             <button
-              onClick={() => void checkForUpdate()}
+              onClick={() => void checkManually()}
               className={[
                 "flex items-center gap-1.5 px-3 py-1.5 rounded-lg",
                 "text-[length:var(--text-sm)] font-medium",
@@ -872,23 +818,6 @@ function UpdateChecker() {
             </span>
           )}
 
-          {status === "available" && (
-            <button
-              onClick={() => void installUpdate()}
-              className={[
-                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg",
-                "text-[length:var(--text-sm)] font-medium",
-                "bg-accent text-text-inverse",
-                "hover:bg-accent-hover",
-                "transition-all duration-[var(--duration-fast)]",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              ].join(" ")}
-            >
-              <Download size={13} strokeWidth={2} />
-              Update to v{version}
-            </button>
-          )}
-
           {status === "downloading" && (
             <div className="w-24 h-1.5 rounded-full bg-bg-muted overflow-hidden">
               <div
@@ -900,7 +829,7 @@ function UpdateChecker() {
 
           {status === "ready" && (
             <button
-              onClick={() => void handleRelaunch()}
+              onClick={() => void relaunchNow()}
               className={[
                 "flex items-center gap-1.5 px-3 py-1.5 rounded-lg",
                 "text-[length:var(--text-sm)] font-medium",
