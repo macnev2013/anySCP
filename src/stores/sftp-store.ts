@@ -10,6 +10,9 @@ export interface SftpSession {
   username: string;
   sudoMode: boolean;
   currentPath: string;
+  /** Configured initial directory for this host's file browser (empty = home).
+   *  May contain a leading `~` to expand against the remote home directory. */
+  startDirectory: string;
   entries: SftpEntry[];
   loading: boolean;
   error: string | null;
@@ -24,7 +27,7 @@ interface SftpState {
   activeSftpSessionId: string | null;
   clipboard: SftpClipboard | null;
 
-  openSession: (sftpSessionId: string, sshSessionId: string, label: string, username?: string, sudoMode?: boolean) => void;
+  openSession: (sftpSessionId: string, sshSessionId: string, label: string, username?: string, sudoMode?: boolean, startDirectory?: string) => void;
   closeSession: (sftpSessionId: string) => void;
   /** Replace an existing session's ID in-place (used by sudo toggle). */
   swapSession: (oldId: string, newId: string, sudoMode: boolean) => void;
@@ -47,7 +50,7 @@ export const useSftpStore = create<SftpState>((set) => ({
   activeSftpSessionId: null,
   clipboard: null,
 
-  openSession: (sftpSessionId, sshSessionId, label, username, sudoMode) =>
+  openSession: (sftpSessionId, sshSessionId, label, username, sudoMode, startDirectory) =>
     set((state) => {
       const next = new Map(state.sessions);
       next.set(sftpSessionId, {
@@ -57,6 +60,7 @@ export const useSftpStore = create<SftpState>((set) => ({
         username: username ?? "",
         sudoMode: sudoMode ?? false,
         currentPath: "/",
+        startDirectory: startDirectory ?? "",
         entries: [],
         loading: false,
         error: null,

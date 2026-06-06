@@ -114,6 +114,10 @@ pub struct SavedHost {
     /// host and tunnelling a `direct-tcpip` channel to the target. Takes
     /// precedence over the free-text `proxy_jump` field above.
     pub proxy_jump_host_id: Option<String>,
+    /// Initial remote directory the file browser opens in for this host. When
+    /// unset the browser falls back to the server-reported home directory. A
+    /// leading `~` is expanded against the home directory by the frontend.
+    pub start_directory: Option<String>,
     /// Seconds between SSH keepalive pings (0 = disabled).
     pub keep_alive_interval: Option<u32>,
     /// Default login shell, e.g. "/bin/zsh".
@@ -479,6 +483,24 @@ impl HostDb {
             tracing::info!("migration 11→12 applied: added saved_hosts.proxy_jump_host_id");
         }
 
+        if version < 13 {
+            // Idempotent: only add the column if it doesn't already exist.
+            let has_start_directory: bool = conn
+                .prepare("SELECT start_directory FROM saved_hosts LIMIT 0")
+                .is_ok();
+            if !has_start_directory {
+                conn.execute(
+                    "ALTER TABLE saved_hosts ADD COLUMN start_directory TEXT",
+                    [],
+                )?;
+            }
+            conn.execute(
+                "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '13')",
+                [],
+            )?;
+            tracing::info!("migration 12→13 applied: added saved_hosts.start_directory");
+        }
+
         Ok(())
     }
 
@@ -587,13 +609,15 @@ impl HostDb {
                  id, label, host, port, username, auth_type, group_id, created_at, updated_at,
                  key_path, color, notes, environment, os_type,
                  startup_command, proxy_jump, keep_alive_interval, default_shell,
-                 font_size, last_connected_at, connection_count, proxy_jump_host_id
+                 font_size, last_connected_at, connection_count, proxy_jump_host_id,
+                 start_directory
              )
              VALUES (
                  ?1,  ?2,  ?3,  ?4,  ?5,  ?6,  ?7,  ?8,  ?9,
                  ?10, ?11, ?12, ?13, ?14,
                  ?15, ?16, ?17, ?18,
-                 ?19, ?20, ?21, ?22
+                 ?19, ?20, ?21, ?22,
+                 ?23
              )
              ON CONFLICT(id) DO UPDATE SET
                  label                = excluded.label,
@@ -615,7 +639,8 @@ impl HostDb {
                  font_size            = excluded.font_size,
                  last_connected_at    = excluded.last_connected_at,
                  connection_count     = excluded.connection_count,
-                 proxy_jump_host_id   = excluded.proxy_jump_host_id",
+                 proxy_jump_host_id   = excluded.proxy_jump_host_id,
+                 start_directory      = excluded.start_directory",
             params![
                 host.id,
                 host.label,
@@ -639,6 +664,7 @@ impl HostDb {
                 host.last_connected_at,
                 host.connection_count,
                 host.proxy_jump_host_id,
+                host.start_directory,
             ],
         )?;
         Ok(())
@@ -655,7 +681,8 @@ impl HostDb {
             "SELECT id, label, host, port, username, auth_type, group_id, created_at, updated_at,
                     key_path, color, notes, environment, os_type,
                     startup_command, proxy_jump, keep_alive_interval, default_shell,
-                    font_size, last_connected_at, connection_count, proxy_jump_host_id
+                    font_size, last_connected_at, connection_count, proxy_jump_host_id,
+                    start_directory
              FROM saved_hosts
              ORDER BY label ASC",
         )?;
@@ -684,6 +711,7 @@ impl HostDb {
                 last_connected_at: row.get(19)?,
                 connection_count: row.get(20)?,
                 proxy_jump_host_id: row.get(21)?,
+                start_directory: row.get(22)?,
             })
         })?;
 
@@ -717,7 +745,8 @@ impl HostDb {
             "SELECT id, label, host, port, username, auth_type, group_id, created_at, updated_at,
                     key_path, color, notes, environment, os_type,
                     startup_command, proxy_jump, keep_alive_interval, default_shell,
-                    font_size, last_connected_at, connection_count, proxy_jump_host_id
+                    font_size, last_connected_at, connection_count, proxy_jump_host_id,
+                    start_directory
              FROM saved_hosts
              WHERE id = ?1",
         )?;
@@ -746,6 +775,7 @@ impl HostDb {
                 last_connected_at: row.get(19)?,
                 connection_count: row.get(20)?,
                 proxy_jump_host_id: row.get(21)?,
+                start_directory: row.get(22)?,
             })
         })?;
 
@@ -1615,6 +1645,7 @@ mod tests {
             startup_command: None,
             proxy_jump: None,
             proxy_jump_host_id: None,
+            start_directory: None,
             keep_alive_interval: None,
             default_shell: None,
             font_size: None,
@@ -1704,6 +1735,27 @@ mod tests {
             .expect("clear");
         let cleared = db.get_host("target-1").expect("get").expect("Some");
         assert!(cleared.proxy_jump_host_id.is_none());
+    }
+
+    #[test]
+    fn start_directory_round_trips() {
+        let (db, _dir) = test_db();
+
+        let mut host = sample_host("sd-1");
+        host.start_directory = Some("/var/www".to_string());
+        db.save_host(&host).expect("save");
+
+        // get_host and list_hosts must both surface the column.
+        let fetched = db.get_host("sd-1").expect("get").expect("Some");
+        assert_eq!(fetched.start_directory.as_deref(), Some("/var/www"));
+        let listed = db.list_hosts().expect("list");
+        let h = listed.iter().find(|h| h.id == "sd-1").expect("present");
+        assert_eq!(h.start_directory.as_deref(), Some("/var/www"));
+
+        // Clearing it via the upsert path works.
+        db.save_host(&sample_host("sd-1")).expect("clear");
+        let cleared = db.get_host("sd-1").expect("get").expect("Some");
+        assert!(cleared.start_directory.is_none());
     }
 
     #[test]

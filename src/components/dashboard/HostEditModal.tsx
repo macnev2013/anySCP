@@ -30,6 +30,7 @@ interface FormState {
   keepAliveInterval: string;
   defaultShell: string;
   startupCommand: string;
+  startDirectory: string;
   // Auth credentials (only used at connect-time, never persisted)
   password: string;
   passphrase: string;
@@ -54,6 +55,7 @@ const EMPTY_FORM: FormState = {
   keepAliveInterval: "",
   defaultShell: "",
   startupCommand: "",
+  startDirectory: "",
   password: "",
   passphrase: "",
   color: "",
@@ -87,6 +89,7 @@ function savedHostToForm(host: SavedHost): FormState {
     keepAliveInterval: host.keep_alive_interval != null ? String(host.keep_alive_interval) : "",
     defaultShell: host.default_shell ?? "",
     startupCommand: host.startup_command ?? "",
+    startDirectory: host.start_directory ?? "",
     password: "",
     passphrase: "",
     color: host.color ?? "",
@@ -311,6 +314,7 @@ export function HostEditModal() {
       startup_command: null,
       proxy_jump: null,
       proxy_jump_host_id: null,
+      start_directory: null,
       keep_alive_interval: null,
       default_shell: null,
       font_size: null,
@@ -337,6 +341,7 @@ export function HostEditModal() {
         : null,
       default_shell: form.defaultShell.trim() || null,
       startup_command: form.startupCommand.trim() || null,
+      start_directory: form.startDirectory.trim() || null,
       color: form.color || null,
       environment: form.environment || null,
       os_type: form.osType || null,
@@ -830,6 +835,27 @@ export function HostEditModal() {
                 />
                 {/* TODO: startup_command execution should be handled in the Rust backend
                     after the shell prompt is detected — not sent as raw input from the frontend. */}
+              </div>
+
+              {/* Start Directory */}
+              <div>
+                <label htmlFor="hem-start-dir" className={labelClass}>
+                  Start Directory
+                  <span className="ml-1 text-text-muted font-normal">(optional)</span>
+                </label>
+                <input
+                  id="hem-start-dir"
+                  data-testid="host-modal-start-directory"
+                  type="text"
+                  value={form.startDirectory}
+                  onChange={(e) => setField("startDirectory", e.target.value)}
+                  placeholder="~/projects or /var/www"
+                  disabled={isBusy}
+                  className={`${inputClass} font-mono`}
+                />
+                <p className="mt-1 text-[length:var(--text-xs)] text-text-muted">
+                  Directory the file browser opens in. Defaults to the home folder.
+                </p>
               </div>
 
               {/* ════════════════ APPEARANCE ════════════════ */}

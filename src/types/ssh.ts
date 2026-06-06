@@ -72,6 +72,8 @@ export interface SavedHost {
   proxy_jump: string | null;
   /** Id of another saved host to tunnel through (ProxyJump). */
   proxy_jump_host_id: string | null;
+  /** Initial remote directory the file browser opens in (falls back to home). */
+  start_directory: string | null;
   keep_alive_interval: number | null;
   default_shell: string | null;
   font_size: number | null;

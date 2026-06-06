@@ -211,22 +211,64 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
   }, [transport, togglingSudo, sudoMode, sessionId, sshSessionId, swapSession, replaceTabId, setError]);
 
   // On mount: reload the preserved directory (e.g. after a sudo-toggle
-  // remount), otherwise resolve the home dir.
+  // remount), otherwise land in the host's configured start directory and
+  // fall back to the server home dir, then root.
   useEffect(() => {
     (async () => {
-      const preserved = useSftpStore.getState().sessions.get(sessionId)?.currentPath;
+      const sessionState = useSftpStore.getState().sessions.get(sessionId);
+      const preserved = sessionState?.currentPath;
       if (preserved && preserved !== "/") {
+        await loadDirectory(preserved);
+        return;
+      }
+
+      // List `path`; on success commit the entries and report true so the
+      // caller can stop walking the fallback chain. Unlike loadDirectory this
+      // propagates failure instead of surfacing it, so a missing start
+      // directory transparently falls through to the home dir.
+      const tryList = async (path: string): Promise<boolean> => {
         try {
-          await loadDirectory(preserved);
-          return;
-        } catch { /* fall through to home/root */ }
+          const entries = await explorerInvoke<SftpEntry[]>(transport, "list_dir", sessionId, { path });
+          setEntries(sessionId, path, entries);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      // Resolve the home dir lazily — only when the start dir needs `~`
+      // expansion or we have to fall back to it.
+      let homeDir: string | null = null;
+      const resolveHome = async (): Promise<string> => {
+        if (homeDir === null) {
+          try {
+            homeDir = await explorerInvoke<string>(transport, "home_dir", sessionId);
+          } catch {
+            homeDir = "";
+          }
+        }
+        return homeDir;
+      };
+
+      // 1. Configured start directory (with leading-`~` expansion).
+      const startDir = (sessionState?.startDirectory ?? "").trim();
+      if (startDir) {
+        let target: string | null = startDir;
+        if (startDir === "~" || startDir.startsWith("~/")) {
+          const home = await resolveHome();
+          target = !home
+            ? null
+            : startDir === "~"
+              ? home
+              : `${home.replace(/\/+$/, "")}/${startDir.slice(2)}`;
+        }
+        if (target && (await tryList(target))) return;
       }
-      try {
-        const homeDir = await explorerInvoke<string>(transport, "home_dir", sessionId);
-        await loadDirectory(homeDir);
-      } catch {
-        await loadDirectory("/");
-      }
+
+      // 2. Server home directory. 3. Root.
+      const home = await resolveHome();
+      if (home && (await tryList(home))) return;
+      await loadDirectory("/");
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, transport]);
