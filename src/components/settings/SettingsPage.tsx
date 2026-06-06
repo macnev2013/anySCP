@@ -1,14 +1,13 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSettingsStore } from "../../stores/settings-store";
-import { CustomSelect } from "../shared/CustomSelect";
-import { RefreshCw, CheckCircle2, AlertCircle, Download } from "lucide-react";
-import type { CursorStyle } from "../../stores/settings-store";
+import { RefreshCw, CheckCircle2, AlertCircle, Download, Palette, SquareTerminal, ArrowUpDown } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import type { CursorStyle, ThemeMode } from "../../stores/settings-store";
 
 // ─── Shared styles ───────────────────────────────────────────────────────────
 
 const LABEL_CLASS = "text-[length:var(--text-sm)] font-medium text-text-primary";
 const DESC_CLASS = "text-[length:var(--text-xs)] text-text-muted mt-0.5";
-
 
 const INPUT_CLASS = [
   "w-20 px-2.5 py-1.5 rounded-lg text-[length:var(--text-sm)] tabular-nums",
@@ -17,169 +16,254 @@ const INPUT_CLASS = [
   "transition-[border-color,box-shadow] duration-[var(--duration-fast)]",
 ].join(" ");
 
+// ─── Sections ─────────────────────────────────────────────────────────────────
+// Each settings category is a section here. To add a new category, add an entry
+// to SECTIONS, a description, and render its content in <SectionContent />.
+
+type SectionId = "appearance" | "terminal" | "transfers" | "updates";
+
+const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
+  { id: "appearance", label: "Appearance", icon: Palette },
+  { id: "terminal", label: "Terminal", icon: SquareTerminal },
+  { id: "transfers", label: "Transfers", icon: ArrowUpDown },
+  { id: "updates", label: "Updates", icon: Download },
+];
+
+const SECTION_DESCRIPTIONS: Record<SectionId, string> = {
+  appearance: "Theme and interface look.",
+  terminal: "Font, cursor, and scrollback history.",
+  transfers: "Control how files are transferred.",
+  updates: "Check for and install app updates.",
+};
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function SettingsPage() {
-  const themeMode = useSettingsStore((s) => s.themeMode);
-  const fontSize = useSettingsStore((s) => s.terminalFontSize);
-  const cursorStyle = useSettingsStore((s) => s.terminalCursorStyle);
-  const cursorBlink = useSettingsStore((s) => s.terminalCursorBlink);
-  const lineHeight = useSettingsStore((s) => s.terminalLineHeight);
-  const scrollback = useSettingsStore((s) => s.terminalScrollback);
-  const transferConcurrency = useSettingsStore((s) => s.transferConcurrency);
-
-  const setThemeMode = useSettingsStore((s) => s.setThemeMode);
-  const setFontSize = useSettingsStore((s) => s.setTerminalFontSize);
-  const setCursorStyle = useSettingsStore((s) => s.setTerminalCursorStyle);
-  const setCursorBlink = useSettingsStore((s) => s.setTerminalCursorBlink);
-  const setLineHeight = useSettingsStore((s) => s.setTerminalLineHeight);
-  const setScrollback = useSettingsStore((s) => s.setTerminalScrollback);
-  const setConcurrency = useSettingsStore((s) => s.setTransferConcurrency);
+  const [active, setActive] = useState<SectionId>("appearance");
+  const activeSection = SECTIONS.find((s) => s.id === active);
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-xl mx-auto px-6 py-8">
-        {/* Header */}
-        <div className="mb-6">
-          <h1 className="text-[length:var(--text-lg)] font-semibold text-text-primary">
+    <div className="flex flex-col h-full p-2">
+      <div className="flex flex-1 min-h-0 rounded-lg overflow-hidden border border-border/60">
+        {/* Sidebar */}
+        <nav
+          aria-label="Settings sections"
+          className="w-60 shrink-0 flex flex-col gap-1 px-3 py-4 border-r border-border/50 bg-bg-surface/40 overflow-y-auto no-select"
+        >
+          <h2 className="px-3 pt-1 pb-2 text-[length:var(--text-2xs)] font-semibold uppercase tracking-wider text-text-muted">
             Settings
-          </h1>
-          <p className="text-[length:var(--text-xs)] text-text-muted mt-1">
-            Configure app appearance, terminal behavior, file transfers, and app updates
-          </p>
+          </h2>
+          {SECTIONS.map(({ id, label, icon: Icon }) => {
+            const isActive = active === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                data-testid={`settings-nav-${id}`}
+                aria-current={isActive ? "page" : undefined}
+                onClick={() => setActive(id)}
+                className={[
+                  "flex items-center gap-2.5 px-3 py-2 rounded-lg text-left",
+                  "text-[length:var(--text-sm)] font-medium",
+                  "transition-colors duration-[var(--duration-fast)]",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  isActive
+                    ? "bg-bg-overlay text-text-primary border border-border/60 shadow-[var(--shadow-sm)]"
+                    : "text-text-secondary border border-transparent hover:text-text-primary hover:bg-bg-overlay/50",
+                ].join(" ")}
+              >
+                <Icon
+                  size={17}
+                  strokeWidth={isActive ? 2 : 1.6}
+                  className={`shrink-0 ${isActive ? "text-accent" : "text-text-muted"}`}
+                />
+                {label}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto bg-bg-base">
+          <div className="max-w-4xl mx-auto px-8 py-6">
+            {/* Section header */}
+            <div className="mb-6">
+              <h1 className="text-2xl font-semibold tracking-tight text-text-primary">
+                {activeSection?.label}
+              </h1>
+              <p className="text-[length:var(--text-sm)] text-text-muted mt-1.5">
+                {SECTION_DESCRIPTIONS[active]}
+              </p>
+            </div>
+
+            <SectionContent section={active} />
+          </div>
         </div>
-
-        {/* Appearance */}
-        <section className="mb-8">
-          <h2 className="text-[length:var(--text-sm)] font-semibold uppercase tracking-wider text-text-muted mb-4">
-            Appearance
-          </h2>
-
-          <div className="flex flex-col gap-4">
-            <SettingRow>
-              <div>
-                <label htmlFor="s-light-theme" className={LABEL_CLASS}>Light Theme</label>
-                <p className={DESC_CLASS}>Use a softer grey interface instead of the dark background</p>
-              </div>
-              <Toggle
-                id="s-light-theme"
-                checked={themeMode === "light"}
-                onChange={(checked) => setThemeMode(checked ? "light" : "dark")}
-              />
-            </SettingRow>
-          </div>
-        </section>
-
-        {/* Terminal Appearance */}
-        <section className="mb-8">
-          <h2 className="text-[length:var(--text-sm)] font-semibold uppercase tracking-wider text-text-muted mb-4">
-            Terminal
-          </h2>
-
-          <div className="flex flex-col gap-4">
-            {/* Font Size */}
-            <SettingRow>
-              <div>
-                <label htmlFor="s-fontsize" className={LABEL_CLASS}>Font Size</label>
-                <p className={DESC_CLASS}>Size in pixels (8–32)</p>
-              </div>
-              <NumberSetting id="s-fontsize" value={fontSize} min={8} max={32} step={1} onChange={setFontSize} />
-            </SettingRow>
-
-            {/* Cursor Style */}
-            <SettingRow>
-              <div>
-                <label htmlFor="s-cursor" className={LABEL_CLASS}>Cursor Style</label>
-                <p className={DESC_CLASS}>Shape of the terminal cursor</p>
-              </div>
-              <CustomSelect
-                id="s-cursor"
-                value={cursorStyle}
-                onChange={(v) => setCursorStyle(v as CursorStyle)}
-                options={[
-                  { value: "bar", label: "Bar" },
-                  { value: "block", label: "Block" },
-                  { value: "underline", label: "Underline" },
-                ]}
-                className="w-32"
-              />
-            </SettingRow>
-
-            {/* Cursor Blink */}
-            <SettingRow>
-              <div>
-                <label htmlFor="s-blink" className={LABEL_CLASS}>Cursor Blink</label>
-                <p className={DESC_CLASS}>Animate the cursor</p>
-              </div>
-              <Toggle
-                id="s-blink"
-                checked={cursorBlink}
-                onChange={setCursorBlink}
-              />
-            </SettingRow>
-
-            {/* Line Height */}
-            <SettingRow>
-              <div>
-                <label htmlFor="s-lineheight" className={LABEL_CLASS}>Line Height</label>
-                <p className={DESC_CLASS}>Spacing between lines (1.0–2.0)</p>
-              </div>
-              <NumberSetting id="s-lineheight" value={lineHeight} min={1.0} max={2.0} step={0.1} onChange={setLineHeight} />
-            </SettingRow>
-
-            {/* Scrollback */}
-            <SettingRow>
-              <div>
-                <label htmlFor="s-scrollback" className={LABEL_CLASS}>Scrollback Buffer</label>
-                <p className={DESC_CLASS}>Number of lines to keep in history (500–100,000)</p>
-              </div>
-              <NumberSetting id="s-scrollback" value={scrollback} min={500} max={100000} step={500} onChange={setScrollback} />
-            </SettingRow>
-          </div>
-        </section>
-
-        {/* Transfers */}
-        <section className="mb-8">
-          <h2 className="text-[length:var(--text-sm)] font-semibold uppercase tracking-wider text-text-muted mb-4">
-            Transfers
-          </h2>
-
-          <div className="flex flex-col gap-4">
-            <SettingRow>
-              <div>
-                <label htmlFor="s-concurrency" className={LABEL_CLASS}>Concurrent Transfers</label>
-                <p className={DESC_CLASS}>Maximum simultaneous file transfers (1–10)</p>
-              </div>
-              <NumberSetting id="s-concurrency" value={transferConcurrency} min={1} max={10} step={1} onChange={setConcurrency} />
-            </SettingRow>
-          </div>
-        </section>
-
-        {/* Updates */}
-        <section className="mb-8">
-          <h2 className="text-[length:var(--text-sm)] font-semibold uppercase tracking-wider text-text-muted mb-4">
-            Updates
-          </h2>
-
-          <div className="flex flex-col gap-4">
-            <UpdateChecker />
-          </div>
-        </section>
-
-        {/* Note */}
-        <p className="text-[length:var(--text-xs)] text-text-muted">
-          Terminal settings apply to new terminals. Existing terminals keep their current settings.
-        </p>
       </div>
     </div>
   );
 }
 
+// ─── Section content ───────────────────────────────────────────────────────────
+
+function SectionContent({ section }: { section: SectionId }) {
+  switch (section) {
+    case "appearance":
+      return <AppearanceSettings />;
+    case "terminal":
+      return <TerminalSettings />;
+    case "transfers":
+      return <TransferSettings />;
+    case "updates":
+      return <UpdateSettings />;
+  }
+}
+
+function AppearanceSettings() {
+  const themeMode = useSettingsStore((s) => s.themeMode);
+  const setThemeMode = useSettingsStore((s) => s.setThemeMode);
+
+  return (
+    <SettingsGroup label="Theme">
+      <SettingRow>
+        <div>
+          <p className={LABEL_CLASS}>Color Theme</p>
+          <p className={DESC_CLASS}>Switch between the dark and softer grey light interface</p>
+        </div>
+        <SegmentedControl<ThemeMode>
+          id="s-light-theme"
+          value={themeMode}
+          onChange={setThemeMode}
+          options={[
+            { value: "dark", label: "Dark" },
+            { value: "light", label: "Light" },
+          ]}
+        />
+      </SettingRow>
+    </SettingsGroup>
+  );
+}
+
+function TerminalSettings() {
+  const fontSize = useSettingsStore((s) => s.terminalFontSize);
+  const cursorStyle = useSettingsStore((s) => s.terminalCursorStyle);
+  const cursorBlink = useSettingsStore((s) => s.terminalCursorBlink);
+  const lineHeight = useSettingsStore((s) => s.terminalLineHeight);
+  const scrollback = useSettingsStore((s) => s.terminalScrollback);
+
+  const setFontSize = useSettingsStore((s) => s.setTerminalFontSize);
+  const setCursorStyle = useSettingsStore((s) => s.setTerminalCursorStyle);
+  const setCursorBlink = useSettingsStore((s) => s.setTerminalCursorBlink);
+  const setLineHeight = useSettingsStore((s) => s.setTerminalLineHeight);
+  const setScrollback = useSettingsStore((s) => s.setTerminalScrollback);
+
+  return (
+    <>
+      <SettingsGroup label="Font">
+        <SettingRow>
+          <div>
+            <label htmlFor="s-fontsize" className={LABEL_CLASS}>Font Size</label>
+            <p className={DESC_CLASS}>Size in pixels (8–32)</p>
+          </div>
+          <NumberSetting id="s-fontsize" value={fontSize} min={8} max={32} step={1} onChange={setFontSize} />
+        </SettingRow>
+
+        <SettingRow>
+          <div>
+            <label htmlFor="s-lineheight" className={LABEL_CLASS}>Line Height</label>
+            <p className={DESC_CLASS}>Spacing between lines (1.0–2.0)</p>
+          </div>
+          <NumberSetting id="s-lineheight" value={lineHeight} min={1.0} max={2.0} step={0.1} onChange={setLineHeight} />
+        </SettingRow>
+      </SettingsGroup>
+
+      <SettingsGroup label="Cursor">
+        <SettingRow>
+          <div>
+            <p className={LABEL_CLASS}>Cursor Style</p>
+            <p className={DESC_CLASS}>Shape of the terminal cursor</p>
+          </div>
+          <SegmentedControl<CursorStyle>
+            id="s-cursor"
+            value={cursorStyle}
+            onChange={setCursorStyle}
+            options={[
+              { value: "bar", label: "Bar" },
+              { value: "block", label: "Block" },
+              { value: "underline", label: "Underline" },
+            ]}
+          />
+        </SettingRow>
+
+        <SettingRow>
+          <div>
+            <label htmlFor="s-blink" className={LABEL_CLASS}>Cursor Blink</label>
+            <p className={DESC_CLASS}>Animate the cursor</p>
+          </div>
+          <Toggle id="s-blink" checked={cursorBlink} onChange={setCursorBlink} />
+        </SettingRow>
+      </SettingsGroup>
+
+      <SettingsGroup label="History">
+        <SettingRow>
+          <div>
+            <label htmlFor="s-scrollback" className={LABEL_CLASS}>Scrollback Buffer</label>
+            <p className={DESC_CLASS}>Number of lines to keep in history (500–100,000)</p>
+          </div>
+          <NumberSetting id="s-scrollback" value={scrollback} min={500} max={100000} step={500} onChange={setScrollback} />
+        </SettingRow>
+        <p className="px-1 text-[length:var(--text-xs)] text-text-muted">
+          Terminal settings apply to new terminals. Existing terminals keep their current settings.
+        </p>
+      </SettingsGroup>
+    </>
+  );
+}
+
+function TransferSettings() {
+  const transferConcurrency = useSettingsStore((s) => s.transferConcurrency);
+  const setConcurrency = useSettingsStore((s) => s.setTransferConcurrency);
+
+  return (
+    <SettingsGroup>
+      <SettingRow>
+        <div>
+          <label htmlFor="s-concurrency" className={LABEL_CLASS}>Concurrent Transfers</label>
+          <p className={DESC_CLASS}>Maximum simultaneous file transfers (1–10)</p>
+        </div>
+        <NumberSetting id="s-concurrency" value={transferConcurrency} min={1} max={10} step={1} onChange={setConcurrency} />
+      </SettingRow>
+    </SettingsGroup>
+  );
+}
+
+function UpdateSettings() {
+  return (
+    <SettingsGroup>
+      <UpdateChecker />
+    </SettingsGroup>
+  );
+}
+
 // ─── Sub-components ──────────────────────────────────────────────────────────
+
+/** A labelled group of setting cards, mirroring the "THEME" / "INTERFACE" sections. */
+function SettingsGroup({ label, children }: { label?: string; children: React.ReactNode }) {
+  return (
+    <section className="mb-6 last:mb-0">
+      {label && (
+        <h2 className="px-1 mb-3 text-[length:var(--text-2xs)] font-semibold uppercase tracking-wider text-text-muted">
+          {label}
+        </h2>
+      )}
+      <div className="flex flex-col gap-2">{children}</div>
+    </section>
+  );
+}
 
 function SettingRow({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-4 px-4 py-3 rounded-lg bg-bg-surface border border-border/50">
+    <div className="flex items-center justify-between gap-4 px-4 py-3 rounded-xl bg-bg-surface border border-border/50">
       {children}
     </div>
   );
@@ -207,6 +291,46 @@ function Toggle({ id, checked, onChange }: { id: string; checked: boolean; onCha
         ].join(" ")}
       />
     </button>
+  );
+}
+
+/** Segmented toggle for small option sets (e.g. theme, cursor style). */
+function SegmentedControl<T extends string>({ id, value, onChange, options }: {
+  id?: string;
+  value: T;
+  onChange: (v: T) => void;
+  options: { value: T; label: string }[];
+}) {
+  return (
+    <div
+      id={id}
+      role="radiogroup"
+      className="inline-flex shrink-0 gap-0.5 p-0.5 rounded-lg bg-bg-base border border-border"
+    >
+      {options.map((opt) => {
+        const selected = opt.value === value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            data-testid={id ? `${id}-${opt.value}` : undefined}
+            onClick={() => onChange(opt.value)}
+            className={[
+              "px-3 py-1.5 rounded-md text-[length:var(--text-sm)] font-medium",
+              "transition-colors duration-[var(--duration-fast)]",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              selected
+                ? "bg-bg-overlay text-text-primary shadow-[var(--shadow-sm)]"
+                : "text-text-muted hover:text-text-primary",
+            ].join(" ")}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -291,7 +415,7 @@ function UpdateChecker() {
   }, []);
 
   return (
-    <div className="px-4 py-3 rounded-lg bg-bg-surface border border-border/50">
+    <div className="px-4 py-3 rounded-xl bg-bg-surface border border-border/50">
       <div className="flex items-center justify-between gap-4">
         <div>
           <p className={LABEL_CLASS}>App Version</p>

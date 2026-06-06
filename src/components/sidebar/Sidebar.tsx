@@ -58,23 +58,24 @@ function PillButton({
         aria-current={isActive ? "page" : undefined}
         aria-expanded={ariaExpanded}
         className={[
-          "relative flex items-center rounded-xl",
+          "relative flex items-center rounded-lg",
           "transition-all duration-[var(--duration-fast)]",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          expanded ? "w-full gap-2.5 px-2.5 h-9" : "justify-center w-9 h-9",
+          expanded ? "w-full gap-2.5 px-3 h-9" : "justify-center w-9 h-9",
           isActive
-            ? "bg-accent/15 text-accent border border-accent/40"
-            : "text-text-muted border border-transparent hover:text-text-primary hover:bg-bg-overlay hover:border-border/60",
+            ? "bg-bg-overlay text-text-primary border border-border/60 shadow-[var(--shadow-sm)]"
+            : "text-text-secondary border border-transparent hover:text-text-primary hover:bg-bg-overlay/50",
         ].join(" ")}
       >
-        <Icon size={17} strokeWidth={isActive ? 2 : 1.5} className="shrink-0" />
+        <Icon
+          size={17}
+          strokeWidth={isActive ? 2 : 1.6}
+          className={`shrink-0 ${isActive ? "text-accent" : "text-text-muted"}`}
+        />
 
         {/* Label — expanded only */}
         {expanded && (
-          <span className={[
-            "text-[length:var(--text-sm)] truncate",
-            isActive ? "font-semibold" : "font-medium",
-          ].join(" ")}>
+          <span className="text-[length:var(--text-sm)] font-medium truncate">
             {label}
           </span>
         )}
@@ -175,10 +176,10 @@ export function Sidebar() {
         data-sidebar-expanded={expanded}
         aria-label="Main navigation"
         className={[
-          "no-select flex flex-col shrink-0 h-full py-3",
+          "no-select flex flex-col shrink-0 h-[calc(100%-8px)] py-3",
           "bg-bg-surface border border-border/60 rounded-2xl",
           "transition-[width] duration-[var(--duration-base)] ease-[var(--ease-expo-out)]",
-          expanded ? "w-[168px] items-stretch px-2" : "w-[48px] items-center",
+          expanded ? "w-[208px] items-stretch px-3" : "w-[48px] items-center",
         ].join(" ")}
       >
         {/* Nav items */}

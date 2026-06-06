@@ -7,6 +7,10 @@ async function gotoSettings(): Promise<void> {
     const nav = await $("[aria-label='Settings']");
     await nav.waitForClickable({ timeout: 10_000 });
     await nav.click();
+    // The settings page uses a sidebar; open the Terminal section to reach font size.
+    const terminalNav = await $("[data-testid='settings-nav-terminal']");
+    await terminalNav.waitForClickable({ timeout: 10_000 });
+    await terminalNav.click();
     await (await $("[data-testid='s-fontsize']")).waitForDisplayed({ timeout: 10_000 });
 }
 
