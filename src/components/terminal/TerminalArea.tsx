@@ -13,7 +13,7 @@ interface TerminalAreaProps {
   tabId: string;
 }
 
-export function TerminalPane({ sessionId }: { sessionId: string }) {
+export function TerminalPane({ sessionId, tabId }: { sessionId: string; tabId: string }) {
   const session = useSessionStore((s) => s.sessions.get(sessionId));
   const isActive = useSessionStore((s) => s.activeSessionId === sessionId);
   const isZoomed = useSessionStore((s) => s.zoomedPaneId === sessionId);
@@ -48,7 +48,7 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
         if (!isActive) setActiveSession(sessionId);
       }}
     >
-      <PaneHeader sessionId={sessionId} />
+      <PaneHeader sessionId={sessionId} tabId={tabId} />
 
       <div className="relative flex-1 min-h-0">
         <Terminal sessionId={sessionId} />
@@ -58,6 +58,7 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
         {showOverlay && session && (
           <DisconnectOverlay
             sessionId={sessionId}
+            tabId={tabId}
             status={session.status as "Disconnected" | "Error"}
             message={session.statusMessage}
             hostConfig={session.hostConfig}
@@ -70,7 +71,7 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
 
 export function TerminalArea({ node, path = [], tabId }: TerminalAreaProps) {
   if (node.type === "pane") {
-    return <TerminalPane sessionId={node.sessionId} />;
+    return <TerminalPane sessionId={node.sessionId} tabId={tabId} />;
   }
 
   return <SplitContainer node={node} path={path} tabId={tabId} />;

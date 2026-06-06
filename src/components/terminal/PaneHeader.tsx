@@ -1,11 +1,14 @@
 import { Columns2, Rows2, Maximize2, Minimize2, X } from "lucide-react";
 import { useSessionStore } from "../../stores/session-store";
+import { useTabStore } from "../../stores/tab-store";
 
 interface PaneHeaderProps {
   sessionId: string;
+  /** The unified tab that owns this pane — needed to clean up the tab bar. */
+  tabId: string;
 }
 
-export function PaneHeader({ sessionId }: PaneHeaderProps) {
+export function PaneHeader({ sessionId, tabId }: PaneHeaderProps) {
   const session = useSessionStore((s) => s.sessions.get(sessionId));
   const isActive = useSessionStore((s) => s.activeSessionId === sessionId);
   const isZoomed = useSessionStore((s) => s.zoomedPaneId === sessionId);
@@ -51,6 +54,14 @@ export function PaneHeader({ sessionId }: PaneHeaderProps) {
         store.unsplitPane(sessionId);
       }
       store.removeSession(sessionId);
+
+      // Defensive: if that emptied the owning tab's layout, drop the GUI tab
+      // too so it can't be orphaned in the tab bar (issue #42). In the normal
+      // split flow the close button is hidden once a single pane remains, so
+      // the tab survives here — this only fires if the tab truly has no panes.
+      if (!useSessionStore.getState().tabs.get(tabId)) {
+        useTabStore.getState().removeTab(tabId);
+      }
     })();
   };
 
