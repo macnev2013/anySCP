@@ -94,8 +94,10 @@ jobs:
   e2e:
     name: E2E shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
-    # Only spend the (expensive) E2E run once the cheap checks are green.
-    needs: [frontend, rust]
+    # Runs in parallel with the frontend/rust jobs (no `needs`) for faster
+    # feedback. `make e2e` rebuilds the frontend + Tauri binary inside Docker,
+    # so the E2E job has no data dependency on those jobs — only the wall-clock
+    # win of not waiting for them.
     timeout-minutes: 60
     strategy:
       # Don't cancel the other shards when one fails — we want the full picture.
