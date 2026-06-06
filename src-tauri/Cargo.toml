@@ -68,6 +68,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 keyring = { version = "3", features = ["apple-native", "linux-native", "windows-native"] }
 tauri-plugin-dialog = "2.6.0"
 tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 ssh2-config = "0.7.0"
 rust-s3 = { version = "0.37.1", default-features = false, features = ["tokio-rustls-tls"] }
 

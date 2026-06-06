@@ -815,10 +815,11 @@ function UpdateChecker() {
 
   const handleRelaunch = useCallback(async () => {
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("plugin:updater|restart");
-    } catch {
-      // Fallback: just tell the user to restart manually
+      const { relaunch } = await import("@tauri-apps/plugin-process");
+      await relaunch();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't restart automatically — please reopen the app");
+      setStatus("error");
     }
   }, []);
 
