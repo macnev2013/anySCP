@@ -64,18 +64,13 @@ interface ContextMenuState {
 
 function formatModified(unix: number | null): string {
   if (unix === null) return "—";
-  const d = new Date(unix * 1000);
-  const now = Date.now();
-  const diffMs = now - d.getTime();
-  const diffDays = Math.floor(diffMs / 86400000);
-
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  if (diffDays < 30) return `${diffDays}d ago`;
-  if (diffDays < 365) {
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  }
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  return new Date(unix * 1000).toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function EntryIcon({ entry }: { entry: ExplorerEntry }) {
@@ -191,7 +186,7 @@ function NewFolderRow({
         aria-label="New folder name"
       />
       <span className="w-20" />
-      <span className="w-32" />
+      <span className="w-44" />
       <span className="w-24" />
     </div>
   );
@@ -241,7 +236,7 @@ function NewFileRow({
         aria-label="New file name"
       />
       <span className="w-20" />
-      <span className="w-32" />
+      <span className="w-44" />
       <span className="w-24" />
     </div>
   );
@@ -646,7 +641,7 @@ export function ExplorerFileTable({
 
           <button
             data-testid="explorer-sort-modified"
-            className={`w-32 ${thClass("modified")}`}
+            className={`w-44 ${thClass("modified")}`}
             onClick={() => handleSortClick("modified")}
             aria-sort={sortBy === "modified" ? (sortAsc ? "ascending" : "descending") : "none"}
           >
@@ -836,7 +831,7 @@ export function ExplorerFileTable({
                   </span>
 
                   {/* Modified */}
-                  <span className="w-32 text-[length:var(--text-sm)] text-text-muted shrink-0">
+                  <span className="w-44 text-[length:var(--text-sm)] text-text-muted shrink-0 tabular-nums">
                     {formatModified(entry.modified)}
                   </span>
 
