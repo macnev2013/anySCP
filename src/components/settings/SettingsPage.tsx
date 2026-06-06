@@ -394,6 +394,7 @@ function AppearanceSettings() {
         </div>
         <CustomSelect
           id="s-interface-font"
+          data-testid="s-interface-font"
           value={interfaceFont}
           onChange={setInterfaceFont}
           options={fontOptions}
@@ -497,6 +498,7 @@ function TerminalSettings() {
           </div>
           <CustomSelect
             id="s-fontfamily"
+            data-testid="s-fontfamily"
             value={fontFamily}
             onChange={setFontFamily}
             options={termFontOptions}
