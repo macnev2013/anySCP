@@ -31,11 +31,34 @@ interface UpdaterState {
 const message = (err: unknown, fallback: string) =>
   err instanceof Error ? err.message : fallback;
 
+// A debug/dev binary (`tauri dev` or `tauri build --debug`, e.g. the E2E build)
+// must NEVER download + install a release over itself — that overwrites the
+// running executable and corrupts it. Only a real release build self-updates.
+// Resolved once from the Rust side (`is_release_build`) and cached.
+let releaseBuild: boolean | null = null;
+async function isReleaseBuild(): Promise<boolean> {
+  if (releaseBuild === null) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      releaseBuild = await invoke<boolean>("is_release_build");
+    } catch {
+      releaseBuild = false; // be conservative — never self-install if unknown
+    }
+  }
+  return releaseBuild;
+}
+
 /** Download + install an update, reporting progress into the store. */
 async function downloadInstall(
   update: Update,
   set: (partial: Partial<UpdaterState>) => void,
 ): Promise<void> {
+  // Guard every install path here: a non-release build can't self-install
+  // without corrupting its own binary, so just surface that an update exists.
+  if (!(await isReleaseBuild())) {
+    set({ status: "available" });
+    return;
+  }
   set({ status: "downloading", progress: 0 });
   let downloaded = 0;
   let total = 0;
@@ -82,13 +105,9 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
       const { autoUpdate, skippedUpdateVersion } = useSettingsStore.getState();
 
       if (autoUpdate) {
-        // A dev build can't self-install; just surface that an update exists
-        // rather than downloading a full release on every dev launch.
-        if (import.meta.env.PROD) {
-          await downloadInstall(update, set);
-        } else {
-          set({ status: "available" });
-        }
+        // downloadInstall self-guards: on a debug/dev binary it just surfaces
+        // that an update exists instead of overwriting the running executable.
+        await downloadInstall(update, set);
       } else if (skippedUpdateVersion === update.version) {
         set({ status: "idle" });
       } else {
@@ -128,6 +147,9 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
       const update = await check();
       if (!update) { set({ status: "up-to-date" }); return; }
       await downloadInstall(update, set);
+      // downloadInstall no-ops on a non-release build (status stays
+      // "available"); only relaunch once an update is actually installed.
+      if (get().status !== "ready") return;
       const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
     } catch (err) {

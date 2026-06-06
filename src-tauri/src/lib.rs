@@ -23,6 +23,20 @@ use ssh::manager::SshManager;
 use std::sync::Arc;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
+/// Whether this is a real release build — i.e. a packaged binary that can
+/// safely self-update via the updater plugin.
+///
+/// False for `tauri dev` and `tauri build --debug` (the E2E binary). Those
+/// builds must never download + install a release over themselves: it
+/// overwrites the running executable and corrupts it (the E2E suite would
+/// otherwise fail with "Permission denied" launching the binary mid-run).
+/// `debug_assertions` is the correct discriminator — it is off only for an
+/// actual `--release` build.
+#[tauri::command]
+fn is_release_build() -> bool {
+    !cfg!(debug_assertions)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -285,6 +299,8 @@ pub fn run() {
             snippets::commands::list_snippet_folders,
             snippets::commands::delete_snippet_folder,
             snippets::commands::snippet_execute,
+            // Build info
+            is_release_build,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
