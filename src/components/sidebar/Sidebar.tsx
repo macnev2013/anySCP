@@ -176,8 +176,8 @@ export function Sidebar() {
         data-sidebar-expanded={expanded}
         aria-label="Main navigation"
         className={[
-          "no-select flex flex-col shrink-0 h-[calc(100%-8px)] py-3",
-          "bg-bg-surface border border-border/60 rounded-2xl",
+          "no-select flex flex-col shrink-0 h-[calc(100%-16px)] py-3 ml-2 mt-2",
+          "bg-bg-surface border border-border/60 rounded-lg",
           "transition-[width] duration-[var(--duration-base)] ease-[var(--ease-expo-out)]",
           expanded ? "w-[208px] items-stretch px-3" : "w-[48px] items-center",
         ].join(" ")}
