@@ -368,7 +368,8 @@ function SegmentedControl<T extends string>({ id, value, onChange, options }: {
     <div
       id={id}
       role="radiogroup"
-      className="inline-flex shrink-0 gap-0.5 p-0.5 rounded-lg bg-bg-base border border-border"
+      className="inline-grid shrink-0 gap-0.5 p-0.5 rounded-lg bg-bg-base border border-border"
+      style={{ gridTemplateColumns: `repeat(${options.length}, 1fr)` }}
     >
       {options.map((opt) => {
         const selected = opt.value === value;
@@ -381,7 +382,7 @@ function SegmentedControl<T extends string>({ id, value, onChange, options }: {
             data-testid={id ? `${id}-${opt.value}` : undefined}
             onClick={() => onChange(opt.value)}
             className={[
-              "px-3 py-1.5 rounded-md text-[length:var(--text-sm)] font-medium",
+              "px-3 py-1.5 rounded-md text-center text-[length:var(--text-sm)] font-medium",
               "transition-colors duration-[var(--duration-fast)]",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               selected
