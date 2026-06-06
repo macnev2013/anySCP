@@ -94,6 +94,12 @@ export function Terminal({ sessionId }: TerminalProps) {
   const terminalRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const themeMode = useSettingsStore((s) => s.themeMode);
+  const fontFamily = useSettingsStore((s) => s.terminalFontFamily);
+  const fontSize = useSettingsStore((s) => s.terminalFontSize);
+  const lineHeight = useSettingsStore((s) => s.terminalLineHeight);
+  const cursorStyle = useSettingsStore((s) => s.terminalCursorStyle);
+  const cursorBlink = useSettingsStore((s) => s.terminalCursorBlink);
+  const scrollback = useSettingsStore((s) => s.terminalScrollback);
 
   const settings = useSettingsStore.getState();
 
@@ -231,6 +237,21 @@ export function Terminal({ sessionId }: TerminalProps) {
       terminalRef.current.options.theme = getTerminalTheme();
     }
   }, [themeMode]);
+
+  // Apply appearance changes to the already-open terminal (not just new ones).
+  useEffect(() => {
+    const term = terminalRef.current;
+    if (!term) return;
+    term.options.fontFamily = fontFamily;
+    term.options.fontSize = fontSize;
+    term.options.lineHeight = lineHeight;
+    term.options.cursorStyle = cursorStyle;
+    term.options.cursorBlink = cursorBlink;
+    term.options.scrollback = scrollback;
+    // Re-fit so the new glyph metrics recompute rows/cols, then repaint.
+    fitAddonRef.current?.fit();
+    term.refresh(0, term.rows - 1);
+  }, [fontFamily, fontSize, lineHeight, cursorStyle, cursorBlink, scrollback]);
 
   return (
     <div

@@ -22,12 +22,17 @@ describe("settings persistence", () => {
     it("font size persists across an app restart", async () => {
         await gotoSettings();
 
-        const fontInput = await $("[data-testid='s-fontsize']");
-        await fontInput.click();
-        await browser.keys(["Control", "a"]);
-        await browser.keys(["Delete"]);
-        await fontInput.setValue("18");
-        await browser.keys(["Enter"]);
+        // Font size is a range slider; set its value via the native setter so
+        // React's onChange fires (typing/keys don't work on type=range).
+        await (await $("[data-testid='s-fontsize']")).waitForDisplayed({ timeout: 10_000 });
+        await browser.execute((val) => {
+            const node = document.querySelector("[data-testid='s-fontsize']") as HTMLInputElement | null;
+            if (!node) return;
+            const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), "value")?.set;
+            setter?.call(node, val);
+            node.dispatchEvent(new Event("input", { bubbles: true }));
+            node.dispatchEvent(new Event("change", { bubbles: true }));
+        }, "18");
 
         await relaunchApp();
         await gotoSettings();

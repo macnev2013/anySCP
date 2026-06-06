@@ -157,7 +157,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   },
 
   setTerminalFontSize: (size) => {
-    const clamped = Math.max(8, Math.min(32, size));
+    const clamped = Math.max(8, Math.min(42, size));
     set({ terminalFontSize: clamped });
     persist("terminal_font_size", String(clamped));
   },

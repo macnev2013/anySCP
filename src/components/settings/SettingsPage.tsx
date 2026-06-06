@@ -39,10 +39,15 @@ const SECTION_DESCRIPTIONS: Record<SectionId, string> = {
   about: "App information, links, and updates.",
 };
 
+// Remember the last-open section across tab switches. The settings page
+// unmounts when another tab is active, so component state alone would reset.
+let lastSettingsSection: SectionId = "appearance";
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function SettingsPage() {
-  const [active, setActive] = useState<SectionId>("appearance");
+  const [active, setActive] = useState<SectionId>(() => lastSettingsSection);
+  const selectSection = (id: SectionId) => { lastSettingsSection = id; setActive(id); };
   const activeSection = SECTIONS.find((s) => s.id === active);
 
   return (
@@ -64,7 +69,7 @@ export function SettingsPage() {
                 type="button"
                 data-testid={`settings-nav-${id}`}
                 aria-current={isActive ? "page" : undefined}
-                onClick={() => setActive(id)}
+                onClick={() => selectSection(id)}
                 className={[
                   "flex items-center gap-2.5 px-3 py-2 rounded-lg text-left",
                   "text-[length:var(--text-sm)] font-medium",
@@ -157,6 +162,31 @@ const INTERFACE_FONT_CANDIDATES: { value: string; label: string; family?: string
   { value: "'Work Sans', system-ui, sans-serif", label: "Work Sans", family: "Work Sans" },
 ];
 
+// Monospace candidates for the terminal. The default matches the store's
+// terminalFontFamily so it selects correctly; JetBrains Mono is bundled.
+const TERMINAL_FONT_CANDIDATES: FontCandidate[] = [
+  { value: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace", label: "JetBrains Mono (Default)" },
+  { value: "monospace", label: "System Monospace" },
+  { value: "'Cascadia Code', monospace", label: "Cascadia Code", family: "Cascadia Code" },
+  { value: "'Cascadia Mono', monospace", label: "Cascadia Mono", family: "Cascadia Mono" },
+  { value: "'Consolas', monospace", label: "Consolas", family: "Consolas" },
+  { value: "'Courier New', monospace", label: "Courier New", family: "Courier New" },
+  { value: "'DejaVu Sans Mono', monospace", label: "DejaVu Sans Mono", family: "DejaVu Sans Mono" },
+  { value: "'Fira Code', monospace", label: "Fira Code", family: "Fira Code" },
+  { value: "'Fira Mono', monospace", label: "Fira Mono", family: "Fira Mono" },
+  { value: "'Hack', monospace", label: "Hack", family: "Hack" },
+  { value: "'IBM Plex Mono', monospace", label: "IBM Plex Mono", family: "IBM Plex Mono" },
+  { value: "'Inconsolata', monospace", label: "Inconsolata", family: "Inconsolata" },
+  { value: "'Liberation Mono', monospace", label: "Liberation Mono", family: "Liberation Mono" },
+  { value: "'Menlo', monospace", label: "Menlo", family: "Menlo" },
+  { value: "'Monaco', monospace", label: "Monaco", family: "Monaco" },
+  { value: "'Noto Sans Mono', monospace", label: "Noto Sans Mono", family: "Noto Sans Mono" },
+  { value: "'Roboto Mono', monospace", label: "Roboto Mono", family: "Roboto Mono" },
+  { value: "'SF Mono', monospace", label: "SF Mono", family: "SF Mono" },
+  { value: "'Source Code Pro', monospace", label: "Source Code Pro", family: "Source Code Pro" },
+  { value: "'Ubuntu Mono', monospace", label: "Ubuntu Mono", family: "Ubuntu Mono" },
+];
+
 /**
  * Whether a named font is actually installed. document.fonts.check() is
  * unreliable (it returns true for unknown names), so measure a test string:
@@ -178,11 +208,27 @@ function isFontAvailable(family: string): boolean {
   return false;
 }
 
-/** Filter the candidates down to those actually available on this system. */
-function computeFontOptions(): SelectOption[] {
-  return INTERFACE_FONT_CANDIDATES
+type FontCandidate = { value: string; label: string; family?: string };
+
+/** Filter candidates down to those actually installed on this system. */
+function filterInstalledFonts(candidates: FontCandidate[]): SelectOption[] {
+  return candidates
     .filter((f) => !f.family || isFontAvailable(f.family))
     .map(({ value, label }) => ({ value, label }));
+}
+
+/** Font-picker options: installed candidates, re-checked once web fonts load,
+ *  with the current value kept selectable even if it isn't detected. */
+function useInstalledFontOptions(candidates: FontCandidate[], current: string): SelectOption[] {
+  const [available, setAvailable] = useState<SelectOption[]>(() => filterInstalledFonts(candidates));
+  useEffect(() => {
+    let cancelled = false;
+    document.fonts?.ready?.then(() => { if (!cancelled) setAvailable(filterInstalledFonts(candidates)); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [candidates]);
+  if (available.some((o) => o.value === current)) return available;
+  const cur = candidates.find((c) => c.value === current);
+  return [{ value: current, label: cur?.label ?? "Current" }, ...available];
 }
 
 const ACCENT_PRESETS: { name: string; hue: number }[] = [
@@ -206,17 +252,7 @@ function AppearanceSettings() {
   const interfaceFont = useSettingsStore((s) => s.interfaceFont);
   const setInterfaceFont = useSettingsStore((s) => s.setInterfaceFont);
 
-  const [availableFonts, setAvailableFonts] = useState<SelectOption[]>(computeFontOptions);
-  // Re-check once web fonts have finished loading (Geist arrives via @font-face).
-  useEffect(() => {
-    let cancelled = false;
-    document.fonts?.ready?.then(() => { if (!cancelled) setAvailableFonts(computeFontOptions()); }).catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
-  // Keep the saved font selectable even if it isn't detected on this system.
-  const fontOptions = availableFonts.some((o) => o.value === interfaceFont)
-    ? availableFonts
-    : [{ value: interfaceFont, label: INTERFACE_FONT_CANDIDATES.find((c) => c.value === interfaceFont)?.label ?? "Current" }, ...availableFonts];
+  const fontOptions = useInstalledFontOptions(INTERFACE_FONT_CANDIDATES, interfaceFont);
 
   const [wheelOpen, setWheelOpen] = useState(false);
   const customRef = useRef<HTMLDivElement>(null);
@@ -446,16 +482,34 @@ function TerminalSettings() {
   const setCursorBlink = useSettingsStore((s) => s.setTerminalCursorBlink);
   const setLineHeight = useSettingsStore((s) => s.setTerminalLineHeight);
   const setScrollback = useSettingsStore((s) => s.setTerminalScrollback);
+  const fontFamily = useSettingsStore((s) => s.terminalFontFamily);
+  const setFontFamily = useSettingsStore((s) => s.setTerminalFontFamily);
+
+  const termFontOptions = useInstalledFontOptions(TERMINAL_FONT_CANDIDATES, fontFamily);
 
   return (
     <>
       <SettingsGroup label="Font">
         <SettingRow>
           <div>
-            <label htmlFor="s-fontsize" className={LABEL_CLASS}>Font Size</label>
-            <p className={DESC_CLASS}>Size in pixels (8–32)</p>
+            <label htmlFor="s-fontfamily" className={LABEL_CLASS}>Font Family</label>
+            <p className={DESC_CLASS}>Monospace font used by terminals</p>
           </div>
-          <NumberSetting id="s-fontsize" value={fontSize} min={8} max={32} step={1} onChange={setFontSize} />
+          <CustomSelect
+            id="s-fontfamily"
+            value={fontFamily}
+            onChange={setFontFamily}
+            options={termFontOptions}
+            className="w-44"
+          />
+        </SettingRow>
+
+        <SettingRow>
+          <div>
+            <label htmlFor="s-fontsize" className={LABEL_CLASS}>Font Size</label>
+            <p className={DESC_CLASS}>Size in pixels (8–42)</p>
+          </div>
+          <RangeSetting id="s-fontsize" value={fontSize} min={8} max={42} step={1} unit="px" onChange={setFontSize} />
         </SettingRow>
 
         <SettingRow>
@@ -463,7 +517,7 @@ function TerminalSettings() {
             <label htmlFor="s-lineheight" className={LABEL_CLASS}>Line Height</label>
             <p className={DESC_CLASS}>Spacing between lines (1.0–2.0)</p>
           </div>
-          <NumberSetting id="s-lineheight" value={lineHeight} min={1.0} max={2.0} step={0.1} onChange={setLineHeight} />
+          <RangeSetting id="s-lineheight" value={lineHeight} min={1.0} max={2.0} step={0.1} decimals={1} onChange={setLineHeight} />
         </SettingRow>
       </SettingsGroup>
 
@@ -503,7 +557,7 @@ function TerminalSettings() {
           <NumberSetting id="s-scrollback" value={scrollback} min={500} max={100000} step={500} onChange={setScrollback} />
         </SettingRow>
         <p className="px-1 text-[length:var(--text-xs)] text-text-muted">
-          Terminal settings apply to new terminals. Existing terminals keep their current settings.
+          Changes apply to open terminals immediately.
         </p>
       </SettingsGroup>
     </>
@@ -656,7 +710,7 @@ function SegmentedControl<T extends string>({ id, value, onChange, options }: {
     <div
       id={id}
       role="radiogroup"
-      className="inline-grid shrink-0 gap-0.5 p-0.5 rounded-lg bg-bg-base border border-border"
+      className="inline-grid shrink-0 gap-1 p-1 rounded-lg bg-bg-base border border-border"
       style={{ gridTemplateColumns: `repeat(${options.length}, 1fr)` }}
     >
       {options.map((opt) => {
@@ -858,6 +912,38 @@ function UpdateChecker() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Slider with a live value readout, for bounded numeric settings. */
+function RangeSetting({ id, value, min, max, step, decimals = 0, unit = "", onChange }: {
+  id: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  decimals?: number;
+  unit?: string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 shrink-0">
+      <input
+        id={id}
+        data-testid={id}
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-36 h-1.5 cursor-pointer"
+        style={{ accentColor: "var(--color-accent)" }}
+      />
+      <span className="w-10 shrink-0 text-right text-[length:var(--text-sm)] tabular-nums text-text-secondary">
+        {value.toFixed(decimals)}{unit}
+      </span>
     </div>
   );
 }
