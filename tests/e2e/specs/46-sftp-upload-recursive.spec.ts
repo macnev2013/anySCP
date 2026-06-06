@@ -17,6 +17,7 @@ import {
     waitForModalClosed,
 } from "../helpers/host.js";
 import {
+    entryOrder,
     multiSelectAndDelete,
     openEntry,
     refreshExplorer,
@@ -80,22 +81,47 @@ describe("SFTP recursive upload", () => {
             { timeout: 20_000, timeoutMsg: `uploaded dir '${dirName}' never appeared` },
         );
 
-        // Navigate in and verify the two files at the top of the tree.
+        // Navigate in and verify the tree contents. The recursive upload is a
+        // single async transfer that mkdir's the top-level dir BEFORE writing its
+        // files and only signals completion once via a transfer event, so a bare
+        // waitForEntry can race the still-running upload (the dir exists but its
+        // files don't yet). Re-list the sub-directory each iteration until every
+        // expected entry lands — deterministic regardless of when the upload
+        // finishes or when the app's auto-refresh fires.
         await openEntry(dirName);
-        await waitForEntry("a.txt");
-        await waitForEntry("b.txt");
-        await waitForEntry("nested");
 
-        // Cleanup — go back to /config, bulk-delete the uploaded dir.
-        await browser.execute(() => {
-            const buttons = Array.from(
-                document.querySelectorAll<HTMLButtonElement>(
-                    "[aria-label='Current path'] button",
-                ),
-            );
-            buttons.at(-2)?.click();
-        });
-        await refreshExplorer();
+        // Wait for the navigation into the sub-dir to SETTLE before refreshing —
+        // refreshing while the navigation is still in flight could re-list (and
+        // bounce back to) the parent. The "Navigate to <home>" breadcrumb crumb
+        // is only rendered once <home> is no longer the last segment, i.e. once
+        // we've descended into the uploaded dir.
+        const parentCrumbSelector =
+            `[aria-label='Current path'] button[title='Navigate to ${REMOTE_HOME}']`;
+        await browser.waitUntil(
+            async () => (await $(parentCrumbSelector)).isExisting(),
+            { timeout: 10_000, timeoutMsg: `never navigated into '${dirName}'` },
+        );
+
+        // Now poll-with-refresh until every uploaded entry lands in the sub-dir.
+        await browser.waitUntil(
+            async () => {
+                await refreshExplorer();
+                const names = await entryOrder();
+                return ["a.txt", "b.txt", "nested"].every((n) => names.includes(n));
+            },
+            {
+                timeout: 30_000,
+                timeoutMsg: `uploaded files never appeared inside '${dirName}'`,
+            },
+        );
+
+        // Cleanup — go back to /config (target the breadcrumb segment by title so
+        // it's independent of breadcrumb depth), wait for the re-list, then
+        // bulk-delete the uploaded dir.
+        const configCrumb = await $(parentCrumbSelector);
+        await configCrumb.waitForClickable({ timeout: 5_000 });
+        await configCrumb.click();
+        await waitForEntry(dirName);
         await multiSelectAndDelete([dirName]);
     });
 });
