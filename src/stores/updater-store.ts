@@ -82,7 +82,13 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
       const { autoUpdate, skippedUpdateVersion } = useSettingsStore.getState();
 
       if (autoUpdate) {
-        await downloadInstall(update, set);
+        // A dev build can't self-install; just surface that an update exists
+        // rather than downloading a full release on every dev launch.
+        if (import.meta.env.PROD) {
+          await downloadInstall(update, set);
+        } else {
+          set({ status: "available" });
+        }
       } else if (skippedUpdateVersion === update.version) {
         set({ status: "idle" });
       } else {

@@ -233,11 +233,12 @@ export function AppShell() {
   }, []);
 
   // Check for updates once on launch, after settings load so the auto-update
-  // preference is known. Skipped in dev (a dev build can't self-update).
+  // preference is known. The check always runs; the silent download/install
+  // only happens in packaged builds (see updater store).
   const settingsLoaded = useSettingsStore((s) => s.loaded);
   const didUpdateCheck = useRef(false);
   useEffect(() => {
-    if (!settingsLoaded || didUpdateCheck.current || !import.meta.env.PROD) return;
+    if (!settingsLoaded || didUpdateCheck.current) return;
     didUpdateCheck.current = true;
     void useUpdaterStore.getState().loadAppVersion();
     void useUpdaterStore.getState().checkOnStartup();
