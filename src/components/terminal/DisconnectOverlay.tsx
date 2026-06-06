@@ -6,6 +6,8 @@ import { useTabStore } from "../../stores/tab-store";
 
 interface DisconnectOverlayProps {
   sessionId: SessionId;
+  /** The unified tab that owns this pane — needed to clean up the tab bar. */
+  tabId: string;
   status: "Disconnected" | "Error";
   message?: string;
   hostConfig: HostConfig;
@@ -13,6 +15,7 @@ interface DisconnectOverlayProps {
 
 export function DisconnectOverlay({
   sessionId,
+  tabId,
   status,
   message,
   hostConfig,
@@ -59,7 +62,24 @@ export function DisconnectOverlay({
   }
 
   function handleClose() {
-    useSessionStore.getState().removeSession(sessionId);
+    void (async () => {
+      // Tear down the (already dead) backend session so it doesn't linger in
+      // the manager's session map — mirrors the tab X button and ⌘W.
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("ssh_disconnect", { sessionId });
+      } catch { /* already disconnected */ }
+
+      useSessionStore.getState().removeSession(sessionId);
+
+      // removeSession only prunes the session-store's layout tree. If this was
+      // the tab's last pane, the unified tab is now orphaned in the tab bar
+      // with no working session, so remove it too. For a split, the tab still
+      // owns the surviving pane and must stay. (issue #42)
+      if (!useSessionStore.getState().tabs.get(tabId)) {
+        useTabStore.getState().removeTab(tabId);
+      }
+    })();
   }
 
   return (
