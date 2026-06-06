@@ -1,0 +1,8 @@
+# The runner image only needs package.json and entrypoint.sh (see Dockerfile).
+# Everything else in tests/e2e/ — specs, helpers, and especially the multi-MB
+# videos/ and screenshots/ test output — would otherwise be uploaded to the
+# Docker daemon as build context on every `docker build`. Whitelist only what
+# the Dockerfile COPYs.
+*
+!package.json
+!entrypoint.sh
