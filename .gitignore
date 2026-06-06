@@ -13,6 +13,9 @@ dist
 dist-ssr
 *.local
 
+# CI-only e2e build cache (cargo registry / target / node_modules host binds)
+.e2e-cache/
+
 # Claude
 .claude/
 CLAUDE.md

@@ -257,7 +257,11 @@ ssh-clean-keys:
 # image bakes in tauri-driver, the webkit2gtk driver, and a build toolchain
 # so the same setup works on dev machines (incl. Arch) and CI.
 
-E2E_COMPOSE := docker compose -f tests/e2e/docker-compose.yml -p anyscp-e2e
+# CI sets E2E_CI=1 to layer in docker-compose.ci.yml, which redirects the
+# build-cache volumes (cargo/target/node-modules) to host bind mounts under
+# $E2E_CACHE_DIR so they can be persisted via actions/cache. Locally E2E_CI is
+# unset → plain named volumes, unchanged behaviour.
+E2E_COMPOSE := docker compose -f tests/e2e/docker-compose.yml $(if $(filter 1,$(E2E_CI)),-f tests/e2e/docker-compose.ci.yml) -p anyscp-e2e
 # Stamp file — make rebuilds the image whenever any of its source inputs
 # change (Dockerfile, entrypoint, or harness package.json).
 E2E_IMAGE_STAMP := tests/e2e/.image-stamp

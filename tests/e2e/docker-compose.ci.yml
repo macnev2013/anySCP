@@ -1,0 +1,32 @@
+# CI-only override (layered on top of docker-compose.yml when E2E_CI=1).
+#
+# Swaps the three build-cache volumes from anonymous Docker named volumes —
+# which do NOT survive a fresh CI runner — to host bind mounts under
+# $E2E_CACHE_DIR. A GitHub Actions `actions/cache` step then persists that
+# directory across runs, so the in-container `pnpm install` + `tauri build`
+# reuse the crate registry, compiled target/, and node_modules instead of
+# rebuilding from scratch every run.
+#
+# We override only the top-level volume *definitions* (merged by name), not the
+# service's volume list, so the `e2e` service block is untouched and there is no
+# fragile list-merge to reason about. The bind `device` dirs must already exist
+# (the CI workflow `mkdir -p`s them before `make e2e`).
+volumes:
+  cargo-cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${E2E_CACHE_DIR}/cargo
+  rust-target:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${E2E_CACHE_DIR}/target
+  node-modules:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${E2E_CACHE_DIR}/node-modules

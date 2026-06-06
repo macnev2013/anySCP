@@ -91,13 +91,37 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+  # Build the runner image ONCE per CI run and warm a cross-run GitHub Actions
+  # layer cache. Without this, every e2e shard would rebuild the image from
+  # scratch — including the multi-minute `cargo install tauri-driver` compile —
+  # i.e. 4× the expensive work on every run. Runs in parallel with frontend/rust.
+  e2e-image:
+    name: Build E2E runner image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Populates type=gha cache only (no load/push) — the shards reconstruct
+      # the image from this cache. mode=max caches intermediate layers too, so
+      # the tauri-driver/apt/npm layers survive across runs.
+      - name: Build & cache runner image
+        uses: docker/build-push-action@v6
+        with:
+          context: tests/e2e
+          tags: anyscp-e2e-runner:latest
+          cache-from: type=gha,scope=e2e-runner
+          cache-to: type=gha,mode=max,scope=e2e-runner
+
   e2e:
     name: E2E shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
-    # Runs in parallel with the frontend/rust jobs (no `needs`) for faster
-    # feedback. `make e2e` rebuilds the frontend + Tauri binary inside Docker,
-    # so the E2E job has no data dependency on those jobs — only the wall-clock
-    # win of not waiting for them.
+    # Wait only for the (cached) image build — NOT for frontend/rust, which run
+    # in parallel. `make e2e` rebuilds the frontend + Tauri binary inside Docker,
+    # so there is no data dependency on those jobs.
+    needs: e2e-image
     timeout-minutes: 60
     strategy:
       # Don't cancel the other shards when one fails — we want the full picture.
@@ -109,11 +133,54 @@ jobs:
     env:
       SHARD_INDEX: ${{ matrix.shard }}
       SHARD_TOTAL: 4
+      # Layer in docker-compose.ci.yml so the build-cache volumes become host
+      # bind mounts under E2E_CACHE_DIR (persisted by actions/cache below).
+      E2E_CI: "1"
+      E2E_CACHE_DIR: ${{ github.workspace }}/.e2e-cache
     steps:
       - uses: actions/checkout@v4
 
-      # Brings up the SSH/SCP/MinIO target containers, builds the runner image,
-      # compiles the Tauri debug binary in-container, then runs this shard's
+      - uses: docker/setup-buildx-action@v3
+
+      # Reconstruct the runner image from the cache the e2e-image job warmed —
+      # a pure cache hit, so no apt/cargo/npm work runs here. `load: true` makes
+      # it available to the local Docker daemon for docker compose.
+      - name: Load runner image from layer cache
+        uses: docker/build-push-action@v6
+        with:
+          context: tests/e2e
+          tags: anyscp-e2e-runner:latest
+          cache-from: type=gha,scope=e2e-runner
+          load: true
+
+      # Tell the Makefile the image is current so `make e2e` skips its own
+      # `docker build` (the stamp is otherwise absent on a fresh checkout).
+      - name: Mark runner image as up-to-date
+        run: touch tests/e2e/.image-stamp
+
+      - name: Prepare build-cache dirs
+        run: mkdir -p .e2e-cache/cargo .e2e-cache/target .e2e-cache/node-modules
+
+      # Persist the in-container cargo registry, compiled target/, and
+      # node_modules across runs. Keyed on the lockfiles so dependency builds
+      # are reused even when app code changes; only the app crate recompiles.
+      - name: Cache cargo / target / node_modules
+        uses: actions/cache@v4
+        with:
+          path: .e2e-cache
+          key: e2e-build-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock', 'pnpm-lock.yaml') }}
+          restore-keys: |
+            e2e-build-${{ runner.os }}-
+
+      # Brings up the SSH/SCP/MinIO target containers, compiles the Tauri debug
+      # binary in-container (reusing the cache above), then runs this shard's
       # slice of the WDIO suite.
       - name: Run E2E suite (shard ${{ matrix.shard }}/4)
         run: make e2e
+
+      # The container writes the bind-mounted cache dirs as root; hand them back
+      # to the runner user so the actions/cache post-step can archive them. Runs
+      # even on failure so a cold build is still cached for the next run.
+      - name: Reclaim cache ownership
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" .e2e-cache
