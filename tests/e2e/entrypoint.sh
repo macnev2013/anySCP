@@ -32,6 +32,10 @@ wait_for "${SSHD_SUDO_HOST:-sshd-sudo}" "${SSHD_SUDO_PORT:-2222}" sshd-sudo
 wait_for "${SSHD_KEY_HOST:-sshd-key}"   "${SSHD_KEY_PORT:-2222}"   sshd-key
 wait_for "${SSHD_SCP_HOST:-sshd-scp}"   "${SSHD_SCP_PORT:-2222}"   sshd-scp
 wait_for "${SSHD_SCP_BUSYBOX_HOST:-sshd-scp-busybox}" "${SSHD_SCP_BUSYBOX_PORT:-2222}" sshd-scp-busybox
+wait_for "${SSHD_BASTION_HOST:-sshd-bastion}" "${SSHD_BASTION_PORT:-2222}" sshd-bastion
+# NB: sshd-tunnel-target is intentionally unreachable from the runner (isolated
+# network) — its readiness is gated by `service_healthy` in docker-compose, so
+# there is deliberately no wait_for here (a TCP probe would always time out).
 
 # ── 2. Install JS deps ────────────────────────────────────────────────────────
 echo "[entrypoint] installing app deps"

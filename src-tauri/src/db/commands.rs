@@ -7,11 +7,14 @@ use tracing::instrument;
 use super::{ConnectionHistoryEntry, DbError, HostDb, HostGroup, RecentConnection, SavedHost};
 
 /// Persist (insert or update) a host entry.
+///
+/// ProxyJump cycles, self-references, and dangling tunnel-host targets are
+/// rejected atomically with the write inside [`HostDb::save_host_validated`].
 #[tauri::command]
 #[instrument(skip(state), fields(id = %host.id))]
 pub async fn save_host(host: SavedHost, state: State<'_, Arc<HostDb>>) -> Result<(), DbError> {
     let db = Arc::clone(&state);
-    task::spawn_blocking(move || db.save_host(&host))
+    task::spawn_blocking(move || db.save_host_validated(&host))
         .await
         .map_err(|e| DbError::InitError(format!("task panicked: {e}")))?
 }

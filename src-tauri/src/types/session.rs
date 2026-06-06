@@ -53,6 +53,15 @@ pub struct HostConfig {
     pub default_shell: Option<String>,
     /// Command to execute after the shell is ready.
     pub startup_command: Option<String>,
+    /// Resolved ProxyJump / bastion host to tunnel this connection through.
+    ///
+    /// When present, the connection is established by first opening an SSH
+    /// session to this jump host and then tunnelling a `direct-tcpip` channel
+    /// to the target. Boxed to break the otherwise-infinite recursive type
+    /// size. `#[serde(default)]` keeps direct `ssh_connect` payloads (which omit
+    /// the field) backwards-compatible.
+    #[serde(default)]
+    pub jump_host: Option<Box<HostConfig>>,
 }
 
 /// Lifecycle state of a single SSH session.
