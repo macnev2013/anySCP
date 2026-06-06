@@ -834,6 +834,30 @@ pub async fn s3_enqueue_download(
     result
 }
 
+/// Download a single object to an explicit local path through the transfer
+/// pipeline (streams to disk, reports progress, cancellable). Use this instead
+/// of [`s3_download_file`] when the user picks/renames the destination in a save
+/// dialog. Returns the transfer id.
+#[tauri::command]
+#[instrument(skip(s3_transfer_manager), fields(s3_session_id = %s3_session_id))]
+pub async fn s3_enqueue_download_as(
+    s3_session_id: String,
+    key: String,
+    local_path: String,
+    s3_transfer_manager: State<'_, Arc<S3TransferManager>>,
+) -> Result<String, S3Error> {
+    let result = s3_transfer_manager
+        .enqueue_download_to(s3_session_id, key, std::path::PathBuf::from(local_path))
+        .await;
+    if result.is_ok() {
+        crate::telemetry::capture(
+            "s3_download_enqueued",
+            serde_json::json!({ "file_count": 1 }),
+        );
+    }
+    result
+}
+
 /// Cancel a queued or in-progress S3 transfer.
 #[tauri::command]
 #[instrument(skip(s3_transfer_manager), fields(transfer_id = %transfer_id))]

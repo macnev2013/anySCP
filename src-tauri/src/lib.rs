@@ -209,6 +209,7 @@ pub fn run() {
             // S3 — Transfer Manager
             s3::commands::s3_enqueue_upload,
             s3::commands::s3_enqueue_download,
+            s3::commands::s3_enqueue_download_as,
             s3::commands::s3_cancel_transfer,
             s3::commands::s3_retry_transfer,
             s3::commands::s3_list_transfers,

@@ -262,7 +262,8 @@ impl S3TransferManager {
 
     // ─── Download ────────────────────────────────────────────────────────────
 
-    /// Enqueue one or more S3 object keys for download.
+    /// Enqueue one or more S3 object keys for download into `local_dir`, each
+    /// saved under its key's basename.
     #[instrument(skip(self), fields(s3_session_id = %s3_session_id))]
     pub async fn enqueue_download(
         &self,
@@ -282,53 +283,95 @@ impl S3TransferManager {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| key.clone());
-
-            let transfer_id = uuid::Uuid::new_v4().to_string();
-            let now = Self::unix_now_millis();
-            let now_instant = Instant::now();
-
-            // Fetch the object size via HEAD.
-            let size = match bucket.head_object(&key).await {
-                Ok((head, _)) => head.content_length.unwrap_or(0) as u64,
-                Err(_) => 0,
-            };
-
             let local_path = local_dir.join(&name);
-
-            let job = TransferJobState {
-                transfer_id: transfer_id.clone(),
-                s3_session_id: s3_session_id.clone(),
-                name: name.clone(),
-                direction: S3TransferDirection::Download,
-                kind: TransferJobKind::DownloadFile {
-                    key: key.clone(),
-                    local_path,
-                    size,
-                },
-                status: S3TransferStatus::Queued,
-                bytes_transferred: 0,
-                total_bytes: size,
-                files_done: 0,
-                files_total: 1,
-                speed_bps: 0,
-                cancel_token: CancellationToken::new(),
-                error: None,
-                created_at: now,
-                last_emit: now_instant,
-                speed_window_bytes: 0,
-                speed_window_start: now_instant,
-            };
-
-            self.jobs.insert(transfer_id.clone(), job);
-            Self::emit_initial(&self.jobs, &transfer_id, &self.app_handle);
-            self.queue_tx
-                .send(transfer_id.clone())
-                .map_err(|e| S3Error::OperationError(format!("queue send error: {e}")))?;
-
-            ids.push(transfer_id);
+            let id = self
+                .queue_download_job(&bucket, &s3_session_id, key, local_path)
+                .await?;
+            ids.push(id);
         }
 
         Ok(ids)
+    }
+
+    /// Enqueue a single object for streaming download to an explicit local path
+    /// (e.g. a save-dialog target the user renamed). Unlike the one-shot
+    /// [`s3_download_file`](crate::s3::commands::s3_download_file) command, this
+    /// goes through the transfer pipeline, so it reports progress, can be
+    /// cancelled, and streams to disk instead of buffering the whole object in
+    /// memory.
+    #[instrument(skip(self), fields(s3_session_id = %s3_session_id))]
+    pub async fn enqueue_download_to(
+        &self,
+        s3_session_id: String,
+        key: String,
+        local_path: PathBuf,
+    ) -> Result<String, S3Error> {
+        self.ensure_worker_spawned();
+        let bucket = self.s3_manager.get_bucket(&s3_session_id)?;
+        self.queue_download_job(&bucket, &s3_session_id, key, local_path)
+            .await
+    }
+
+    /// Build, register, and queue a single streaming download job that writes the
+    /// object to `local_path` exactly. Shared by [`enqueue_download`] (path =
+    /// `dir/basename`) and [`enqueue_download_to`] (caller-chosen path); the
+    /// transfer's display name is the local file's name.
+    ///
+    /// [`enqueue_download`]: Self::enqueue_download
+    /// [`enqueue_download_to`]: Self::enqueue_download_to
+    async fn queue_download_job(
+        &self,
+        bucket: &s3::Bucket,
+        s3_session_id: &str,
+        key: String,
+        local_path: PathBuf,
+    ) -> Result<String, S3Error> {
+        let name = local_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| key.clone());
+
+        let transfer_id = uuid::Uuid::new_v4().to_string();
+        let now = Self::unix_now_millis();
+        let now_instant = Instant::now();
+
+        // Fetch the object size via HEAD.
+        let size = match bucket.head_object(&key).await {
+            Ok((head, _)) => head.content_length.unwrap_or(0) as u64,
+            Err(_) => 0,
+        };
+
+        let job = TransferJobState {
+            transfer_id: transfer_id.clone(),
+            s3_session_id: s3_session_id.to_string(),
+            name,
+            direction: S3TransferDirection::Download,
+            kind: TransferJobKind::DownloadFile {
+                key,
+                local_path,
+                size,
+            },
+            status: S3TransferStatus::Queued,
+            bytes_transferred: 0,
+            total_bytes: size,
+            files_done: 0,
+            files_total: 1,
+            speed_bps: 0,
+            cancel_token: CancellationToken::new(),
+            error: None,
+            created_at: now,
+            last_emit: now_instant,
+            speed_window_bytes: 0,
+            speed_window_start: now_instant,
+        };
+
+        self.jobs.insert(transfer_id.clone(), job);
+        Self::emit_initial(&self.jobs, &transfer_id, &self.app_handle);
+        self.queue_tx
+            .send(transfer_id.clone())
+            .map_err(|e| S3Error::OperationError(format!("queue send error: {e}")))?;
+
+        Ok(transfer_id)
     }
 
     // ─── Control ─────────────────────────────────────────────────────────────
