@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useSettingsStore } from "../../stores/settings-store";
-import { RefreshCw, CheckCircle2, AlertCircle, Download, Palette, SquareTerminal, ArrowUpDown, Info, ExternalLink } from "lucide-react";
+import { CustomSelect, type SelectOption } from "../shared/CustomSelect";
+import { RefreshCw, CheckCircle2, AlertCircle, Download, Palette, SquareTerminal, ArrowUpDown, Info, ExternalLink, Check } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { CursorStyle, ThemeMode } from "../../stores/settings-store";
 
@@ -121,11 +122,126 @@ function SectionContent({ section }: { section: SectionId }) {
   }
 }
 
+// Candidates for the interface font. Entries without a `family` are always
+// offered (Geist is bundled; System UI is a generic). Entries with a `family`
+// are only shown when that font is actually installed (see availableFonts),
+// since an unavailable font silently falls back to the system default.
+const INTERFACE_FONT_CANDIDATES: { value: string; label: string; family?: string }[] = [
+  { value: "'Geist', system-ui, sans-serif", label: "Geist (Default)" },
+  { value: "system-ui, sans-serif", label: "System UI" },
+  { value: "'Arial', system-ui, sans-serif", label: "Arial", family: "Arial" },
+  { value: "'Avenir', system-ui, sans-serif", label: "Avenir", family: "Avenir" },
+  { value: "'Avenir Next', system-ui, sans-serif", label: "Avenir Next", family: "Avenir Next" },
+  { value: "'Calibri', system-ui, sans-serif", label: "Calibri", family: "Calibri" },
+  { value: "'Cantarell', system-ui, sans-serif", label: "Cantarell", family: "Cantarell" },
+  { value: "'DejaVu Sans', system-ui, sans-serif", label: "DejaVu Sans", family: "DejaVu Sans" },
+  { value: "'Fira Sans', system-ui, sans-serif", label: "Fira Sans", family: "Fira Sans" },
+  { value: "'FreeSans', system-ui, sans-serif", label: "FreeSans", family: "FreeSans" },
+  { value: "'Helvetica', system-ui, sans-serif", label: "Helvetica", family: "Helvetica" },
+  { value: "'Helvetica Neue', system-ui, sans-serif", label: "Helvetica Neue", family: "Helvetica Neue" },
+  { value: "'Inter', system-ui, sans-serif", label: "Inter", family: "Inter" },
+  { value: "'Lato', system-ui, sans-serif", label: "Lato", family: "Lato" },
+  { value: "'Liberation Sans', system-ui, sans-serif", label: "Liberation Sans", family: "Liberation Sans" },
+  { value: "'Lucida Grande', system-ui, sans-serif", label: "Lucida Grande", family: "Lucida Grande" },
+  { value: "'Nimbus Sans', system-ui, sans-serif", label: "Nimbus Sans", family: "Nimbus Sans" },
+  { value: "'Noto Sans', system-ui, sans-serif", label: "Noto Sans", family: "Noto Sans" },
+  { value: "'Open Sans', system-ui, sans-serif", label: "Open Sans", family: "Open Sans" },
+  { value: "'Roboto', system-ui, sans-serif", label: "Roboto", family: "Roboto" },
+  { value: "'Segoe UI', system-ui, sans-serif", label: "Segoe UI", family: "Segoe UI" },
+  { value: "'Source Sans 3', system-ui, sans-serif", label: "Source Sans 3", family: "Source Sans 3" },
+  { value: "'Source Sans Pro', system-ui, sans-serif", label: "Source Sans Pro", family: "Source Sans Pro" },
+  { value: "'Tahoma', system-ui, sans-serif", label: "Tahoma", family: "Tahoma" },
+  { value: "'Trebuchet MS', system-ui, sans-serif", label: "Trebuchet MS", family: "Trebuchet MS" },
+  { value: "'Ubuntu', system-ui, sans-serif", label: "Ubuntu", family: "Ubuntu" },
+  { value: "'Verdana', system-ui, sans-serif", label: "Verdana", family: "Verdana" },
+  { value: "'Work Sans', system-ui, sans-serif", label: "Work Sans", family: "Work Sans" },
+];
+
+/**
+ * Whether a named font is actually installed. document.fonts.check() is
+ * unreliable (it returns true for unknown names), so measure a test string:
+ * if rendering with the font matches every generic fallback exactly, the font
+ * isn't present and the browser fell back.
+ */
+function isFontAvailable(family: string): boolean {
+  if (typeof document === "undefined") return false;
+  const ctx = document.createElement("canvas").getContext("2d");
+  if (!ctx) return false;
+  const sample = "mmmmmmmmmmlli MWQ 0123";
+  const size = "72px";
+  for (const base of ["monospace", "serif", "sans-serif"]) {
+    ctx.font = `${size} ${base}`;
+    const baseWidth = ctx.measureText(sample).width;
+    ctx.font = `${size} "${family}", ${base}`;
+    if (ctx.measureText(sample).width !== baseWidth) return true;
+  }
+  return false;
+}
+
+/** Filter the candidates down to those actually available on this system. */
+function computeFontOptions(): SelectOption[] {
+  return INTERFACE_FONT_CANDIDATES
+    .filter((f) => !f.family || isFontAvailable(f.family))
+    .map(({ value, label }) => ({ value, label }));
+}
+
+const ACCENT_PRESETS: { name: string; hue: number }[] = [
+  { name: "Blue", hue: 250 },
+  { name: "Indigo", hue: 277 },
+  { name: "Violet", hue: 300 },
+  { name: "Pink", hue: 350 },
+  { name: "Red", hue: 25 },
+  { name: "Orange", hue: 70 },
+  { name: "Green", hue: 150 },
+  { name: "Teal", hue: 195 },
+];
+
 function AppearanceSettings() {
   const themeMode = useSettingsStore((s) => s.themeMode);
   const setThemeMode = useSettingsStore((s) => s.setThemeMode);
+  const accentHue = useSettingsStore((s) => s.accentHue);
+  const setAccentHue = useSettingsStore((s) => s.setAccentHue);
+  const accentCustom = useSettingsStore((s) => s.accentCustom);
+  const setAccentCustom = useSettingsStore((s) => s.setAccentCustom);
+  const interfaceFont = useSettingsStore((s) => s.interfaceFont);
+  const setInterfaceFont = useSettingsStore((s) => s.setInterfaceFont);
+
+  const [availableFonts, setAvailableFonts] = useState<SelectOption[]>(computeFontOptions);
+  // Re-check once web fonts have finished loading (Geist arrives via @font-face).
+  useEffect(() => {
+    let cancelled = false;
+    document.fonts?.ready?.then(() => { if (!cancelled) setAvailableFonts(computeFontOptions()); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  // Keep the saved font selectable even if it isn't detected on this system.
+  const fontOptions = availableFonts.some((o) => o.value === interfaceFont)
+    ? availableFonts
+    : [{ value: interfaceFont, label: INTERFACE_FONT_CANDIDATES.find((c) => c.value === interfaceFont)?.label ?? "Current" }, ...availableFonts];
+
+  const [wheelOpen, setWheelOpen] = useState(false);
+  const customRef = useRef<HTMLDivElement>(null);
+  const isCustom = accentCustom !== null;
+  const working = accentCustom ?? { l: 0.70, c: 0.15, h: accentHue };
+  const workingColor = `oklch(${working.l} ${working.c} ${working.h})`;
+  const updateCustom = (patch: Partial<typeof working>) => setAccentCustom({ ...working, ...patch });
+
+  // Close the wheel popover on outside click / Escape.
+  useEffect(() => {
+    if (!wheelOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (customRef.current && !customRef.current.contains(e.target as Node)) setWheelOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setWheelOpen(false); };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [wheelOpen]);
 
   return (
+    <>
     <SettingsGroup label="Theme">
       <SettingRow>
         <div>
@@ -142,7 +258,179 @@ function AppearanceSettings() {
           ]}
         />
       </SettingRow>
+
+      <SettingRow>
+        <div>
+          <p className={LABEL_CLASS}>Accent Color</p>
+          <p className={DESC_CLASS}>Used for buttons, links, and active states</p>
+        </div>
+        <div className="flex items-center gap-2.5 shrink-0">
+          {ACCENT_PRESETS.map((preset) => {
+            const selected = !isCustom && accentHue === preset.hue;
+            const color = `oklch(0.70 0.15 ${preset.hue})`;
+            return (
+              <button
+                key={preset.hue}
+                type="button"
+                title={preset.name}
+                aria-label={preset.name}
+                aria-pressed={selected}
+                data-testid={`s-accent-${preset.hue}`}
+                onClick={() => setAccentHue(preset.hue)}
+                className="relative flex items-center justify-center w-6 h-6 rounded-full shrink-0 transition-transform duration-[var(--duration-fast)] hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                style={{
+                  backgroundColor: color,
+                  boxShadow: selected ? `0 0 0 2px var(--color-bg-surface), 0 0 0 4px ${color}` : undefined,
+                }}
+              >
+                {selected && <Check size={13} strokeWidth={3} className="text-white" />}
+              </button>
+            );
+          })}
+
+          {/* Custom — a rainbow swatch that opens the hue wheel */}
+          <div className="relative" ref={customRef}>
+            <button
+              type="button"
+              title="Custom"
+              aria-label="Custom color"
+              aria-haspopup="dialog"
+              aria-expanded={wheelOpen}
+              aria-pressed={isCustom}
+              data-testid="s-accent-custom"
+              onClick={() => setWheelOpen((o) => !o)}
+              className="relative flex items-center justify-center w-6 h-6 rounded-full shrink-0 transition-transform duration-[var(--duration-fast)] hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              style={{
+                background: isCustom
+                  ? workingColor
+                  : "conic-gradient(oklch(0.70 0.15 0), oklch(0.70 0.15 60), oklch(0.70 0.15 120), oklch(0.70 0.15 180), oklch(0.70 0.15 240), oklch(0.70 0.15 300), oklch(0.70 0.15 360))",
+                boxShadow: isCustom ? `0 0 0 2px var(--color-bg-surface), 0 0 0 4px ${workingColor}` : undefined,
+              }}
+            >
+              {isCustom && <Check size={13} strokeWidth={3} className="text-white [filter:drop-shadow(0_1px_1px_rgb(0_0_0/0.5))]" />}
+            </button>
+
+            {wheelOpen && (
+              <div
+                role="dialog"
+                aria-label="Custom accent color"
+                className="absolute right-0 top-full mt-2 z-50 flex flex-col items-center gap-2 p-3 rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)]"
+              >
+                <HueWheel
+                  hue={working.h}
+                  l={working.l}
+                  c={working.c}
+                  onChange={(h) => updateCustom({ h })}
+                  size={140}
+                />
+                <div className="w-full flex flex-col gap-2.5">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[length:var(--text-2xs)] uppercase tracking-wider text-text-muted">Lightness</span>
+                    <input
+                      type="range" min={0.45} max={0.85} step={0.01} value={working.l}
+                      onChange={(e) => updateCustom({ l: Number(e.target.value) })}
+                      className="w-full h-1.5 cursor-pointer"
+                      style={{ accentColor: workingColor }}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[length:var(--text-2xs)] uppercase tracking-wider text-text-muted">Saturation</span>
+                    <input
+                      type="range" min={0} max={0.3} step={0.005} value={working.c}
+                      onChange={(e) => updateCustom({ c: Number(e.target.value) })}
+                      className="w-full h-1.5 cursor-pointer"
+                      style={{ accentColor: workingColor }}
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </SettingRow>
     </SettingsGroup>
+
+    <SettingsGroup label="Interface">
+      <SettingRow>
+        <div>
+          <p className={LABEL_CLASS}>Interface Font</p>
+          <p className={DESC_CLASS}>Font for menus, labels, and panels</p>
+        </div>
+        <CustomSelect
+          id="s-interface-font"
+          value={interfaceFont}
+          onChange={setInterfaceFont}
+          options={fontOptions}
+          className="w-44"
+        />
+      </SettingRow>
+    </SettingsGroup>
+    </>
+  );
+}
+
+/** Circular hue picker — click/drag around the ring to set the hue.
+ *  Ring + thumb colours use the given lightness/chroma so the preview is honest
+ *  (e.g. at zero chroma the ring turns gray). */
+function HueWheel({ hue, onChange, size = 96, l = 0.70, c = 0.15 }: {
+  hue: number; onChange: (h: number) => void; size?: number; l?: number; c?: number;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  const setFromPointer = useCallback((clientX: number, clientY: number) => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const dx = clientX - (rect.left + rect.width / 2);
+    const dy = clientY - (rect.top + rect.height / 2);
+    let deg = Math.atan2(dx, -dy) * (180 / Math.PI);
+    if (deg < 0) deg += 360;
+    onChange(Math.round(deg) % 360);
+  }, [onChange]);
+
+  const r = size / 2;
+  const ringWidth = 14;
+  const tr = r - ringWidth / 2; // thumb track radius (centre of the ring band)
+  const rad = (hue * Math.PI) / 180;
+  const thumbX = r + tr * Math.sin(rad);
+  const thumbY = r - tr * Math.cos(rad);
+
+  const stops: string[] = [];
+  for (let d = 0; d <= 360; d += 15) stops.push(`oklch(${l} ${c} ${d}) ${d}deg`);
+
+  return (
+    <div
+      ref={ref}
+      role="slider"
+      aria-label="Accent hue"
+      aria-valuemin={0}
+      aria-valuemax={360}
+      aria-valuenow={hue}
+      tabIndex={0}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        setFromPointer(e.clientX, e.clientY);
+      }}
+      onPointerMove={(e) => {
+        if (e.buttons === 0) return;
+        setFromPointer(e.clientX, e.clientY);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowRight" || e.key === "ArrowUp") { e.preventDefault(); onChange((hue + 1) % 360); }
+        if (e.key === "ArrowLeft" || e.key === "ArrowDown") { e.preventDefault(); onChange((hue + 359) % 360); }
+      }}
+      className="relative shrink-0 rounded-full cursor-pointer touch-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      style={{ width: size, height: size, background: `conic-gradient(${stops.join(", ")})` }}
+    >
+      {/* Donut hole — matches the card surface so the wheel reads as a ring */}
+      <div className="absolute rounded-full bg-bg-overlay pointer-events-none" style={{ inset: ringWidth }} />
+      {/* Thumb */}
+      <span
+        className="absolute w-4 h-4 rounded-full border-2 border-white shadow-[var(--shadow-md)] pointer-events-none -translate-x-1/2 -translate-y-1/2"
+        style={{ left: thumbX, top: thumbY, backgroundColor: `oklch(${l} ${c} ${hue})` }}
+      />
+    </div>
   );
 }
 

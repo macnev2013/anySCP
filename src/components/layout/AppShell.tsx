@@ -24,6 +24,9 @@ import { usePortForwardEvents } from "../../hooks/use-port-forward-events";
 
 export function AppShell() {
   const themeMode = useSettingsStore((s) => s.themeMode);
+  const accentHue = useSettingsStore((s) => s.accentHue);
+  const accentCustom = useSettingsStore((s) => s.accentCustom);
+  const interfaceFont = useSettingsStore((s) => s.interfaceFont);
   const activeTabId = useTabStore((s) => s.activeTabId);
   const allTabs = useTabStore((s) => s.tabs);
   const activeTab = activeTabId ? allTabs.get(activeTabId) : null;
@@ -230,6 +233,35 @@ export function AppShell() {
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = themeMode;
   }, [themeMode]);
+
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty("--accent-hue", String(accentHue));
+  }, [accentHue]);
+
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty("--font-sans", interfaceFont);
+    document.documentElement.dataset.interfaceFont = interfaceFont;
+  }, [interfaceFont]);
+
+  // A custom accent overrides the hue-based tokens directly (supports any
+  // lightness/chroma, e.g. gray or darker shades). Clearing it falls back to
+  // the theme's hue-driven accent.
+  useLayoutEffect(() => {
+    const st = document.documentElement.style;
+    const props = ["--color-accent", "--color-accent-hover", "--color-accent-muted", "--color-border-focus", "--color-ring"];
+    if (!accentCustom) {
+      props.forEach((prop) => st.removeProperty(prop));
+      delete document.documentElement.dataset.accentCustom;
+      return;
+    }
+    const { l, c, h } = accentCustom;
+    st.setProperty("--color-accent", `oklch(${l} ${c} ${h})`);
+    st.setProperty("--color-accent-hover", `oklch(${Math.max(0, l - 0.05)} ${c} ${h})`);
+    st.setProperty("--color-accent-muted", `oklch(${l} ${c} ${h} / 0.15)`);
+    st.setProperty("--color-border-focus", `oklch(${l} ${c} ${h})`);
+    st.setProperty("--color-ring", `oklch(${l} ${c} ${h} / 0.40)`);
+    document.documentElement.dataset.accentCustom = `${l} ${c} ${h}`;
+  }, [accentCustom]);
 
   useSftpTransfers();
   usePortForwardEvents();

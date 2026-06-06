@@ -3,9 +3,15 @@ import { create } from "zustand";
 export type CursorStyle = "block" | "bar" | "underline";
 export type ThemeMode = "dark" | "light";
 
+/** Full custom accent colour in oklch components (lightness, chroma, hue). */
+export interface AccentCustom { l: number; c: number; h: number }
+
 interface SettingsState {
   // Appearance
   themeMode: ThemeMode;
+  accentHue: number;
+  accentCustom: AccentCustom | null;
+  interfaceFont: string;
 
   // Terminal appearance
   terminalFontSize: number;
@@ -23,6 +29,9 @@ interface SettingsState {
 
   // Actions
   setThemeMode: (mode: ThemeMode) => void;
+  setAccentHue: (hue: number) => void;
+  setAccentCustom: (custom: AccentCustom | null) => void;
+  setInterfaceFont: (font: string) => void;
   setTerminalFontSize: (size: number) => void;
   setTerminalFontFamily: (family: string) => void;
   setTerminalCursorStyle: (style: CursorStyle) => void;
@@ -36,6 +45,9 @@ interface SettingsState {
 // Defaults
 const DEFAULTS = {
   themeMode: "dark" as ThemeMode,
+  accentHue: 250,
+  accentCustom: null as AccentCustom | null,
+  interfaceFont: "'Geist', system-ui, sans-serif",
   terminalFontSize: 14,
   terminalFontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
   terminalCursorStyle: "bar" as CursorStyle,
@@ -59,6 +71,46 @@ function initialThemeMode(): ThemeMode {
   return DEFAULTS.themeMode;
 }
 
+/**
+ * Seed the accent hue from the --accent-hue CSS variable injected by the Rust
+ * setup() hook before first paint (mirrors initialThemeMode), so the initial
+ * render matches the persisted accent and there's no flash. Falls back to the
+ * default when absent.
+ */
+function initialAccentHue(): number {
+  if (typeof document !== "undefined") {
+    const v = document.documentElement.style.getPropertyValue("--accent-hue").trim();
+    const n = Number(v);
+    if (v && !Number.isNaN(n)) return n;
+  }
+  return DEFAULTS.accentHue;
+}
+
+/** Seed the custom accent from the data-accent-custom attribute injected by Rust
+ *  before first paint (so a custom accent doesn't flash on startup). */
+function initialAccentCustom(): AccentCustom | null {
+  if (typeof document !== "undefined") {
+    const v = document.documentElement.dataset.accentCustom;
+    if (v) {
+      const parts = v.trim().split(/\s+/).map(Number);
+      if (parts.length === 3 && parts.every((n) => !Number.isNaN(n))) {
+        return { l: parts[0], c: parts[1], h: parts[2] };
+      }
+    }
+  }
+  return null;
+}
+
+/** Seed the interface font from the data-interface-font attribute injected by
+ *  Rust before first paint, so a custom UI font doesn't flash on startup. */
+function initialInterfaceFont(): string {
+  if (typeof document !== "undefined") {
+    const v = document.documentElement.dataset.interfaceFont;
+    if (v) return v;
+  }
+  return DEFAULTS.interfaceFont;
+}
+
 /** Persist a single setting to the backend. Fire-and-forget. */
 function persist(key: string, value: string) {
   void (async () => {
@@ -69,14 +121,39 @@ function persist(key: string, value: string) {
   })();
 }
 
+let accentPersistTimer: ReturnType<typeof setTimeout> | undefined;
+
 export const useSettingsStore = create<SettingsState>((set) => ({
   ...DEFAULTS,
   themeMode: initialThemeMode(),
+  accentHue: initialAccentHue(),
+  accentCustom: initialAccentCustom(),
+  interfaceFont: initialInterfaceFont(),
   loaded: false,
 
   setThemeMode: (mode) => {
     set({ themeMode: mode });
     persist("app_theme", mode);
+  },
+
+  setAccentHue: (hue) => {
+    // Choosing a preset hue clears any custom colour.
+    set({ accentHue: hue, accentCustom: null });
+    persist("app_accent_hue", String(hue));
+    persist("app_accent_custom", "");
+  },
+
+  setAccentCustom: (custom) => {
+    set({ accentCustom: custom });
+    // Debounce so dragging the wheel / sliders doesn't spam the backend.
+    if (accentPersistTimer) clearTimeout(accentPersistTimer);
+    const value = custom ? `${custom.l} ${custom.c} ${custom.h}` : "";
+    accentPersistTimer = setTimeout(() => persist("app_accent_custom", value), 200);
+  },
+
+  setInterfaceFont: (font) => {
+    set({ interfaceFont: font });
+    persist("app_interface_font", font);
   },
 
   setTerminalFontSize: (size) => {
@@ -134,6 +211,14 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       for (const [key, value] of pairs) {
         switch (key) {
           case "app_theme": updates.themeMode = value === "light" ? "light" : DEFAULTS.themeMode; break;
+          case "app_accent_hue": updates.accentHue = Number(value) || DEFAULTS.accentHue; break;
+          case "app_accent_custom": {
+            const parts = value.trim().split(/\s+/).map(Number);
+            updates.accentCustom = parts.length === 3 && parts.every((n) => !Number.isNaN(n))
+              ? { l: parts[0], c: parts[1], h: parts[2] }
+              : null;
+            break;
+          }
           case "terminal_font_size": updates.terminalFontSize = Number(value) || DEFAULTS.terminalFontSize; break;
           case "terminal_font_family": updates.terminalFontFamily = value || DEFAULTS.terminalFontFamily; break;
           case "terminal_cursor_style": updates.terminalCursorStyle = (value as CursorStyle) || DEFAULTS.terminalCursorStyle; break;
@@ -141,6 +226,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           case "terminal_line_height": updates.terminalLineHeight = Number(value) || DEFAULTS.terminalLineHeight; break;
           case "terminal_scrollback": updates.terminalScrollback = Number(value) || DEFAULTS.terminalScrollback; break;
           case "transfer_concurrency": updates.transferConcurrency = Number(value) || DEFAULTS.transferConcurrency; break;
+          case "app_interface_font": updates.interfaceFont = value || DEFAULTS.interfaceFont; break;
         }
       }
 

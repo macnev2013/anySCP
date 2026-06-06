@@ -53,7 +53,54 @@ pub fn run() {
                 Ok(Some(v)) if v == "light" => "light",
                 _ => "dark",
             };
-            let theme_script = format!("document.documentElement.dataset.theme = {theme:?};");
+            // Same rationale as the theme: inject the persisted accent hue before
+            // first paint so the accent colour doesn't flash from the default.
+            let accent_hue: f64 = host_db
+                .get_setting("app_accent_hue")
+                .ok()
+                .flatten()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(250.0);
+
+            // Optional full custom accent stored as oklch "l c h"; when present it
+            // overrides the hue-based tokens (supports gray / darker shades). Inject
+            // it before first paint too, so a custom accent doesn't flash.
+            let custom_accent_script = host_db
+                .get_setting("app_accent_custom")
+                .ok()
+                .flatten()
+                .and_then(|v| {
+                    let parts: Vec<f64> =
+                        v.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+                    if parts.len() == 3 {
+                        let (l, c, h) = (parts[0], parts[1], parts[2]);
+                        let hover = (l - 0.05).max(0.0);
+                        Some(format!(
+                            "var s=document.documentElement.style;\
+                             s.setProperty('--color-accent','oklch({l} {c} {h})');\
+                             s.setProperty('--color-accent-hover','oklch({hover} {c} {h})');\
+                             s.setProperty('--color-accent-muted','oklch({l} {c} {h} / 0.15)');\
+                             s.setProperty('--color-border-focus','oklch({l} {c} {h})');\
+                             s.setProperty('--color-ring','oklch({l} {c} {h} / 0.40)');\
+                             document.documentElement.dataset.accentCustom='{l} {c} {h}';"
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+
+            // Optional interface (UI) font; inject before first paint too.
+            let font_script = match host_db.get_setting("app_interface_font") {
+                Ok(Some(f)) if !f.is_empty() => format!(
+                    "document.documentElement.style.setProperty('--font-sans', {f:?});document.documentElement.dataset.interfaceFont={f:?};"
+                ),
+                _ => String::new(),
+            };
+
+            let theme_script = format!(
+                "document.documentElement.dataset.theme = {theme:?}; document.documentElement.style.setProperty('--accent-hue', '{accent_hue}');{custom_accent_script}{font_script}"
+            );
 
             WebviewWindowBuilder::new(app.handle(), "main", WebviewUrl::App("index.html".into()))
                 .title("anySCP")
