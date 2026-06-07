@@ -4,7 +4,7 @@ import { AlertCircle } from "lucide-react";
 import { useSftpStore } from "../../stores/sftp-store";
 import { useTabStore } from "../../stores/tab-store";
 import type { SftpEntry } from "../../types";
-import type { ExplorerEntry, ExplorerClipboard } from "../../types/explorer";
+import type { ExplorerEntry, ExplorerClipboard, ChmodResult } from "../../types/explorer";
 import { ExplorerToolbar, ExplorerFileTable, ExplorerDropZone } from "../explorer";
 import { createSftpProvider, toExplorerEntry } from "../../providers/sftp-provider";
 import { explorerInvoke, transferEventName, type Transport } from "../../lib/explorer-transport";
@@ -425,9 +425,15 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
 
   // ─── Change permissions (chmod) ─────────────────────────────────────────────
 
-  const handleApplyPermissions = useCallback(async (entry: ExplorerEntry, mode: number) => {
-    await explorerInvoke(transport, "chmod", sessionId, { path: entry.id, mode });
+  const handleApplyPermissions = useCallback(async (entry: ExplorerEntry, mode: number, recursive: boolean) => {
+    let result: ChmodResult | undefined;
+    if (recursive && entry.entryType === "Directory") {
+      result = await explorerInvoke<ChmodResult>(transport, "chmod_recursive", sessionId, { path: entry.id, mode });
+    } else {
+      await explorerInvoke(transport, "chmod", sessionId, { path: entry.id, mode });
+    }
     if (session) await loadDirectory(session.currentPath);
+    return result;
   }, [sessionId, transport, session, loadDirectory]);
 
   // ─── Edit in external editor ───────────────────────────────────────────────

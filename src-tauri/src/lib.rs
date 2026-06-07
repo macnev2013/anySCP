@@ -176,6 +176,7 @@ pub fn run() {
             sftp::commands::sftp_delete,
             sftp::commands::sftp_rename,
             sftp::commands::sftp_chmod,
+            sftp::commands::sftp_chmod_recursive,
             // SFTP — copy / move
             sftp::commands::sftp_move_entries,
             sftp::commands::sftp_copy_entries,
@@ -202,6 +203,7 @@ pub fn run() {
             scp::commands::scp_delete,
             scp::commands::scp_rename,
             scp::commands::scp_chmod,
+            scp::commands::scp_chmod_recursive,
             // SCP — copy / move
             scp::commands::scp_move_entries,
             scp::commands::scp_copy_entries,

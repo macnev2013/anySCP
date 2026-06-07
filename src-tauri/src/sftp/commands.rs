@@ -11,8 +11,8 @@ use crate::ssh::manager::SshManager;
 
 use super::transfer_manager::TransferManager;
 use super::{
-    format_permissions, SftpEntry, SftpEntryType, SftpError, SftpManager, SftpSessionWrapper,
-    TransferDirection, TransferInfo, TransferProgress, TransferStatus,
+    format_permissions, ChmodSummary, SftpEntry, SftpEntryType, SftpError, SftpManager,
+    SftpSessionWrapper, TransferDirection, TransferInfo, TransferProgress, TransferStatus,
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -444,43 +444,128 @@ pub async fn sftp_chmod(
         session_ref.sftp.clone()
     };
 
-    let requested = mode & 0o7777;
+    let sftp = sftp_arc.lock().await;
+    match apply_chmod_one(&sftp, &path, mode & 0o7777).await {
+        Ok(clean) => {
+            crate::telemetry::capture(
+                "sftp_chmod",
+                serde_json::json!({ "false_positive": !clean }),
+            );
+            Ok(())
+        }
+        Err(msg) => Err(SftpError::RemoteIoError(msg)),
+    }
+}
+
+/// Apply `requested` permission bits (already masked to `0o7777`) to a single
+/// path via `setstat`.
+///
+/// Returns `Ok(true)` when the server acknowledged the change, `Ok(false)` when
+/// it replied with an error that a follow-up `stat` proved to be a false
+/// positive (a known quirk where the server applies the chmod but still returns
+/// SSH_FX_PERMISSION_DENIED / SSH_FX_FAILURE), and `Err(message)` for a genuine
+/// failure. The error message is prefixed with the path for recursive summaries.
+async fn apply_chmod_one(
+    sftp: &russh_sftp::client::SftpSession,
+    path: &str,
+    requested: u32,
+) -> Result<bool, String> {
     let attrs = FileAttributes {
         permissions: Some(requested),
         ..Default::default()
     };
+    match sftp.set_metadata(path, attrs).await {
+        Ok(_) => Ok(true),
+        Err(e) => match sftp.metadata(path).await {
+            Ok(current) if (current.permissions.unwrap_or(0) & 0o7777) == requested => {
+                tracing::warn!(
+                    error = %e,
+                    path = %path,
+                    "setstat returned an error but permissions match the request; \
+                     treating as success"
+                );
+                Ok(false)
+            }
+            _ => Err(format!("{path}: {e}")),
+        },
+    }
+}
 
+/// Recursively chmod a directory and all of its contents.
+///
+/// Walks the tree iteratively with an explicit stack (no async recursion) so
+/// deep hierarchies can't overflow the stack. Symlinks are skipped — neither
+/// chmod'd nor descended into — to avoid following them out of the subtree or
+/// changing their targets. Per-entry failures are collected into the returned
+/// [`ChmodSummary`] instead of aborting, and the per-file false-positive
+/// handling from [`apply_chmod_one`] applies throughout.
+#[tauri::command]
+#[instrument(skip(sftp_manager), fields(sftp_session_id = %sftp_session_id, path = %path, mode = mode))]
+pub async fn sftp_chmod_recursive(
+    sftp_session_id: String,
+    path: String,
+    mode: u32,
+    sftp_manager: State<'_, Arc<SftpManager>>,
+) -> Result<ChmodSummary, SftpError> {
+    let sftp_arc = {
+        let session_ref = sftp_manager.get_session(&sftp_session_id)?;
+        session_ref.sftp.clone()
+    };
+
+    let requested = mode & 0o7777;
     let sftp = sftp_arc.lock().await;
-    match sftp.set_metadata(&path, attrs).await {
-        Ok(_) => {
-            crate::telemetry::capture("sftp_chmod", serde_json::json!({}));
-            Ok(())
-        }
-        Err(e) => {
-            // Known server quirk: some SFTP server implementations actually
-            // apply the chmod but still reply with a non-Ok status (notably
-            // SSH_FX_PERMISSION_DENIED / SSH_FX_FAILURE), producing a false
-            // positive error. Before surfacing it, re-stat the path and treat
-            // the operation as successful if the permission bits already match
-            // what we requested.
-            match sftp.metadata(&path).await {
-                Ok(current) if (current.permissions.unwrap_or(0) & 0o7777) == requested => {
-                    tracing::warn!(
-                        error = %e,
-                        path = %path,
-                        "setstat returned an error but permissions match the request; \
-                         treating as success"
-                    );
-                    crate::telemetry::capture(
-                        "sftp_chmod",
-                        serde_json::json!({ "false_positive": true }),
-                    );
-                    Ok(())
-                }
-                _ => Err(SftpError::RemoteIoError(e.to_string())),
+
+    let mut applied: u32 = 0;
+    let mut errors: Vec<String> = Vec::new();
+
+    // The root directory itself.
+    match apply_chmod_one(&sftp, &path, requested).await {
+        Ok(_) => applied += 1,
+        Err(msg) => errors.push(msg),
+    }
+
+    let mut stack: Vec<String> = vec![path.clone()];
+    while let Some(dir) = stack.pop() {
+        let entries = match sftp.read_dir(&dir).await {
+            Ok(e) => e,
+            Err(e) => {
+                errors.push(format!("{dir}: {e}"));
+                continue;
+            }
+        };
+
+        for entry in entries {
+            let name = entry.file_name();
+            if name == "." || name == ".." {
+                continue;
+            }
+            let full = if dir == "/" {
+                format!("/{name}")
+            } else {
+                format!("{dir}/{name}")
+            };
+
+            let file_type = entry.metadata().file_type();
+            if file_type == russh_sftp::protocol::FileType::Symlink {
+                continue; // never chmod or descend into symlinks
+            }
+
+            match apply_chmod_one(&sftp, &full, requested).await {
+                Ok(_) => applied += 1,
+                Err(msg) => errors.push(msg),
+            }
+
+            if file_type == russh_sftp::protocol::FileType::Dir {
+                stack.push(full);
             }
         }
     }
+
+    crate::telemetry::capture(
+        "sftp_chmod_recursive",
+        serde_json::json!({ "applied": applied, "errors": errors.len() }),
+    );
+    Ok(ChmodSummary { applied, errors })
 }
 
 // ─── Transfers ───────────────────────────────────────────────────────────────

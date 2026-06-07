@@ -211,6 +211,29 @@ pub async fn chmod(
     Ok(())
 }
 
+/// Recursively `chmod -R <octal> <path>`. Returns the list of stderr lines on a
+/// non-zero exit (chmod continues past per-file errors and reports them on
+/// stderr) so callers can build a summary instead of aborting; an empty list
+/// means full success.
+pub async fn chmod_recursive(
+    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    path: &str,
+    mode: u32,
+) -> Result<Vec<String>, ScpError> {
+    let cmd = format!("chmod -R {:o} -- {}", mode & 0o7777, shell_quote(path));
+    let (_out, stderr, exit) = ssh_exec(handle, &cmd).await?;
+    if exit == 0 {
+        return Ok(Vec::new());
+    }
+    let errors = String::from_utf8_lossy(&stderr)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect();
+    Ok(errors)
+}
+
 /// Detect the remote's userland once. GNU has `find -printf`; busybox lacks
 /// it but keeps `stat -c`; BSD/macOS have neither but have `stat -f`.
 ///

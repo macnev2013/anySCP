@@ -14,7 +14,11 @@ import {
 } from "../helpers/host.js";
 import {
     createFile,
+    createFolder,
     deleteEntry,
+    entryPermissions,
+    navigateExplorerHome,
+    openEntry,
     setPermissions,
     waitForExplorer,
 } from "../helpers/sftp-ops.js";
@@ -55,5 +59,46 @@ describe("SFTP properties (chmod)", () => {
 
         // Cleanup so subsequent runs don't pile up.
         await deleteEntry(name);
+    });
+
+    it("changes a directory's permissions recursively", async () => {
+        await openNewHostModal();
+        await fillPasswordHostForm({
+            label: "chmod-rec",
+            host: SSHD_PASS_HOST,
+            port: SSHD_PASS_PORT,
+            username: SSH_USER,
+            password: SSH_PASS,
+        });
+        await clickSave();
+        await waitForModalClosed();
+        await findHostCardByLabel("chmod-rec");
+
+        const hostId = await getHostId("chmod-rec");
+        await (await $(`[data-testid='host-card-${hostId}-explorer']`)).click();
+        await waitForExplorer();
+
+        const dir = "recdir-" + Date.now();
+        const child = "child.txt";
+
+        // Create the folder, drop a file inside it, then return to the parent.
+        await createFolder(dir);
+        await openEntry(dir);
+        await createFile(child);
+        await navigateExplorerHome();
+
+        // 0o700 = rwx------ on both the directory and (recursively) its file.
+        await setPermissions(dir, 0o700, "rwx------", true);
+
+        // Verify recursion reached the child.
+        await openEntry(dir);
+        await browser.waitUntil(
+            async () => (await entryPermissions(child)) === "rwx------",
+            { timeout: 10_000, timeoutMsg: "child permissions not updated recursively" },
+        );
+
+        // Cleanup.
+        await navigateExplorerHome();
+        await deleteEntry(dir);
     });
 });

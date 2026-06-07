@@ -144,18 +144,20 @@ export async function setPermissions(
     name: string,
     mode: number,
     expectedDisplay: string,
+    recursive = false,
 ): Promise<void> {
     await waitForEntry(name);
     await browser.execute(
-        (n: string, m: number) => {
+        (n: string, m: number, r: boolean) => {
             const fn = (window as unknown as {
-                __e2eExplorerChmod?: (n: string, m: number) => Promise<void> | undefined;
+                __e2eExplorerChmod?: (n: string, m: number, r?: boolean) => Promise<unknown> | undefined;
             }).__e2eExplorerChmod;
             if (!fn) throw new Error("__e2eExplorerChmod not registered");
-            void fn(n, m);
+            void fn(n, m, r);
         },
         name,
         mode,
+        recursive,
     );
     await browser.waitUntil(
         async () => (await entryPermissions(name)) === expectedDisplay,

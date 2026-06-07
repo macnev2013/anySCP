@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { X, Copy, Folder, FileText, Link as LinkIcon, Loader2, AlertCircle } from "lucide-react";
-import type { ExplorerEntry, ProviderCapabilities } from "../../types/explorer";
+import type { ExplorerEntry, ProviderCapabilities, ChmodResult } from "../../types/explorer";
 import { formatBytes } from "../../utils/format";
 import {
   permissionsStringToOctal,
@@ -17,8 +17,13 @@ interface FilePropertiesDialogProps {
   entry: ExplorerEntry;
   capabilities: ProviderCapabilities;
   /** Apply new permission bits (octal number). Absent → permissions are
-   *  read-only (e.g. S3, or a transport that can't chmod). */
-  onApplyPermissions?: (entry: ExplorerEntry, mode: number) => Promise<void>;
+   *  read-only (e.g. S3, or a transport that can't chmod). When `recursive`
+   *  is true (directories only) returns a per-entry summary. */
+  onApplyPermissions?: (
+    entry: ExplorerEntry,
+    mode: number,
+    recursive: boolean,
+  ) => Promise<ChmodResult | void>;
   onClose: () => void;
 }
 
@@ -56,6 +61,7 @@ export function FilePropertiesDialog({
 
   const [octal, setOctal] = useState(initialOctal);
   const [octalInput, setOctalInput] = useState(octalToString(initialOctal));
+  const [recursive, setRecursive] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -67,6 +73,9 @@ export function FilePropertiesDialog({
     capabilities.hasPermissions && !entry.isSymlink && !!onApplyPermissions;
   const showPermissions = capabilities.hasPermissions;
   const dirty = octal !== initialOctal;
+  // Recursive apply is meaningful even when the root's octal is unchanged
+  // (propagating the existing mode down), so it enables Apply on its own.
+  const canApply = canEditPermissions && (dirty || (recursive && isDir));
 
   // ─── Sync helpers ─────────────────────────────────────────────────────────
 
@@ -98,12 +107,23 @@ export function FilePropertiesDialog({
   // ─── Apply ────────────────────────────────────────────────────────────────
 
   const handleApply = useCallback(async () => {
-    if (!onApplyPermissions || !dirty || applying) return;
+    if (!onApplyPermissions || !canApply || applying) return;
+    const isRecursive = recursive && isDir;
     setApplying(true);
     setError(null);
     try {
-      await onApplyPermissions(entry, octal);
-      onClose();
+      const result = await onApplyPermissions(entry, octal, isRecursive);
+      // Recursive apply collects per-entry failures instead of throwing. Show a
+      // summary and keep the dialog open when some entries failed; otherwise
+      // close as for a normal apply.
+      if (result && result.errors.length > 0) {
+        const appliedPart = result.applied > 0 ? ` to ${result.applied} item(s)` : "";
+        setError(
+          `Applied${appliedPart}, ${result.errors.length} error(s). ${result.errors[0]}`,
+        );
+      } else {
+        onClose();
+      }
     } catch (err) {
       const msg =
         err && typeof err === "object" && "message" in err
@@ -115,7 +135,7 @@ export function FilePropertiesDialog({
     } finally {
       setApplying(false);
     }
-  }, [onApplyPermissions, dirty, applying, entry, octal, onClose]);
+  }, [onApplyPermissions, canApply, applying, recursive, isDir, entry, octal, onClose]);
 
   // ─── Escape to close ──────────────────────────────────────────────────────
 
@@ -283,6 +303,21 @@ export function FilePropertiesDialog({
                 {octalToPermissionsString(octal)}
               </span>
             </div>
+
+            {/* Recursive apply — directories only */}
+            {isDir && canEditPermissions && (
+              <label className="flex items-center gap-2 mt-3 cursor-pointer text-[length:var(--text-xs)] text-text-secondary select-none">
+                <input
+                  type="checkbox"
+                  data-testid="perm-recursive"
+                  checked={recursive}
+                  disabled={applying}
+                  onChange={(e) => setRecursive(e.target.checked)}
+                  className="h-3.5 w-3.5 cursor-pointer accent-accent disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                Apply permissions recursively to all contents
+              </label>
+            )}
           </div>
         )}
 
@@ -308,7 +343,7 @@ export function FilePropertiesDialog({
             <button
               data-testid="file-properties-apply"
               onClick={() => void handleApply()}
-              disabled={!dirty || applying}
+              disabled={!canApply || applying}
               className="flex items-center gap-1.5 px-4 py-2 text-[length:var(--text-sm)] font-medium text-white bg-accent hover:opacity-90 rounded-lg transition-opacity duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {applying && <Loader2 size={14} strokeWidth={2} className="animate-spin" aria-hidden="true" />}

@@ -18,7 +18,7 @@ import {
   Info,
   Link2,
 } from "lucide-react";
-import type { ExplorerEntry, ExplorerClipboard, FileSystemProvider } from "../../types/explorer";
+import type { ExplorerEntry, ExplorerClipboard, FileSystemProvider, ChmodResult } from "../../types/explorer";
 import { ContextMenu } from "../shared/ContextMenu";
 import type { ContextMenuItem } from "../shared/ContextMenu";
 import { formatBytes } from "../../utils/format";
@@ -42,8 +42,13 @@ interface ExplorerFileTableProps {
   onEditInEditor?: (entry: ExplorerEntry, editor?: EditorConfig) => void;
   onPresignUrl?: (entry: ExplorerEntry) => void;
   /** Apply chmod permission bits. SFTP/SCP only; absent for S3 → the
-   *  Properties dialog shows permissions read-only (or hides them). */
-  onApplyPermissions?: (entry: ExplorerEntry, mode: number) => Promise<void>;
+   *  Properties dialog shows permissions read-only (or hides them). When
+   *  `recursive` is true (directories only) returns a per-entry summary. */
+  onApplyPermissions?: (
+    entry: ExplorerEntry,
+    mode: number,
+    recursive: boolean,
+  ) => Promise<ChmodResult | void>;
   creatingFile?: boolean;
   onCreateFile?: (name: string) => void;
   onCancelCreateFile?: () => void;
@@ -365,17 +370,17 @@ export function ExplorerFileTable({
   // drive reliably in WebDriver). `mode` is the octal value as a number.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const hook = (name: string, mode: number): Promise<void> | undefined => {
+    const hook = (name: string, mode: number, recursive = false): Promise<ChmodResult | void> | undefined => {
       const entry = sortedEntries.find((e) => e.name === name);
       if (!entry || !onApplyPermissions) return undefined;
-      return onApplyPermissions(entry, mode);
+      return onApplyPermissions(entry, mode, recursive);
     };
     (window as unknown as {
-      __e2eExplorerChmod?: (n: string, mode: number) => Promise<void> | undefined;
+      __e2eExplorerChmod?: (n: string, mode: number, recursive?: boolean) => Promise<ChmodResult | void> | undefined;
     }).__e2eExplorerChmod = hook;
     return () => {
       (window as unknown as {
-        __e2eExplorerChmod?: ((n: string, mode: number) => Promise<void> | undefined) | null;
+        __e2eExplorerChmod?: ((n: string, mode: number, recursive?: boolean) => Promise<ChmodResult | void> | undefined) | null;
       }).__e2eExplorerChmod = null;
     };
   }, [sortedEntries, onApplyPermissions]);

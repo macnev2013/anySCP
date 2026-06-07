@@ -18,6 +18,14 @@ export interface ExplorerEntry {
   storageClass: string | null;
 }
 
+/** Result of a recursive chmod — mirrors the Rust `ChmodSummary`. */
+export interface ChmodResult {
+  /** Number of entries whose permissions were successfully updated. */
+  applied: number;
+  /** Per-entry failure messages collected during the walk (empty = success). */
+  errors: string[];
+}
+
 /** Clipboard for copy/cut/paste within a session. */
 export interface ExplorerClipboard {
   entries: ExplorerEntry[];
