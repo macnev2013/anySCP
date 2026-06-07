@@ -34,6 +34,13 @@ function getTabIcon(tab: UnifiedTab): React.ElementType {
   return PAGE_ICONS[tab.page] ?? Monitor;
 }
 
+// The snippet palette is bound to Cmd+K on macOS, Ctrl+K elsewhere (see the
+// shortcut hook). Show the matching hint rather than a mac-only ⌘.
+const IS_MAC =
+  typeof navigator !== "undefined" &&
+  (navigator.platform.includes("Mac") || navigator.platform === "MacIntel");
+const SNIPPET_SHORTCUT = IS_MAC ? "⌘K" : "Ctrl K";
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export function UnifiedTabBar() {
@@ -209,24 +216,28 @@ export function UnifiedTabBar() {
 
       </div>
 
-      {/* Right actions — only show snippet button when a terminal tab is active */}
+      {/* Right actions — only show snippet button when a terminal tab is active.
+          A labelled button (with the ⌘K hint) reads as a control instead of a
+          stray muted icon, which was easy to miss. */}
       {activeTabId && tabs.get(activeTabId)?.type === "terminal" && (
         <div className="flex items-center gap-1 pl-2 shrink-0">
           <button
             onClick={toggleSnippetPanel}
-            title="Snippets (⌘K)"
+            title={`Snippets (${SNIPPET_SHORTCUT})`}
             aria-label="Open snippet palette"
             aria-pressed={snippetPanelOpen}
             className={[
-              "flex items-center justify-center w-7 h-7 rounded-md",
+              "flex items-center gap-1.5 h-7 px-2 rounded-md border shrink-0",
+              "text-[length:var(--text-xs)] font-medium",
               "transition-colors duration-[var(--duration-fast)]",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               snippetPanelOpen
-                ? "bg-accent/15 text-accent"
-                : "text-text-muted hover:text-text-secondary hover:bg-bg-subtle",
+                ? "bg-accent/15 text-accent border-accent/40"
+                : "bg-bg-overlay/60 text-text-secondary border-border/60 hover:text-text-primary hover:bg-bg-overlay hover:border-border",
             ].join(" ")}
           >
-            <Code size={15} strokeWidth={1.8} aria-hidden="true" />
+            <Code size={14} strokeWidth={1.8} aria-hidden="true" />
+            <span>Snippets</span>
           </button>
         </div>
       )}
