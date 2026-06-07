@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import {
   Folder,
   FileText,
@@ -16,14 +16,14 @@ import {
   FilePlus,
   ExternalLink,
   Info,
-  X,
   Link2,
 } from "lucide-react";
-import type { ExplorerEntry, ExplorerClipboard, FileSystemProvider } from "../../types/explorer";
+import type { ExplorerEntry, ExplorerClipboard, FileSystemProvider, ChmodResult } from "../../types/explorer";
 import { ContextMenu } from "../shared/ContextMenu";
 import type { ContextMenuItem } from "../shared/ContextMenu";
 import { formatBytes } from "../../utils/format";
 import { useSettingsStore, type EditorConfig } from "../../stores/settings-store";
+import { FilePropertiesDialog } from "./FilePropertiesDialog";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -41,7 +41,14 @@ interface ExplorerFileTableProps {
   onRename?: (entry: ExplorerEntry, newName: string) => Promise<void>;
   onEditInEditor?: (entry: ExplorerEntry, editor?: EditorConfig) => void;
   onPresignUrl?: (entry: ExplorerEntry) => void;
-  onGetInfo?: (entry: ExplorerEntry) => void;
+  /** Apply chmod permission bits. SFTP/SCP only; absent for S3 → the
+   *  Properties dialog shows permissions read-only (or hides them). When
+   *  `recursive` is true (directories only) returns a per-entry summary. */
+  onApplyPermissions?: (
+    entry: ExplorerEntry,
+    mode: number,
+    recursive: boolean,
+  ) => Promise<ChmodResult | void>;
   creatingFile?: boolean;
   onCreateFile?: (name: string) => void;
   onCancelCreateFile?: () => void;
@@ -51,6 +58,9 @@ interface ExplorerFileTableProps {
   onPaste?: () => void;
   onMoveEntries?: (sourceIds: string[], targetDir: string) => Promise<void>;
   onCopyEntries?: (sourceIds: string[], targetDir: string) => Promise<void>;
+  /** Current directory path/prefix. Used to reset scroll on navigation while
+   *  preserving it across same-directory refreshes (e.g. after a chmod). */
+  currentPath?: string;
   loading?: boolean;
   busy?: boolean;
 }
@@ -259,7 +269,7 @@ export function ExplorerFileTable({
   onRename,
   onEditInEditor,
   onPresignUrl,
-  onGetInfo,
+  onApplyPermissions,
   creatingFolder,
   onCreateFolder,
   onCancelCreateFolder,
@@ -269,6 +279,7 @@ export function ExplorerFileTable({
   onPaste,
   onMoveEntries,
   onCopyEntries,
+  currentPath,
   loading,
 }: ExplorerFileTableProps) {
   const caps = provider.capabilities;
@@ -277,7 +288,7 @@ export function ExplorerFileTable({
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<ExplorerEntry[] | null>(null);
-  const [infoEntry, setInfoEntry] = useState<ExplorerEntry | null>(null);
+  const [propsEntry, setPropsEntry] = useState<ExplorerEntry | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const lastClickedId = useRef<string | null>(null);
   const tableRef = useRef<HTMLDivElement>(null);
@@ -286,6 +297,13 @@ export function ExplorerFileTable({
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const draggedEntriesRef = useRef<ExplorerEntry[]>([]);
   const dragEnterCountRef = useRef(0);
+
+  // Reset scroll to the top only when the directory actually changes. Same-dir
+  // refreshes (e.g. after a chmod / rename / create) keep the scroll container
+  // mounted — see the skeleton guard below — so the position is preserved.
+  useLayoutEffect(() => {
+    if (tableRef.current) tableRef.current.scrollTop = 0;
+  }, [currentPath]);
 
   // Cut entry dimming
   const cutIds = clipboard?.operation === "cut" && clipboard.sourceSessionId === provider.sessionId
@@ -345,6 +363,27 @@ export function ExplorerFileTable({
       }).__e2eExplorerStartRename = null;
     };
   }, [sortedEntries, onRename]);
+
+  // E2E test hook — apply chmod permission bits to an entry by name. Drives
+  // the same onApplyPermissions path the Properties dialog "Apply" uses, but
+  // bypasses the dialog UI (checkbox + octal-input interplay is awkward to
+  // drive reliably in WebDriver). `mode` is the octal value as a number.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const hook = (name: string, mode: number, recursive = false): Promise<ChmodResult | void> | undefined => {
+      const entry = sortedEntries.find((e) => e.name === name);
+      if (!entry || !onApplyPermissions) return undefined;
+      return onApplyPermissions(entry, mode, recursive);
+    };
+    (window as unknown as {
+      __e2eExplorerChmod?: (n: string, mode: number, recursive?: boolean) => Promise<ChmodResult | void> | undefined;
+    }).__e2eExplorerChmod = hook;
+    return () => {
+      (window as unknown as {
+        __e2eExplorerChmod?: ((n: string, mode: number, recursive?: boolean) => Promise<ChmodResult | void> | undefined) | null;
+      }).__e2eExplorerChmod = null;
+    };
+  }, [sortedEntries, onApplyPermissions]);
 
   // E2E test hook — select a specific set of entries by name. Multi-select
   // via Ctrl-click is awkward to drive in WebDriver because the row needs
@@ -549,16 +588,10 @@ export function ExplorerFileTable({
 
     if (caps.canGetInfo) {
       items.push({
-        label: "Get Info",
+        label: "Properties",
         icon: Info,
         separator: true,
-        onClick: () => {
-          if (onGetInfo) {
-            onGetInfo(entry);
-          } else {
-            setInfoEntry(entry);
-          }
-        },
+        onClick: () => setPropsEntry(entry),
       });
     }
 
@@ -592,8 +625,11 @@ export function ExplorerFileTable({
   ].join(" ");
 
   // ─── Loading state ───────────────────────────────────────────────────────
+  // Only show the skeleton on a genuine first load (no entries yet). When
+  // refreshing a directory that already has entries, keep the list mounted so
+  // the scroll position survives (the toolbar shows a refresh spinner instead).
 
-  if (loading) {
+  if (loading && entries.length === 0) {
     return (
       <div className="flex-1 overflow-y-auto">
         <div className="flex flex-col gap-1 p-2">
@@ -854,7 +890,10 @@ export function ExplorerFileTable({
                   </span>
 
                   {/* Permissions / Storage Class */}
-                  <span className="w-24 font-mono text-[length:var(--text-xs)] text-text-muted shrink-0 tracking-tight">
+                  <span
+                    data-entry-perms={caps.hasPermissions ? entry.permissionsDisplay ?? "" : undefined}
+                    className="w-24 font-mono text-[length:var(--text-xs)] text-text-muted shrink-0 tracking-tight"
+                  >
                     {caps.hasPermissions
                       ? entry.permissionsDisplay ?? ""
                       : caps.hasStorageClass
@@ -886,12 +925,13 @@ export function ExplorerFileTable({
         />
       )}
 
-      {/* Info dialog */}
-      {infoEntry && (
-        <FileInfoDialog
-          entry={infoEntry}
+      {/* Properties dialog */}
+      {propsEntry && (
+        <FilePropertiesDialog
+          entry={propsEntry}
           capabilities={caps}
-          onClose={() => setInfoEntry(null)}
+          onApplyPermissions={onApplyPermissions}
+          onClose={() => setPropsEntry(null)}
         />
       )}
     </>
@@ -959,100 +999,6 @@ function DeleteConfirmDialog({
           >
             {isSingle ? "Delete" : `Delete ${count} items`}
           </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── File info dialog ──────────────────────────────────────────────────────────
-
-function FileInfoDialog({
-  entry,
-  capabilities,
-  onClose,
-}: {
-  entry: ExplorerEntry;
-  capabilities: import("../../types/explorer").ProviderCapabilities;
-  onClose: () => void;
-}) {
-  const isDir = entry.entryType === "Directory";
-  const modified = entry.modified !== null
-    ? new Date(entry.modified * 1000).toLocaleString()
-    : "—";
-  const copyPath = () => void navigator.clipboard.writeText(entry.id);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [onClose]);
-
-  const labelClass = "text-[length:var(--text-xs)] text-text-muted w-[76px] shrink-0";
-  const valueClass = "text-[length:var(--text-xs)] text-text-primary truncate min-w-0 flex-1";
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-bg-base/60 backdrop-blur-sm"
-      onClick={(e) => e.target === e.currentTarget && onClose()}
-    >
-      <div
-        role="dialog"
-        aria-label={`Info for ${entry.name}`}
-        className="w-full max-w-[320px] mx-4 rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)] animate-[fadeIn_120ms_var(--ease-expo-out)_both]"
-      >
-        <div className="flex items-center gap-2 px-4 pt-4 pb-3">
-          <h2 className="text-[length:var(--text-sm)] font-semibold text-text-primary truncate flex-1" title={entry.name}>
-            {entry.name}
-          </h2>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="flex items-center justify-center w-6 h-6 rounded-md shrink-0 text-text-muted hover:text-text-primary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <X size={14} strokeWidth={2} aria-hidden="true" />
-          </button>
-        </div>
-
-        <div className="flex flex-col gap-0 px-4 pb-4">
-          {!isDir && (
-            <div className="flex items-baseline gap-3 py-1.5">
-              <span className={labelClass}>Size</span>
-              <span className={valueClass}>{formatBytes(entry.size)}</span>
-            </div>
-          )}
-
-          <div className="flex items-baseline gap-3 py-1.5">
-            <span className={labelClass}>Path</span>
-            <span className={`${valueClass} font-mono text-[length:var(--text-2xs)]`} title={entry.id}>{entry.id}</span>
-            <button
-              onClick={copyPath}
-              title="Copy path"
-              aria-label="Copy path"
-              className="shrink-0 p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <Copy size={12} strokeWidth={2} aria-hidden="true" />
-            </button>
-          </div>
-
-          <div className="flex items-baseline gap-3 py-1.5">
-            <span className={labelClass}>Modified</span>
-            <span className={valueClass}>{modified}</span>
-          </div>
-
-          {capabilities.hasPermissions && entry.permissionsDisplay && (
-            <div className="flex items-baseline gap-3 py-1.5">
-              <span className={labelClass}>Permissions</span>
-              <span className={`${valueClass} font-mono text-[length:var(--text-2xs)]`}>{entry.permissionsDisplay}</span>
-            </div>
-          )}
-
-          {capabilities.hasStorageClass && entry.storageClass && (
-            <div className="flex items-baseline gap-3 py-1.5">
-              <span className={labelClass}>Class</span>
-              <span className={valueClass}>{entry.storageClass}</span>
-            </div>
-          )}
         </div>
       </div>
     </div>

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use russh_sftp::protocol::OpenFlags;
+use russh_sftp::protocol::{FileAttributes, FileType, OpenFlags};
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
@@ -11,8 +11,8 @@ use crate::ssh::manager::SshManager;
 
 use super::transfer_manager::TransferManager;
 use super::{
-    format_permissions, SftpEntry, SftpEntryType, SftpError, SftpManager, SftpSessionWrapper,
-    TransferDirection, TransferInfo, TransferProgress, TransferStatus,
+    format_permissions, ChmodSummary, SftpEntry, SftpEntryType, SftpError, SftpManager,
+    SftpSessionWrapper, TransferDirection, TransferInfo, TransferProgress, TransferStatus,
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -31,7 +31,7 @@ async fn mkdir_p(sftp: &russh_sftp::client::SftpSession, path: &str) -> Result<(
             Err(_) => {
                 // Check if it already exists as a directory — if so, continue
                 match sftp.metadata(&current).await {
-                    Ok(attrs) if attrs.file_type() == russh_sftp::protocol::FileType::Dir => {}
+                    Ok(attrs) if attrs.file_type() == FileType::Dir => {}
                     _ => {
                         return Err(SftpError::RemoteIoError(format!(
                             "failed to create directory: {current}"
@@ -69,7 +69,7 @@ async fn delete_dir_recursive(
         };
 
         let attrs = entry.metadata();
-        if attrs.file_type() == russh_sftp::protocol::FileType::Dir {
+        if attrs.file_type() == FileType::Dir {
             // Recurse into subdirectory
             Box::pin(delete_dir_recursive(sftp, &full_path)).await?;
         } else {
@@ -260,10 +260,10 @@ pub async fn sftp_list_dir(
 
             let file_type = attrs.file_type();
             let entry_type = match file_type {
-                russh_sftp::protocol::FileType::Dir => SftpEntryType::Directory,
-                russh_sftp::protocol::FileType::Symlink => SftpEntryType::Symlink,
-                russh_sftp::protocol::FileType::File => SftpEntryType::File,
-                russh_sftp::protocol::FileType::Other => SftpEntryType::Other,
+                FileType::Dir => SftpEntryType::Directory,
+                FileType::Symlink => SftpEntryType::Symlink,
+                FileType::File => SftpEntryType::File,
+                FileType::Other => SftpEntryType::Other,
             };
 
             // Use only the lower 12 bits (permission + setuid/setgid/sticky).
@@ -424,6 +424,198 @@ pub async fn sftp_rename(
         crate::telemetry::capture("sftp_entry_renamed", serde_json::json!({}));
     }
     result
+}
+
+/// Change the Unix permission bits (chmod) of a remote path via SFTP `setstat`.
+///
+/// `mode` is the octal permission value as a plain number (e.g. `0o755` = 493).
+/// Only the lower 12 bits (permission + setuid/setgid/sticky) are applied; the
+/// file-type bits are masked off so the server preserves the entry's type.
+#[tauri::command]
+#[instrument(skip(sftp_manager), fields(sftp_session_id = %sftp_session_id, path = %path, mode = mode))]
+pub async fn sftp_chmod(
+    sftp_session_id: String,
+    path: String,
+    mode: u32,
+    sftp_manager: State<'_, Arc<SftpManager>>,
+) -> Result<(), SftpError> {
+    let sftp_arc = {
+        let session_ref = sftp_manager.get_session(&sftp_session_id)?;
+        session_ref.sftp.clone()
+    };
+
+    let sftp = sftp_arc.lock().await;
+    match apply_chmod_one(&sftp, &path, mode & 0o7777).await {
+        Ok(clean) => {
+            crate::telemetry::capture(
+                "sftp_chmod",
+                serde_json::json!({ "false_positive": !clean }),
+            );
+            Ok(())
+        }
+        Err(msg) => Err(SftpError::RemoteIoError(msg)),
+    }
+}
+
+/// Build the `setstat` attributes for a chmod: ONLY the permission bits are
+/// set, every other field stays `None`.
+///
+/// This must NOT use `FileAttributes::default()`: that returns
+/// `size: Some(0), uid: Some(0), gid: Some(0), atime: Some(0), mtime: Some(0)`,
+/// which the serializer turns into a SETSTAT that asks the server to truncate
+/// the file to zero bytes, chown it to root, and reset its timestamps on *every*
+/// chmod. `FileAttributes::empty()` leaves all fields `None` so only the
+/// permission flag is sent.
+fn chmod_attrs(requested: u32) -> FileAttributes {
+    FileAttributes {
+        permissions: Some(requested),
+        ..FileAttributes::empty()
+    }
+}
+
+/// Whether a post-failure `stat` confirms the chmod actually took effect.
+///
+/// Some servers apply the chmod but still reply with SSH_FX_FAILURE /
+/// SSH_FX_PERMISSION_DENIED. We only trust that as a false positive when the
+/// server actually reported the permissions back and they match — if
+/// `permissions` is absent we can't confirm anything, so the original error
+/// stands (otherwise a chmod-to-`000` would spuriously "match" a missing field).
+fn perms_match(current: &FileAttributes, requested: u32) -> bool {
+    current.permissions.map(|p| p & 0o7777) == Some(requested)
+}
+
+/// Apply `requested` permission bits (already masked to `0o7777`) to a single
+/// path via `setstat`.
+///
+/// Returns `Ok(true)` when the server acknowledged the change, `Ok(false)` when
+/// it replied with an error that a follow-up `stat` proved to be a false
+/// positive (a known quirk where the server applies the chmod but still returns
+/// SSH_FX_PERMISSION_DENIED / SSH_FX_FAILURE), and `Err(message)` for a genuine
+/// failure. Both `Ok` variants mean the file now holds the requested mode, so
+/// callers must count them equally. The error message is prefixed with the path
+/// for recursive summaries.
+async fn apply_chmod_one(
+    sftp: &russh_sftp::client::SftpSession,
+    path: &str,
+    requested: u32,
+) -> Result<bool, String> {
+    match sftp.set_metadata(path, chmod_attrs(requested)).await {
+        Ok(_) => Ok(true),
+        Err(e) => match sftp.metadata(path).await {
+            Ok(current) if perms_match(&current, requested) => {
+                tracing::warn!(
+                    error = %e,
+                    path = %path,
+                    "setstat returned an error but permissions match the request; \
+                     treating as success"
+                );
+                Ok(false)
+            }
+            _ => Err(format!("{path}: {e}")),
+        },
+    }
+}
+
+/// Recursively chmod a directory and all of its contents.
+///
+/// Walks the tree iteratively with an explicit stack (no async recursion) so
+/// deep hierarchies can't overflow the stack. The walk runs in two phases:
+///
+///  1. **Enumerate** every target (root + descendants) while the directory
+///     execute bits are still intact, so `read_dir` always succeeds. Symlinks
+///     are skipped — neither chmod'd nor descended into — to avoid following
+///     them out of the subtree or changing their targets.
+///  2. **Apply** the new mode children-before-parents (reverse discovery
+///     order). Because the whole tree is already known, removing the execute
+///     bit from a directory here can no longer make its descendants
+///     unreachable.
+///
+/// The session mutex is acquired *per operation* (each `read_dir`, each
+/// `set_metadata`) rather than held for the whole walk, so concurrent SFTP
+/// commands on the same session aren't starved. Per-entry failures are
+/// collected into the returned [`ChmodSummary`] instead of aborting, and the
+/// per-file false-positive handling from [`apply_chmod_one`] applies throughout.
+#[tauri::command]
+#[instrument(skip(sftp_manager), fields(sftp_session_id = %sftp_session_id, path = %path, mode = mode))]
+pub async fn sftp_chmod_recursive(
+    sftp_session_id: String,
+    path: String,
+    mode: u32,
+    sftp_manager: State<'_, Arc<SftpManager>>,
+) -> Result<ChmodSummary, SftpError> {
+    let sftp_arc = {
+        let session_ref = sftp_manager.get_session(&sftp_session_id)?;
+        session_ref.sftp.clone()
+    };
+
+    let requested = mode & 0o7777;
+    let mut errors: Vec<String> = Vec::new();
+
+    // ── Phase 1: enumerate the tree (perms still intact, so read_dir works) ──
+    // Discovery is pre-order (a parent is recorded before its children); the
+    // apply phase walks this list in reverse for a post-order effect.
+    let mut targets: Vec<String> = vec![path.clone()];
+    let mut stack: Vec<String> = vec![path.clone()];
+    while let Some(dir) = stack.pop() {
+        let listing = {
+            let sftp = sftp_arc.lock().await;
+            sftp.read_dir(&dir).await
+        };
+        let entries = match listing {
+            Ok(e) => e,
+            Err(e) => {
+                errors.push(format!("{dir}: {e}"));
+                continue;
+            }
+        };
+
+        for entry in entries {
+            let name = entry.file_name();
+            if name == "." || name == ".." {
+                continue;
+            }
+            let full = if dir == "/" {
+                format!("/{name}")
+            } else {
+                format!("{dir}/{name}")
+            };
+
+            let file_type = entry.metadata().file_type();
+            if file_type == FileType::Symlink {
+                continue; // never chmod or descend into symlinks
+            }
+
+            targets.push(full.clone());
+            if file_type == FileType::Dir {
+                stack.push(full);
+            }
+        }
+    }
+
+    // ── Phase 2: apply children-before-parents (reverse discovery order) ──
+    let mut applied: u32 = 0;
+    for target in targets.iter().rev() {
+        let outcome = {
+            let sftp = sftp_arc.lock().await;
+            apply_chmod_one(&sftp, target, requested).await
+        };
+        match outcome {
+            // Both Ok variants mean the file now holds the requested mode — a
+            // clean ack (`true`) or a false-positive the follow-up stat
+            // confirmed (`false`). Count both, matching the single-file
+            // `sftp_chmod` which also treats `Ok(false)` as success; counting
+            // only `Ok(true)` would report 0 applied on servers that always
+            // reply with an error but apply the change anyway.
+            Ok(_) => applied += 1,
+            Err(msg) => errors.push(msg),
+        }
+    }
+
+    crate::telemetry::capture(
+        "sftp_chmod_recursive",
+        serde_json::json!({ "applied": applied, "errors": errors.len() }),
+    );
+    Ok(ChmodSummary { applied, errors })
 }
 
 // ─── Transfers ───────────────────────────────────────────────────────────────
@@ -1068,7 +1260,7 @@ async fn copy_dir_remote(
         };
 
         let attrs = entry.metadata();
-        if attrs.file_type() == russh_sftp::protocol::FileType::Dir {
+        if attrs.file_type() == FileType::Dir {
             Box::pin(copy_dir_remote(sftp, &src_child, &dst_child)).await?;
         } else {
             copy_file_remote(sftp, &src_child, &dst_child).await?;
@@ -1169,7 +1361,7 @@ pub async fn sftp_copy_entries(
             .await
             .map_err(|e| SftpError::RemoteIoError(format!("Cannot stat {source}: {e}")))?;
 
-        if attrs.file_type() == russh_sftp::protocol::FileType::Dir {
+        if attrs.file_type() == FileType::Dir {
             copy_dir_remote(&sftp, source, &dest).await?;
         } else {
             copy_file_remote(&sftp, source, &dest).await?;
@@ -1285,4 +1477,63 @@ pub async fn sftp_set_concurrency(
     }
     transfer_manager.set_max_concurrent(max_concurrent);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chmod_attrs_sets_only_permissions() {
+        // Regression guard for the data-loss bug: a chmod SETSTAT must carry the
+        // permission bits and NOTHING else. If any of these become Some(_), the
+        // server would truncate the file / chown to root / reset timestamps.
+        let attrs = chmod_attrs(0o755);
+        assert_eq!(attrs.permissions, Some(0o755));
+        assert_eq!(
+            attrs.size, None,
+            "size must be None or the file gets truncated"
+        );
+        assert_eq!(attrs.uid, None, "uid must be None or the file gets chowned");
+        assert_eq!(attrs.gid, None, "gid must be None or the file gets chowned");
+        assert_eq!(attrs.user, None);
+        assert_eq!(attrs.group, None);
+        assert_eq!(
+            attrs.atime, None,
+            "atime must be None or it gets reset to epoch"
+        );
+        assert_eq!(
+            attrs.mtime, None,
+            "mtime must be None or it gets reset to epoch"
+        );
+    }
+
+    #[test]
+    fn chmod_attrs_preserves_special_bits() {
+        // setuid/setgid/sticky in the lower 12 bits are passed through verbatim.
+        assert_eq!(chmod_attrs(0o4755).permissions, Some(0o4755));
+        assert_eq!(chmod_attrs(0o1777).permissions, Some(0o1777));
+    }
+
+    #[test]
+    fn perms_match_only_trusts_reported_permissions() {
+        let with = |p: Option<u32>| FileAttributes {
+            permissions: p,
+            ..FileAttributes::empty()
+        };
+
+        // Match when the server reports the same lower-12 bits.
+        assert!(perms_match(&with(Some(0o755)), 0o755));
+        assert!(perms_match(&with(Some(0o4755)), 0o4755));
+
+        // Differing bits do not match.
+        assert!(!perms_match(&with(Some(0o644)), 0o755));
+        // Type bits above 0o7777 are ignored on the reported side.
+        assert!(perms_match(&with(Some(0o100755)), 0o755));
+
+        // The #8 case: a chmod-to-000 must NOT be treated as a false-positive
+        // success just because the server omitted the permissions field.
+        assert!(!perms_match(&with(None), 0o000));
+        assert!(!perms_match(&with(None), 0o755));
+    }
 }

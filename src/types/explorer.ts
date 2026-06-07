@@ -12,10 +12,22 @@ export interface ExplorerEntry {
   modified: number | null;
   /** SFTP-only: e.g. "drwxr-xr-x" */
   permissionsDisplay: string | null;
+  /** SFTP-only: raw Unix mode (lower 12 bits incl. setuid/setgid/sticky), or
+   *  `null` when the transport has no Unix permissions (e.g. S3). Used to
+   *  preserve special bits the rwx display string can't represent. */
+  permissions: number | null;
   /** SFTP-only */
   isSymlink: boolean;
   /** S3-only: e.g. "STANDARD", "GLACIER" */
   storageClass: string | null;
+}
+
+/** Result of a recursive chmod — mirrors the Rust `ChmodSummary`. */
+export interface ChmodResult {
+  /** Number of entries whose permissions were successfully updated. */
+  applied: number;
+  /** Per-entry failure messages collected during the walk (empty = success). */
+  errors: string[];
 }
 
 /** Clipboard for copy/cut/paste within a session. */

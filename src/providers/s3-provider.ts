@@ -11,6 +11,7 @@ export function toS3ExplorerEntry(e: S3Entry): ExplorerEntry {
       ? Math.floor(new Date(e.last_modified).getTime() / 1000)
       : null,
     permissionsDisplay: null,
+    permissions: null,
     isSymlink: false,
     storageClass: e.storage_class,
   };

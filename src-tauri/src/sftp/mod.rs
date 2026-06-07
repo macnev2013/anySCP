@@ -83,6 +83,14 @@ pub enum SftpEntryType {
     Other,
 }
 
+/// Outcome of a recursive chmod: how many entries were successfully updated and
+/// any per-entry failures (collected rather than aborting the whole operation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChmodSummary {
+    pub applied: u32,
+    pub errors: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferProgress {
     pub transfer_id: String,

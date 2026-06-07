@@ -174,10 +174,105 @@ pub async fn vault_has_credential(host_id: String) -> Result<bool, VaultError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use keyring::credential::{
+        Credential, CredentialApi, CredentialBuilderApi, CredentialPersistence,
+    };
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex, Once};
+
+    // ── In-memory test keystore ────────────────────────────────────────────
+    //
+    // The real OS keychain (Windows Credential Manager / macOS Keychain /
+    // libsecret) is process-global, comparatively slow, and — when many tests
+    // hammer it in parallel — occasionally returns a transient miss right after
+    // a successful write, which made `has_credential_returns_true_after_save`
+    // flaky. These tests only need to verify *our* save/get/has/delete logic and
+    // JSON round-tripping, not the OS store itself, so we install a deterministic
+    // in-memory credential builder via `set_default_credential_builder`.
+    //
+    // keyring's built-in `mock` store can't be used here: it builds a fresh,
+    // empty credential per `Entry` (CredentialPersistence::EntryOnly), so a save
+    // on one Entry isn't visible to the separate Entry our code creates for the
+    // matching get/has — exactly the cross-instance persistence these tests rely
+    // on. This builder keeps a shared map keyed by (service, user) instead.
+
+    /// Secrets keyed by `(service, user)` — the same key the real stores use.
+    type MockStore = HashMap<(String, String), Vec<u8>>;
+
+    static MOCK_STORE: LazyLock<Mutex<MockStore>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    #[derive(Debug)]
+    struct MemCredential {
+        key: (String, String),
+    }
+
+    impl CredentialApi for MemCredential {
+        fn set_secret(&self, secret: &[u8]) -> keyring::Result<()> {
+            MOCK_STORE
+                .lock()
+                .unwrap()
+                .insert(self.key.clone(), secret.to_vec());
+            Ok(())
+        }
+
+        fn get_secret(&self) -> keyring::Result<Vec<u8>> {
+            MOCK_STORE
+                .lock()
+                .unwrap()
+                .get(&self.key)
+                .cloned()
+                .ok_or(keyring::Error::NoEntry)
+        }
+
+        fn delete_credential(&self) -> keyring::Result<()> {
+            match MOCK_STORE.lock().unwrap().remove(&self.key) {
+                Some(_) => Ok(()),
+                None => Err(keyring::Error::NoEntry),
+            }
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[derive(Debug)]
+    struct MemBuilder;
+
+    impl CredentialBuilderApi for MemBuilder {
+        fn build(
+            &self,
+            _target: Option<&str>,
+            service: &str,
+            user: &str,
+        ) -> keyring::Result<Box<Credential>> {
+            Ok(Box::new(MemCredential {
+                key: (service.to_string(), user.to_string()),
+            }))
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn persistence(&self) -> CredentialPersistence {
+            CredentialPersistence::UntilDelete
+        }
+    }
+
+    /// Install the in-memory keystore exactly once, before any `Entry` is built.
+    /// `Once` blocks every caller until the first finishes, so as long as each
+    /// test calls this first, the mock is guaranteed to be active.
+    fn init_mock_keystore() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            keyring::set_default_credential_builder(Box::new(MemBuilder));
+        });
+    }
 
     /// A unique per-test host_id prevents keychain collisions when tests run
     /// in parallel.  The credential is deleted in a `Drop`-style guard so the
-    /// OS keychain is left clean regardless of whether the test passes.
+    /// store is left clean regardless of whether the test passes.
     struct KeychainGuard(String);
 
     impl Drop for KeychainGuard {
@@ -193,6 +288,7 @@ mod tests {
 
     #[test]
     fn round_trip_password_credential() {
+        init_mock_keystore();
         let id = unique_id("password");
         let _guard = KeychainGuard(id.clone());
 
@@ -210,6 +306,7 @@ mod tests {
 
     #[test]
     fn round_trip_key_passphrase_credential() {
+        init_mock_keystore();
         let id = unique_id("passphrase");
         let _guard = KeychainGuard(id.clone());
 
@@ -229,6 +326,7 @@ mod tests {
 
     #[test]
     fn get_missing_returns_not_found() {
+        init_mock_keystore();
         let id = unique_id("missing");
         // Do not save anything — the entry must not exist.
         let err = get_credential(&id).expect_err("should be NotFound");
@@ -240,12 +338,14 @@ mod tests {
 
     #[test]
     fn has_credential_returns_false_when_absent() {
+        init_mock_keystore();
         let id = unique_id("absent");
         assert!(!has_credential(&id));
     }
 
     #[test]
     fn has_credential_returns_true_after_save() {
+        init_mock_keystore();
         let id = unique_id("present");
         let _guard = KeychainGuard(id.clone());
 
@@ -261,6 +361,7 @@ mod tests {
 
     #[test]
     fn delete_removes_credential() {
+        init_mock_keystore();
         let id = unique_id("delete");
         // Guard will also try to delete — that is fine because delete is idempotent.
         let _guard = KeychainGuard(id.clone());
@@ -280,6 +381,7 @@ mod tests {
 
     #[test]
     fn delete_absent_credential_is_ok() {
+        init_mock_keystore();
         let id = unique_id("delete-absent");
         // Deleting a non-existent entry must succeed silently.
         delete_credential(&id).expect("delete of missing entry should be Ok");
@@ -287,6 +389,7 @@ mod tests {
 
     #[test]
     fn overwrite_replaces_credential() {
+        init_mock_keystore();
         let id = unique_id("overwrite");
         let _guard = KeychainGuard(id.clone());
 

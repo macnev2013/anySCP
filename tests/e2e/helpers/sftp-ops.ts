@@ -38,11 +38,26 @@ export async function refreshExplorer(): Promise<void> {
     await btn.click();
 }
 
-/** Click the home/root toolbar button. */
+/** Click the home/root toolbar button (navigates to the filesystem root `/`). */
 export async function navigateExplorerHome(): Promise<void> {
     const btn = await $("[data-testid='explorer-home']");
     await btn.waitForClickable({ timeout: 5_000 });
     await btn.click();
+}
+
+/** Navigate to the parent of the current directory by clicking the
+ *  second-to-last breadcrumb segment. Unlike {@link navigateExplorerHome}
+ *  (which jumps to root), this goes exactly one level up — use it to return to
+ *  the directory an entry was created in after stepping into a subfolder. */
+export async function navigateUp(): Promise<void> {
+    await browser.execute(() => {
+        const container = document.querySelector("[aria-label='Current path']");
+        const buttons = container
+            ? Array.from(container.querySelectorAll("button"))
+            : [];
+        const parent = buttons[buttons.length - 2] as HTMLButtonElement | undefined;
+        parent?.click();
+    });
 }
 
 /** Current pressed-state of the sudo toggle ("true"/"false"), or null if the
@@ -125,6 +140,60 @@ export async function multiSelectAndDelete(names: string[]): Promise<void> {
     await confirm.waitForClickable({ timeout: 5_000 });
     await confirm.click();
     for (const name of names) await assertEntryAbsent(name);
+}
+
+/** Read the displayed rwx permission string of an entry (e.g. "rw-r--r--"),
+ *  or null if the entry/permissions cell isn't present. */
+export async function entryPermissions(name: string): Promise<string | null> {
+    return await browser.execute((n: string) => {
+        const row = document.querySelector(`[data-entry-name='${n}']`);
+        const cell = row?.querySelector("[data-entry-perms]");
+        return cell?.getAttribute("data-entry-perms") ?? null;
+    }, name);
+}
+
+/** Change an entry's permissions via the __e2eExplorerChmod(name, mode) hook
+ *  (which drives onApplyPermissions → sftp_chmod → directory refresh), then
+ *  wait until the listing reflects the expected rwx string. `mode` is octal. */
+export async function setPermissions(
+    name: string,
+    mode: number,
+    expectedDisplay: string,
+    recursive = false,
+): Promise<void> {
+    await waitForEntry(name);
+    // Drive the chmod and AWAIT its promise inside the page so a rejection from
+    // the Tauri command surfaces here as a real error (with its reason) instead
+    // of being dropped — which would otherwise show up only as the waitUntil
+    // timeout below, hiding the actual cause.
+    const chmodError = await browser.executeAsync(
+        (n: string, m: number, r: boolean, done: (err: string | null) => void) => {
+            const fn = (window as unknown as {
+                __e2eExplorerChmod?: (n: string, m: number, r?: boolean) => Promise<unknown> | undefined;
+            }).__e2eExplorerChmod;
+            if (!fn) {
+                done("__e2eExplorerChmod not registered");
+                return;
+            }
+            Promise.resolve(fn(n, m, r)).then(
+                () => done(null),
+                (e: unknown) => done(String((e as { message?: string })?.message ?? e)),
+            );
+        },
+        name,
+        mode,
+        recursive,
+    );
+    if (chmodError) {
+        throw new Error(`chmod('${name}', ${mode.toString(8)}) failed: ${chmodError}`);
+    }
+    await browser.waitUntil(
+        async () => (await entryPermissions(name)) === expectedDisplay,
+        {
+            timeout: 10_000,
+            timeoutMsg: `entry '${name}' permissions never became '${expectedDisplay}'`,
+        },
+    );
 }
 
 /** Read the current order of entries in the listing (top to bottom). */

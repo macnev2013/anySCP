@@ -9,6 +9,7 @@ export function toExplorerEntry(e: SftpEntry): ExplorerEntry {
     size: e.size,
     modified: e.modified,
     permissionsDisplay: e.permissions_display,
+    permissions: e.permissions,
     isSymlink: e.is_symlink,
     storageClass: null,
   };

@@ -196,6 +196,45 @@ pub async fn scp_rename(
     result
 }
 
+/// Change the Unix permission bits (chmod) of a remote path by exec'ing
+/// `chmod` on the shared SSH connection. Mirrors `sftp_chmod`.
+#[tauri::command]
+#[instrument(skip(scp_manager), fields(scp_session_id = %scp_session_id, path = %path, mode = mode))]
+pub async fn scp_chmod(
+    scp_session_id: String,
+    path: String,
+    mode: u32,
+    scp_manager: State<'_, Arc<ScpManager>>,
+) -> Result<(), ScpError> {
+    let handle = handle_for(&scp_manager, &scp_session_id)?;
+    let result = exec::chmod(handle, &path, mode).await;
+    if result.is_ok() {
+        crate::telemetry::capture("scp_chmod", serde_json::json!({}));
+    }
+    result
+}
+
+/// Recursively chmod a directory tree via `chmod -R`. Per-file errors are
+/// collected from stderr rather than aborting. The remote `chmod -R` doesn't
+/// report a success count, so `applied` is left at 0 (the frontend treats an
+/// empty `errors` list as full success).
+#[tauri::command]
+#[instrument(skip(scp_manager), fields(scp_session_id = %scp_session_id, path = %path, mode = mode))]
+pub async fn scp_chmod_recursive(
+    scp_session_id: String,
+    path: String,
+    mode: u32,
+    scp_manager: State<'_, Arc<ScpManager>>,
+) -> Result<crate::sftp::ChmodSummary, ScpError> {
+    let handle = handle_for(&scp_manager, &scp_session_id)?;
+    let errors = exec::chmod_recursive(handle, &path, mode).await?;
+    crate::telemetry::capture(
+        "scp_chmod_recursive",
+        serde_json::json!({ "errors": errors.len() }),
+    );
+    Ok(crate::sftp::ChmodSummary { applied: 0, errors })
+}
+
 // ─── Copy / Move ──────────────────────────────────────────────────────────────
 
 /// Join a directory and a (deduplicated) entry name.

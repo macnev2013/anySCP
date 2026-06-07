@@ -4,7 +4,7 @@ import { AlertCircle } from "lucide-react";
 import { useSftpStore } from "../../stores/sftp-store";
 import { useTabStore } from "../../stores/tab-store";
 import type { SftpEntry } from "../../types";
-import type { ExplorerEntry, ExplorerClipboard } from "../../types/explorer";
+import type { ExplorerEntry, ExplorerClipboard, ChmodResult } from "../../types/explorer";
 import { ExplorerToolbar, ExplorerFileTable, ExplorerDropZone } from "../explorer";
 import { createSftpProvider, toExplorerEntry } from "../../providers/sftp-provider";
 import { explorerInvoke, transferEventName, type Transport } from "../../lib/explorer-transport";
@@ -423,6 +423,29 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
     }
   }, [sessionId, transport, session, loadDirectory]);
 
+  // ─── Change permissions (chmod) ─────────────────────────────────────────────
+
+  const handleApplyPermissions = useCallback(async (entry: ExplorerEntry, mode: number, recursive: boolean) => {
+    let result: ChmodResult | undefined;
+    if (recursive && entry.entryType === "Directory") {
+      result = await explorerInvoke<ChmodResult>(transport, "chmod_recursive", sessionId, { path: entry.id, mode });
+    } else {
+      await explorerInvoke(transport, "chmod", sessionId, { path: entry.id, mode });
+    }
+    // The chmod has already succeeded here. Refresh the listing best-effort: a
+    // reload failure (e.g. a dropped connection) must NOT propagate as a chmod
+    // error, or the user would be told it failed and retry an applied change.
+    const refreshPath = session?.currentPath;
+    if (refreshPath !== undefined) {
+      try {
+        await loadDirectory(refreshPath);
+      } catch (err) {
+        console.error("Directory refresh after chmod failed:", err);
+      }
+    }
+    return result;
+  }, [sessionId, transport, session, loadDirectory]);
+
   // ─── Edit in external editor ───────────────────────────────────────────────
 
   const handleEditInEditor = useCallback((entry: ExplorerEntry, editor?: EditorConfig) => {
@@ -517,7 +540,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         path: e.id,
         entry_type: e.entryType as "File" | "Directory" | "Symlink" | "Other",
         size: e.size,
-        permissions: 0,
+        permissions: e.permissions ?? 0,
         permissions_display: e.permissionsDisplay ?? "",
         modified: e.modified,
         is_symlink: e.isSymlink,
@@ -595,6 +618,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         onDelete={handleDelete}
         onRename={handleRename}
         onEditInEditor={handleEditInEditor}
+        onApplyPermissions={handleApplyPermissions}
         creatingFile={creatingFile}
         onCreateFile={(name) => void handleCreateFile(name)}
         onCancelCreateFile={() => setCreatingFile(false)}
@@ -604,6 +628,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         onPaste={() => void handlePaste()}
         onMoveEntries={handleMoveEntries}
         onCopyEntries={handleCopyEntries}
+        currentPath={session.currentPath}
         loading={session.loading}
         busy={busy}
       />
