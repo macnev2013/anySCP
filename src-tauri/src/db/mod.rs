@@ -1608,6 +1608,70 @@ impl HostDb {
         }
         Ok(result)
     }
+
+    // -----------------------------------------------------------------------
+    // Factory reset
+    // -----------------------------------------------------------------------
+
+    /// Wipe ALL user data for a factory reset: every data table plus app
+    /// settings. The schema (`_meta`/`schema_version`) and table structures are
+    /// kept intact, so the database ends up identical to a fresh install — the
+    /// next launch re-seeds first-run defaults (e.g. `editors_seeded`).
+    ///
+    /// Returns the host ids and S3 connection ids whose rows were removed so the
+    /// caller can purge their secrets from the OS keychain — the `keyring` crate
+    /// can't enumerate entries, so they must be deleted by key (see
+    /// [`ResetKeys`]).
+    #[instrument(skip(self))]
+    pub fn factory_reset(&self) -> Result<ResetKeys, DbError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+
+        // Collect the keychain keys before deleting the rows that reference them.
+        let host_ids = conn
+            .prepare("SELECT id FROM saved_hosts")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        let s3_ids = conn
+            .prepare("SELECT id FROM s3_connections")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+
+        // One transaction. `defer_foreign_keys` postpones FK checks to commit, so
+        // we don't have to order deletes around the self-referential
+        // `saved_hosts.proxy_jump_host_id` or the cross-table FKs. Deleting from
+        // `snippets` fires the FTS triggers that keep `snippets_fts` consistent.
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "PRAGMA defer_foreign_keys = TRUE;
+             DELETE FROM connection_history;
+             DELETE FROM port_forwarding_rules;
+             DELETE FROM s3_connections;
+             DELETE FROM snippets;
+             DELETE FROM snippet_folders;
+             DELETE FROM saved_hosts;
+             DELETE FROM host_groups;
+             DELETE FROM app_settings;",
+        )?;
+        tx.commit()?;
+
+        tracing::info!(
+            hosts = host_ids.len(),
+            s3 = s3_ids.len(),
+            "factory reset: cleared all data and settings"
+        );
+        Ok(ResetKeys { host_ids, s3_ids })
+    }
+}
+
+/// Keychain keys whose secrets must be purged after a [`HostDb::factory_reset`].
+/// Host credentials are keyed by `host_id`; S3 credentials by `s3:{id}`.
+#[derive(Debug, Default)]
+pub struct ResetKeys {
+    pub host_ids: Vec<String>,
+    pub s3_ids: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1678,6 +1742,34 @@ mod tests {
         assert_eq!(all[0].id, "host-1");
         assert_eq!(all[0].port, 22);
         assert!(all[0].group_id.is_none());
+    }
+
+    #[test]
+    fn factory_reset_wipes_everything_and_returns_keys() {
+        let (db, _dir) = test_db();
+        db.create_group(&sample_group("grp-1"))
+            .expect("create_group");
+        let mut h = sample_host("host-1");
+        h.group_id = Some("grp-1".to_string());
+        db.save_host(&h).expect("save_host");
+        db.record_connection("host-1").expect("record_connection");
+        db.save_setting("app_theme", "light").expect("save_setting");
+
+        let keys = db.factory_reset().expect("factory_reset");
+        assert_eq!(keys.host_ids, vec!["host-1".to_string()]);
+        assert!(keys.s3_ids.is_empty());
+
+        // Every data table and app settings are now empty.
+        assert!(db.list_hosts().expect("list_hosts").is_empty());
+        assert!(db.list_groups().expect("list_groups").is_empty());
+        assert!(db.list_recent_connections(50).expect("recent").is_empty());
+        assert!(db.load_all_settings().expect("settings").is_empty());
+
+        // The schema survives the wipe — a fresh insert still works (i.e. the
+        // DB is reset to first-launch state, not corrupted/dropped).
+        db.save_host(&sample_host("host-2"))
+            .expect("save after reset");
+        assert_eq!(db.list_hosts().expect("list").len(), 1);
     }
 
     #[test]

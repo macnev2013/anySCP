@@ -244,6 +244,8 @@ pub fn run() {
             // App settings
             db::commands::save_setting,
             db::commands::load_all_settings,
+            // Factory reset (wipe all data + credentials)
+            db::commands::factory_reset,
             // External editors
             editors::detect_editors,
             // Credential vault

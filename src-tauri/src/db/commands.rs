@@ -175,3 +175,36 @@ pub async fn load_all_settings(
         .await
         .map_err(|e| DbError::InitError(format!("task panicked: {e}")))?
 }
+
+// ─── Factory reset ─────────────────────────────────────────────────────────────
+
+/// Permanently wipe ALL local data — saved hosts, groups, connection history,
+/// snippets, port-forward rules, S3 connections, and app settings — plus their
+/// stored credentials in the OS keychain. Returns anySCP to first-launch state.
+///
+/// This is irreversible; the frontend gates it behind a typed confirmation and
+/// relaunches the app afterwards.
+#[tauri::command]
+#[instrument(skip(state))]
+pub async fn factory_reset(state: State<'_, Arc<HostDb>>) -> Result<(), DbError> {
+    let db = Arc::clone(&state);
+    task::spawn_blocking(move || {
+        let keys = db.factory_reset()?;
+        // Purge secrets from the keychain. Best-effort: a missing entry is fine,
+        // and one bad key shouldn't abort the rest — the rows are already gone.
+        for host_id in &keys.host_ids {
+            if let Err(e) = crate::vault::delete_credential(host_id) {
+                tracing::warn!(host_id = %host_id, error = %e, "factory reset: keychain purge failed");
+            }
+        }
+        for s3_id in &keys.s3_ids {
+            let key = format!("s3:{s3_id}");
+            if let Err(e) = crate::vault::delete_credential(&key) {
+                tracing::warn!(key = %key, error = %e, "factory reset: keychain purge failed");
+            }
+        }
+        Ok::<(), DbError>(())
+    })
+    .await
+    .map_err(|e| DbError::InitError(format!("task panicked: {e}")))?
+}

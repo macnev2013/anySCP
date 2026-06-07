@@ -3,7 +3,7 @@ import { useSettingsStore } from "../../stores/settings-store";
 import { CustomSelect, type SelectOption } from "../shared/CustomSelect";
 import { useUpdaterStore } from "../../stores/updater-store";
 import { toast } from "../../stores/toast-store";
-import { RefreshCw, CheckCircle2, AlertCircle, Palette, SquareTerminal, ArrowUpDown, Info, ExternalLink, Check, FileCode, Plus, Trash2, FolderOpen, Star, Search } from "lucide-react";
+import { RefreshCw, CheckCircle2, AlertCircle, Palette, SquareTerminal, ArrowUpDown, Info, ExternalLink, Check, FileCode, Plus, Trash2, FolderOpen, Star, Search, Database } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { CursorStyle, ThemeMode, EditorConfig } from "../../stores/settings-store";
 
@@ -45,13 +45,14 @@ const REPO_URL = "https://github.com/macnev2013/anySCP";
 // Each settings category is a section here. To add a new category, add an entry
 // to SECTIONS, a description, and render its content in <SectionContent />.
 
-type SectionId = "appearance" | "terminal" | "transfers" | "editors" | "about";
+type SectionId = "appearance" | "terminal" | "transfers" | "editors" | "data" | "about";
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "terminal", label: "Terminal", icon: SquareTerminal },
   { id: "transfers", label: "Transfers", icon: ArrowUpDown },
   { id: "editors", label: "Editors", icon: FileCode },
+  { id: "data", label: "Data", icon: Database },
   { id: "about", label: "About & Updates", icon: Info },
 ];
 
@@ -60,6 +61,7 @@ const SECTION_DESCRIPTIONS: Record<SectionId, string> = {
   terminal: "Font, cursor, and scrollback history.",
   transfers: "Control how files are transferred.",
   editors: "Editors used by “Edit” / “Open With” in the file browser.",
+  data: "Stored data and resetting the app.",
   about: "App information, links, and updates.",
 };
 
@@ -148,6 +150,8 @@ function SectionContent({ section }: { section: SectionId }) {
       return <TransferSettings />;
     case "editors":
       return <EditorsSettings />;
+    case "data":
+      return <DataSettings />;
     case "about":
       return <AboutSettings />;
   }
@@ -606,6 +610,187 @@ function TransferSettings() {
         <NumberSetting id="s-concurrency" value={transferConcurrency} min={1} max={10} step={1} onChange={setConcurrency} />
       </SettingRow>
     </SettingsGroup>
+  );
+}
+
+// ─── Data ───────────────────────────────────────────────────────────────────────
+
+function DataSettings() {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  return (
+    <>
+      <SettingsGroup label="Danger zone">
+        <div className="flex items-center justify-between gap-4 px-4 py-3 rounded-xl bg-bg-surface border border-status-error/30">
+          <div>
+            <p className={LABEL_CLASS}>Clear all data</p>
+            <p className={DESC_CLASS}>
+              Permanently delete every saved host, group, connection history entry,
+              snippet, port-forward rule, and S3 connection — along with their stored
+              credentials and all app preferences. anySCP restarts at first-launch state.
+              This can’t be undone.
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="s-clear-data"
+            onClick={() => setConfirmOpen(true)}
+            className={[
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg shrink-0",
+              "text-[length:var(--text-sm)] font-medium",
+              "bg-status-error/10 border border-status-error/40 text-status-error",
+              "hover:bg-status-error/15",
+              "transition-colors duration-[var(--duration-fast)]",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            ].join(" ")}
+          >
+            <Trash2 size={13} strokeWidth={2} /> Clear all data…
+          </button>
+        </div>
+      </SettingsGroup>
+
+      <ConfirmResetModal open={confirmOpen} onClose={() => setConfirmOpen(false)} />
+    </>
+  );
+}
+
+/** Typed-confirmation dialog for the irreversible factory reset. The user must
+ *  type the confirm word, then we wipe the backend and relaunch the app. */
+function ConfirmResetModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const CONFIRM_WORD = "DELETE";
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [visible, setVisible] = useState(false);
+
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const canReset = text.trim() === CONFIRM_WORD && !busy;
+
+  useEffect(() => {
+    if (open) {
+      setText("");
+      setBusy(false);
+      requestAnimationFrame(() => setVisible(true));
+    } else {
+      setVisible(false);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (visible) requestAnimationFrame(() => inputRef.current?.focus());
+  }, [visible]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose, busy]);
+
+  const doReset = useCallback(async () => {
+    setBusy(true);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("factory_reset");
+      // Relaunch so all in-memory state — frontend stores AND backend sessions —
+      // restarts from the now-empty database, a true first-launch state.
+      try {
+        const { relaunch } = await import("@tauri-apps/plugin-process");
+        await relaunch();
+      } catch {
+        // Relaunch unavailable (dev/web) — reload the webview as a fallback.
+        window.location.reload();
+      }
+    } catch {
+      setBusy(false);
+      toast.error("Couldn’t clear data. Please try again.");
+    }
+  }, []);
+
+  if (!open) return null;
+
+  return (
+    <div
+      ref={backdropRef}
+      onClick={(e) => { if (e.target === backdropRef.current && !busy) onClose(); }}
+      className={[
+        "fixed inset-0 z-50 flex items-start justify-center pt-[12vh]",
+        "transition-[background-color,backdrop-filter] duration-[var(--duration-base)]",
+        visible ? "bg-black/50 backdrop-blur-sm" : "bg-black/0 backdrop-blur-none",
+      ].join(" ")}
+    >
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="reset-title"
+        data-testid="reset-modal"
+        className={[
+          "w-full max-w-md rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)]",
+          "flex flex-col",
+          "transition-[opacity,transform] duration-[var(--duration-slow)] ease-[var(--ease-expo-out)]",
+          visible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-3",
+        ].join(" ")}
+      >
+        {/* Header */}
+        <div className="flex items-center gap-2.5 px-6 pt-5 pb-4 border-b border-border shrink-0">
+          <AlertCircle size={18} strokeWidth={2} className="text-status-error shrink-0" />
+          <h2 id="reset-title" className="text-[length:var(--text-lg)] font-semibold text-text-primary">
+            Clear all data?
+          </h2>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-4 flex flex-col gap-4">
+          <p className="text-[length:var(--text-sm)] text-text-secondary">
+            This permanently deletes <strong className="text-text-primary">all</strong> saved
+            hosts, groups, history, snippets, port-forward rules, S3 connections, stored
+            credentials, and preferences. anySCP will restart fresh. This action cannot be undone.
+          </p>
+          <div>
+            <label htmlFor="reset-confirm" className={FIELD_LABEL_CLASS}>
+              Type <code className="px-1 rounded bg-bg-base text-status-error">{CONFIRM_WORD}</code> to confirm
+            </label>
+            <input
+              ref={inputRef}
+              id="reset-confirm"
+              data-testid="reset-confirm-input"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              value={text}
+              disabled={busy}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && canReset) void doReset(); }}
+              placeholder={CONFIRM_WORD}
+              className={TEXT_INPUT_CLASS}
+            />
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 pb-5 pt-3 flex items-center justify-end gap-2 border-t border-border shrink-0">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="px-4 py-2 text-[length:var(--text-sm)] text-text-secondary hover:text-text-primary rounded-lg transition-colors duration-[var(--duration-fast)] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-testid="reset-confirm-submit"
+            onClick={() => void doReset()}
+            disabled={!canReset}
+            className="flex items-center gap-1.5 px-4 py-2 text-[length:var(--text-sm)] font-medium text-text-inverse bg-status-error hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-[opacity] duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg-overlay"
+          >
+            {busy && <RefreshCw size={13} strokeWidth={2} className="motion-safe:animate-spin" />}
+            {busy ? "Clearing…" : "Clear all data"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
