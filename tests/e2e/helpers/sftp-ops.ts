@@ -38,11 +38,26 @@ export async function refreshExplorer(): Promise<void> {
     await btn.click();
 }
 
-/** Click the home/root toolbar button. */
+/** Click the home/root toolbar button (navigates to the filesystem root `/`). */
 export async function navigateExplorerHome(): Promise<void> {
     const btn = await $("[data-testid='explorer-home']");
     await btn.waitForClickable({ timeout: 5_000 });
     await btn.click();
+}
+
+/** Navigate to the parent of the current directory by clicking the
+ *  second-to-last breadcrumb segment. Unlike {@link navigateExplorerHome}
+ *  (which jumps to root), this goes exactly one level up — use it to return to
+ *  the directory an entry was created in after stepping into a subfolder. */
+export async function navigateUp(): Promise<void> {
+    await browser.execute(() => {
+        const container = document.querySelector("[aria-label='Current path']");
+        const buttons = container
+            ? Array.from(container.querySelectorAll("button"))
+            : [];
+        const parent = buttons[buttons.length - 2] as HTMLButtonElement | undefined;
+        parent?.click();
+    });
 }
 
 /** Current pressed-state of the sudo toggle ("true"/"false"), or null if the

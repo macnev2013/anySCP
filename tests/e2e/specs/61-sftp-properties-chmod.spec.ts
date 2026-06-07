@@ -17,7 +17,7 @@ import {
     createFolder,
     deleteEntry,
     entryPermissions,
-    navigateExplorerHome,
+    navigateUp,
     openEntry,
     setPermissions,
     waitForExplorer,
@@ -81,11 +81,12 @@ describe("SFTP properties (chmod)", () => {
         const dir = "recdir-" + Date.now();
         const child = "child.txt";
 
-        // Create the folder, drop a file inside it, then return to the parent.
+        // Create the folder, drop a file inside it, then return to the parent
+        // (the directory the folder was created in — navigateUp, not root).
         await createFolder(dir);
         await openEntry(dir);
         await createFile(child);
-        await navigateExplorerHome();
+        await navigateUp();
 
         // 0o700 = rwx------ on both the directory and (recursively) its file.
         await setPermissions(dir, 0o700, "rwx------", true);
@@ -98,7 +99,7 @@ describe("SFTP properties (chmod)", () => {
         );
 
         // Cleanup.
-        await navigateExplorerHome();
+        await navigateUp();
         await deleteEntry(dir);
     });
 });
