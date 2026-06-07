@@ -23,6 +23,7 @@ import type { ExplorerEntry, ExplorerClipboard, FileSystemProvider } from "../..
 import { ContextMenu } from "../shared/ContextMenu";
 import type { ContextMenuItem } from "../shared/ContextMenu";
 import { formatBytes } from "../../utils/format";
+import { useSettingsStore, type EditorConfig } from "../../stores/settings-store";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -38,7 +39,7 @@ interface ExplorerFileTableProps {
   onDownload: (entry: ExplorerEntry) => void;
   onDelete: (entries: ExplorerEntry[]) => Promise<void>;
   onRename?: (entry: ExplorerEntry, newName: string) => Promise<void>;
-  onEditInEditor?: (entry: ExplorerEntry) => void;
+  onEditInEditor?: (entry: ExplorerEntry, editor?: EditorConfig) => void;
   onPresignUrl?: (entry: ExplorerEntry) => void;
   onGetInfo?: (entry: ExplorerEntry) => void;
   creatingFile?: boolean;
@@ -271,6 +272,8 @@ export function ExplorerFileTable({
   loading,
 }: ExplorerFileTableProps) {
   const caps = provider.capabilities;
+  const editors = useSettingsStore((s) => s.editors);
+  const defaultEditorId = useSettingsStore((s) => s.defaultEditorId);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<ExplorerEntry[] | null>(null);
@@ -473,13 +476,28 @@ export function ExplorerFileTable({
       return items;
     }
 
-    // Single item context menu
-    if (caps.canEditInEditor && entry.entryType !== "Directory") {
+    // Single item context menu. Only offered when at least one editor is
+    // configured (auto-seeded on first run, or added in Settings → Editors).
+    if (caps.canEditInEditor && entry.entryType !== "Directory" && editors.length > 0) {
+      const defaultEditor = editors.find((e) => e.id === defaultEditorId) ?? editors[0];
+      // Primary "Edit" uses the default editor.
       items.push({
-        label: "Edit in VS Code",
+        label: `Edit in ${defaultEditor.name}`,
         icon: ExternalLink,
-        onClick: () => onEditInEditor?.(entry),
+        onClick: () => onEditInEditor?.(entry, defaultEditor),
       });
+      // "Open With ▸" lists every configured editor (only worth showing when
+      // there's a choice beyond the default).
+      if (editors.length > 1) {
+        items.push({
+          label: "Open With",
+          icon: ExternalLink,
+          submenu: editors.map((ed) => ({
+            label: ed.name,
+            onClick: () => onEditInEditor?.(entry, ed),
+          })),
+        });
+      }
     }
 
     if (caps.canDownload) {

@@ -899,13 +899,15 @@ pub async fn s3_clear_finished_transfers(
 
 // ─── Edit in VS Code ─────────────────────────────────────────────────────────
 
-/// Download an S3 object to a temp directory, open it in VS Code,
-/// watch for saves, and re-upload to S3 each time the file is saved.
+/// Download an S3 object to a temp directory, open it in an external editor,
+/// watch for saves, and re-upload to S3 each time the file is saved. `editor` is
+/// the editor to use; when `None`, an installed one is auto-detected.
 #[tauri::command]
-#[instrument(skip(s3_manager, app_handle), fields(s3_session_id = %s3_session_id, key = %key))]
-pub async fn s3_edit_in_vscode(
+#[instrument(skip(s3_manager, app_handle, editor), fields(s3_session_id = %s3_session_id, key = %key))]
+pub async fn s3_edit_external(
     s3_session_id: String,
     key: String,
+    editor: Option<crate::editors::EditorConfig>,
     s3_manager: State<'_, Arc<S3Manager>>,
     app_handle: AppHandle,
 ) -> Result<(), S3Error> {
@@ -937,17 +939,18 @@ pub async fn s3_edit_in_vscode(
             .map_err(|e| S3Error::IoError(e.to_string()))?;
     }
 
-    // 2. Open in VS Code (without --wait so it returns immediately).
-    tokio::process::Command::new("code")
-        .arg(&local_path)
-        .spawn()
-        .map_err(|e| {
-            S3Error::IoError(format!(
-                "Failed to open VS Code: {e}. Is 'code' in your PATH?"
-            ))
+    // 2. Open in the chosen editor (or an auto-detected one), non-blocking.
+    let editor = editor
+        .or_else(crate::editors::resolve_default)
+        .ok_or_else(|| {
+            S3Error::IoError("No editor found. Add one in Settings → Editors.".to_string())
         })?;
+    crate::editors::launch(&editor, &local_path).map_err(S3Error::IoError)?;
 
-    crate::telemetry::capture("edit_in_vscode", serde_json::json!({ "source": "s3" }));
+    crate::telemetry::capture(
+        "edit_external",
+        serde_json::json!({ "source": "s3", "editor": editor.name }),
+    );
 
     // 3. Watch for file saves and re-upload on each save.
     let key_bg = key.clone();

@@ -8,6 +8,9 @@ import type { ExplorerEntry, ExplorerClipboard } from "../../types/explorer";
 import { ExplorerToolbar, ExplorerFileTable, ExplorerDropZone } from "../explorer";
 import { createSftpProvider, toExplorerEntry } from "../../providers/sftp-provider";
 import { explorerInvoke, transferEventName, type Transport } from "../../lib/explorer-transport";
+import { editorLaunchErrorMessage } from "../../lib/editor-errors";
+import { toast } from "../../stores/toast-store";
+import type { EditorConfig } from "../../stores/settings-store";
 
 interface ExplorerViewProps {
   /** The transport session id (sftp_session_id or scp_session_id). */
@@ -420,14 +423,17 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
     }
   }, [sessionId, transport, session, loadDirectory]);
 
-  // ─── Edit in VS Code ─────────────────────────────────────────────────────
+  // ─── Edit in external editor ───────────────────────────────────────────────
 
-  const handleEditInEditor = useCallback((entry: ExplorerEntry) => {
+  const handleEditInEditor = useCallback((entry: ExplorerEntry, editor?: EditorConfig) => {
     void (async () => {
       try {
-        await explorerInvoke(transport, "edit_in_vscode", sessionId, { remotePath: entry.id });
-      } catch {
-        // VS Code may not be installed
+        await explorerInvoke(transport, "edit_external", sessionId, {
+          remotePath: entry.id,
+          editor: editor ?? null,
+        });
+      } catch (err) {
+        toast.error(editorLaunchErrorMessage(err));
       }
     })();
   }, [sessionId, transport]);

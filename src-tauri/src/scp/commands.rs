@@ -415,13 +415,14 @@ pub async fn scp_cancel_transfer(
     scp_manager.cancel_transfer(&transfer_id)
 }
 
-/// Download a remote file to a temp dir, open it in VS Code, and re-upload on
-/// each save. Mirrors `sftp_edit_in_vscode` but over SCP.
+/// Download a remote file to a temp dir, open it in an external editor, and
+/// re-upload on each save. Mirrors `sftp_edit_external` but over SCP.
 #[tauri::command]
-#[instrument(skip(scp_manager, app_handle), fields(scp_session_id = %scp_session_id, remote_path = %remote_path))]
-pub async fn scp_edit_in_vscode(
+#[instrument(skip(scp_manager, app_handle, editor), fields(scp_session_id = %scp_session_id, remote_path = %remote_path))]
+pub async fn scp_edit_external(
     scp_session_id: String,
     remote_path: String,
+    editor: Option<crate::editors::EditorConfig>,
     scp_manager: State<'_, Arc<ScpManager>>,
     app_handle: AppHandle,
 ) -> Result<(), ScpError> {
@@ -442,17 +443,20 @@ pub async fn scp_edit_in_vscode(
     let token = CancellationToken::new();
     transfer::download_file(handle.clone(), &remote_path, &local_path, &token, |_| {}).await?;
 
-    // 2. Open VS Code (non-blocking).
-    tokio::process::Command::new("code")
-        .arg(&local_path)
-        .spawn()
-        .map_err(|e| {
-            ScpError::LocalIoError(format!(
-                "Failed to open VS Code: {e}. Is 'code' in your PATH?"
-            ))
+    // 2. Open in the chosen editor (or an auto-detected one), non-blocking.
+    let editor = editor
+        .or_else(crate::editors::resolve_default)
+        .ok_or_else(|| {
+            ScpError::LocalIoError(
+                "No editor found. Add one in Settings → Editors.".to_string(),
+            )
         })?;
+    crate::editors::launch(&editor, &local_path).map_err(ScpError::LocalIoError)?;
 
-    crate::telemetry::capture("edit_in_vscode", serde_json::json!({ "source": "scp" }));
+    crate::telemetry::capture(
+        "edit_external",
+        serde_json::json!({ "source": "scp", "editor": editor.name }),
+    );
 
     // 3. Watch for saves and re-upload (best-effort, 30-minute window).
     let handle_bg = handle.clone();

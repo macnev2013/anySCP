@@ -2,9 +2,9 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useSettingsStore } from "../../stores/settings-store";
 import { CustomSelect, type SelectOption } from "../shared/CustomSelect";
 import { useUpdaterStore } from "../../stores/updater-store";
-import { RefreshCw, CheckCircle2, AlertCircle, Palette, SquareTerminal, ArrowUpDown, Info, ExternalLink, Check } from "lucide-react";
+import { RefreshCw, CheckCircle2, AlertCircle, Palette, SquareTerminal, ArrowUpDown, Info, ExternalLink, Check, FileCode, Plus, Trash2, FolderOpen, Star, Search } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { CursorStyle, ThemeMode } from "../../stores/settings-store";
+import type { CursorStyle, ThemeMode, EditorConfig } from "../../stores/settings-store";
 
 // ─── Shared styles ───────────────────────────────────────────────────────────
 
@@ -18,18 +18,36 @@ const INPUT_CLASS = [
   "transition-[border-color,box-shadow] duration-[var(--duration-fast)]",
 ].join(" ");
 
+const BTN_SECONDARY = [
+  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg shrink-0",
+  "text-[length:var(--text-sm)] font-medium",
+  "bg-bg-base border border-border text-text-secondary",
+  "hover:text-text-primary hover:border-border-focus",
+  "disabled:opacity-50 disabled:pointer-events-none",
+  "transition-all duration-[var(--duration-fast)]",
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+].join(" ");
+
+const TEXT_INPUT_CLASS = [
+  "w-full px-2.5 py-1.5 rounded-lg text-[length:var(--text-sm)]",
+  "bg-bg-base border border-border text-text-primary placeholder:text-text-muted",
+  "outline-none focus:border-border-focus focus:ring-2 focus:ring-ring",
+  "transition-[border-color,box-shadow] duration-[var(--duration-fast)]",
+].join(" ");
+
 const REPO_URL = "https://github.com/macnev2013/anySCP";
 
 // ─── Sections ─────────────────────────────────────────────────────────────────
 // Each settings category is a section here. To add a new category, add an entry
 // to SECTIONS, a description, and render its content in <SectionContent />.
 
-type SectionId = "appearance" | "terminal" | "transfers" | "about";
+type SectionId = "appearance" | "terminal" | "transfers" | "editors" | "about";
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "terminal", label: "Terminal", icon: SquareTerminal },
   { id: "transfers", label: "Transfers", icon: ArrowUpDown },
+  { id: "editors", label: "Editors", icon: FileCode },
   { id: "about", label: "About & Updates", icon: Info },
 ];
 
@@ -37,6 +55,7 @@ const SECTION_DESCRIPTIONS: Record<SectionId, string> = {
   appearance: "Theme and interface look.",
   terminal: "Font, cursor, and scrollback history.",
   transfers: "Control how files are transferred.",
+  editors: "Editors used by “Edit” / “Open With” in the file browser.",
   about: "App information, links, and updates.",
 };
 
@@ -123,6 +142,8 @@ function SectionContent({ section }: { section: SectionId }) {
       return <TerminalSettings />;
     case "transfers":
       return <TransferSettings />;
+    case "editors":
+      return <EditorsSettings />;
     case "about":
       return <AboutSettings />;
   }
@@ -581,6 +602,261 @@ function TransferSettings() {
         <NumberSetting id="s-concurrency" value={transferConcurrency} min={1} max={10} step={1} onChange={setConcurrency} />
       </SettingRow>
     </SettingsGroup>
+  );
+}
+
+// ─── Editors ──────────────────────────────────────────────────────────────────
+
+/** A detected editor as returned by the `detect_editors` backend command. */
+type DetectedEditor = { name: string; execPath: string; args: string };
+
+function EditorsSettings() {
+  const editors = useSettingsStore((s) => s.editors);
+  const defaultEditorId = useSettingsStore((s) => s.defaultEditorId);
+  const addEditor = useSettingsStore((s) => s.addEditor);
+  const removeEditor = useSettingsStore((s) => s.removeEditor);
+  const setDefaultEditor = useSettingsStore((s) => s.setDefaultEditor);
+
+  const [detected, setDetected] = useState<DetectedEditor[] | null>(null);
+  const [detecting, setDetecting] = useState(false);
+
+  const scan = useCallback(async () => {
+    setDetecting(true);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      setDetected(await invoke<DetectedEditor[]>("detect_editors"));
+    } catch {
+      setDetected([]);
+    } finally {
+      setDetecting(false);
+    }
+  }, []);
+
+  // Auto-scan once when the user has nothing configured yet, so the section
+  // isn't empty on first visit.
+  useEffect(() => {
+    if (editors.length === 0 && detected === null) void scan();
+  }, [editors.length, detected, scan]);
+
+  const configuredPaths = new Set(editors.map((e) => e.execPath));
+  const newlyDetected = (detected ?? []).filter((e) => !configuredPaths.has(e.execPath));
+
+  return (
+    <>
+      <SettingsGroup label="Your editors">
+        {editors.length === 0 ? (
+          <div className="px-4 py-6 rounded-xl bg-bg-surface border border-border/50 text-center">
+            <p className="text-[length:var(--text-sm)] text-text-muted">
+              No editors configured yet. Add a detected one below, or set up a custom editor.
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {editors.map((ed) => (
+              <EditorRow
+                key={ed.id}
+                editor={ed}
+                isDefault={ed.id === defaultEditorId}
+                onMakeDefault={() => setDefaultEditor(ed.id)}
+                onRemove={() => removeEditor(ed.id)}
+              />
+            ))}
+            <p className="px-1 text-[length:var(--text-xs)] text-text-muted">
+              The starred editor is used by “Edit” in the file browser; the rest appear under “Open With”.
+            </p>
+          </div>
+        )}
+      </SettingsGroup>
+
+      <SettingsGroup label="Detected on this computer">
+        <div className="flex items-center justify-between gap-4 px-4 py-3 rounded-xl bg-bg-surface border border-border/50">
+          <div>
+            <p className={LABEL_CLASS}>Scan for installed editors</p>
+            <p className={DESC_CLASS}>Looks for common editors like VS Code, Sublime Text, and more</p>
+          </div>
+          <button onClick={() => void scan()} disabled={detecting} className={BTN_SECONDARY}>
+            {detecting
+              ? <RefreshCw size={13} strokeWidth={2} className="motion-safe:animate-spin" />
+              : <Search size={13} strokeWidth={2} />}
+            {detecting ? "Scanning…" : "Scan"}
+          </button>
+        </div>
+
+        {detected !== null && newlyDetected.length === 0 && (
+          <p className="px-1 mt-2 text-[length:var(--text-xs)] text-text-muted">
+            {detected.length === 0
+              ? "No editors detected. Add one manually below."
+              : "All detected editors have been added."}
+          </p>
+        )}
+
+        {newlyDetected.length > 0 && (
+          <div className="flex flex-col gap-2 mt-2">
+            {newlyDetected.map((ed) => (
+              <div
+                key={ed.execPath}
+                className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-bg-surface border border-border/50"
+              >
+                <div className="min-w-0">
+                  <p className={LABEL_CLASS}>{ed.name}</p>
+                  <p className="text-[length:var(--text-xs)] text-text-muted truncate" title={ed.execPath}>
+                    {ed.execPath}
+                  </p>
+                </div>
+                <button
+                  onClick={() => addEditor({ name: ed.name, execPath: ed.execPath, args: ed.args || "{path}" })}
+                  className={BTN_SECONDARY}
+                >
+                  <Plus size={13} strokeWidth={2} /> Add
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </SettingsGroup>
+
+      <SettingsGroup label="Add a custom editor">
+        <AddEditorForm onAdd={addEditor} />
+      </SettingsGroup>
+    </>
+  );
+}
+
+function EditorRow({ editor, isDefault, onMakeDefault, onRemove }: {
+  editor: EditorConfig;
+  isDefault: boolean;
+  onMakeDefault: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-bg-surface border border-border/50">
+      <div className="min-w-0">
+        <p className={`${LABEL_CLASS} flex items-center gap-1.5`}>
+          {editor.name}
+          {isDefault && (
+            <span className="text-[length:var(--text-2xs)] font-medium text-accent uppercase tracking-wide">Default</span>
+          )}
+        </p>
+        <p className="text-[length:var(--text-xs)] text-text-muted truncate" title={editor.execPath}>
+          {editor.execPath} <span className="opacity-60">· {editor.args}</span>
+        </p>
+      </div>
+      <div className="flex items-center gap-1.5 shrink-0">
+        <button
+          type="button"
+          onClick={onMakeDefault}
+          disabled={isDefault}
+          title={isDefault ? "Default editor" : "Set as default"}
+          aria-label={isDefault ? "Default editor" : "Set as default"}
+          className={[
+            "p-1.5 rounded-lg border transition-colors duration-[var(--duration-fast)]",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            isDefault
+              ? "border-transparent text-accent pointer-events-none"
+              : "border-border text-text-muted hover:text-text-primary hover:border-border-focus",
+          ].join(" ")}
+        >
+          <Star size={15} strokeWidth={2} fill={isDefault ? "currentColor" : "none"} />
+        </button>
+        <button
+          type="button"
+          onClick={onRemove}
+          title="Remove"
+          aria-label={`Remove ${editor.name}`}
+          className="p-1.5 rounded-lg border border-border text-text-muted hover:text-status-error hover:border-status-error/40 transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Trash2 size={15} strokeWidth={2} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AddEditorForm({ onAdd }: { onAdd: (editor: Omit<EditorConfig, "id">) => void }) {
+  const [name, setName] = useState("");
+  const [execPath, setExecPath] = useState("");
+  const [args, setArgs] = useState("{path}");
+
+  const browse = useCallback(async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const picked = await open({ multiple: false, directory: false, title: "Select editor executable" });
+      if (typeof picked === "string") {
+        setExecPath(picked);
+        // Pre-fill the name from the file/app name if it's still blank.
+        if (!name.trim()) {
+          const base = picked.split(/[\\/]/).pop() ?? "";
+          setName(base.replace(/\.(app|exe)$/i, ""));
+        }
+      }
+    } catch { /* dialog cancelled / unavailable */ }
+  }, [name]);
+
+  const canAdd = name.trim().length > 0 && execPath.trim().length > 0;
+
+  const submit = () => {
+    if (!canAdd) return;
+    onAdd({ name: name.trim(), execPath: execPath.trim(), args: args.trim() || "{path}" });
+    setName("");
+    setExecPath("");
+    setArgs("{path}");
+  };
+
+  return (
+    <div className="flex flex-col gap-3 px-4 py-4 rounded-xl bg-bg-surface border border-border/50">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="ed-name" className={LABEL_CLASS}>Name</label>
+        <input
+          id="ed-name"
+          data-testid="ed-name"
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. Sublime Text"
+          className={TEXT_INPUT_CLASS}
+        />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="ed-path" className={LABEL_CLASS}>Executable path</label>
+        <div className="flex items-center gap-2">
+          <input
+            id="ed-path"
+            data-testid="ed-path"
+            type="text"
+            value={execPath}
+            onChange={(e) => setExecPath(e.target.value)}
+            placeholder="/path/to/editor"
+            className={TEXT_INPUT_CLASS}
+          />
+          <button type="button" onClick={() => void browse()} className={BTN_SECONDARY}>
+            <FolderOpen size={13} strokeWidth={2} /> Browse
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="ed-args" className={LABEL_CLASS}>Arguments</label>
+        <input
+          id="ed-args"
+          data-testid="ed-args"
+          type="text"
+          value={args}
+          onChange={(e) => setArgs(e.target.value)}
+          placeholder="{path}"
+          className={TEXT_INPUT_CLASS}
+        />
+        <p className={DESC_CLASS}>
+          Use <code className="px-1 rounded bg-bg-base">{"{path}"}</code> where the file should go. If omitted, it's added at the end.
+        </p>
+      </div>
+
+      <div className="flex justify-end">
+        <button type="button" onClick={submit} disabled={!canAdd} className={BTN_SECONDARY}>
+          <Plus size={13} strokeWidth={2} /> Add editor
+        </button>
+      </div>
+    </div>
   );
 }
 

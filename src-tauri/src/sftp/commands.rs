@@ -762,13 +762,15 @@ pub async fn sftp_cancel_transfer(
     sftp_manager.cancel_transfer(&transfer_id)
 }
 
-/// Download a remote file to a temp directory, open it in VS Code,
-/// watch for saves, and re-upload each time the file is saved.
+/// Download a remote file to a temp directory, open it in an external editor,
+/// watch for saves, and re-upload each time the file is saved. `editor` is the
+/// editor to use; when `None`, an installed one is auto-detected.
 #[tauri::command]
-#[instrument(skip(sftp_manager, app_handle), fields(sftp_session_id = %sftp_session_id, remote_path = %remote_path))]
-pub async fn sftp_edit_in_vscode(
+#[instrument(skip(sftp_manager, app_handle, editor), fields(sftp_session_id = %sftp_session_id, remote_path = %remote_path))]
+pub async fn sftp_edit_external(
     sftp_session_id: String,
     remote_path: String,
+    editor: Option<crate::editors::EditorConfig>,
     sftp_manager: State<'_, Arc<SftpManager>>,
     app_handle: AppHandle,
 ) -> Result<(), SftpError> {
@@ -810,17 +812,21 @@ pub async fn sftp_edit_in_vscode(
             .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
     }
 
-    // 2. Open in VS Code (without --wait so it returns immediately)
-    tokio::process::Command::new("code")
-        .arg(&local_path)
-        .spawn()
-        .map_err(|e| {
-            SftpError::LocalIoError(format!(
-                "Failed to open VS Code: {e}. Is 'code' in your PATH?"
-            ))
+    // 2. Open in the chosen editor (or an auto-detected one). Spawns and returns
+    //    immediately; the watcher below handles save-and-re-upload.
+    let editor = editor
+        .or_else(crate::editors::resolve_default)
+        .ok_or_else(|| {
+            SftpError::LocalIoError(
+                "No editor found. Add one in Settings → Editors.".to_string(),
+            )
         })?;
+    crate::editors::launch(&editor, &local_path).map_err(SftpError::LocalIoError)?;
 
-    crate::telemetry::capture("edit_in_vscode", serde_json::json!({ "source": "sftp" }));
+    crate::telemetry::capture(
+        "edit_external",
+        serde_json::json!({ "source": "sftp", "editor": editor.name }),
+    );
 
     // 3. Watch for file saves and re-upload on each save
     let sftp_arc_bg = sftp_arc.clone();

@@ -6,6 +6,19 @@ export type ThemeMode = "dark" | "light";
 /** Full custom accent colour in oklch components (lightness, chroma, hue). */
 export interface AccentCustom { l: number; c: number; h: number }
 
+/**
+ * A configured external editor. `args` is a command template where `{path}` is
+ * replaced with the file to open (the file is appended if `{path}` is absent).
+ * `id` is a UI-only stable key; the backend ignores it. `execPath` is the
+ * absolute path to the binary, or a macOS .app bundle.
+ */
+export interface EditorConfig {
+  id: string;
+  name: string;
+  execPath: string;
+  args: string;
+}
+
 interface SettingsState {
   // Appearance
   themeMode: ThemeMode;
@@ -28,6 +41,10 @@ interface SettingsState {
   // Transfers
   transferConcurrency: number;
 
+  // External editors
+  editors: EditorConfig[];
+  defaultEditorId: string | null;
+
   // State
   loaded: boolean;
 
@@ -45,6 +62,10 @@ interface SettingsState {
   setTerminalLineHeight: (height: number) => void;
   setTerminalScrollback: (lines: number) => void;
   setTransferConcurrency: (n: number) => void;
+  addEditor: (editor: Omit<EditorConfig, "id">) => void;
+  updateEditor: (id: string, patch: Partial<Omit<EditorConfig, "id">>) => void;
+  removeEditor: (id: string) => void;
+  setDefaultEditor: (id: string | null) => void;
   loadSettings: () => Promise<void>;
 }
 
@@ -63,6 +84,8 @@ const DEFAULTS = {
   terminalLineHeight: 1.2,
   terminalScrollback: 5000,
   transferConcurrency: 3,
+  editors: [] as EditorConfig[],
+  defaultEditorId: null as string | null,
 };
 
 /**
@@ -127,6 +150,25 @@ function persist(key: string, value: string) {
       await invoke("save_setting", { key, value });
     } catch { /* best-effort */ }
   })();
+}
+
+/** Persist the whole editor config as one JSON blob (it's a list, not a scalar). */
+function persistEditors(editors: EditorConfig[], defaultEditorId: string | null) {
+  persist("editors_config", JSON.stringify({ editors, defaultEditorId }));
+}
+
+/** Editors that make the best out-of-the-box default, most-preferred first.
+ *  Names must match the backend registry display names (see editors/mod.rs). */
+const PREFERRED_DEFAULT_EDITORS = ["Visual Studio Code", "VSCodium", "Cursor", "Windsurf", "Sublime Text", "Zed"];
+
+/** Choose which seeded editor should be the default — a popular IDE if present,
+ *  otherwise just the first one detected. */
+function pickDefaultEditorId(editors: EditorConfig[]): string | null {
+  for (const name of PREFERRED_DEFAULT_EDITORS) {
+    const match = editors.find((e) => e.name === name);
+    if (match) return match.id;
+  }
+  return editors[0]?.id ?? null;
 }
 
 let accentPersistTimer: ReturnType<typeof setTimeout> | undefined;
@@ -220,12 +262,40 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     })();
   },
 
+  addEditor: (editor) => set((s) => {
+    const next = [...s.editors, { ...editor, id: crypto.randomUUID() }];
+    // The first editor added becomes the default automatically.
+    const defaultEditorId = s.defaultEditorId ?? next[next.length - 1].id;
+    persistEditors(next, defaultEditorId);
+    return { editors: next, defaultEditorId };
+  }),
+
+  updateEditor: (id, patch) => set((s) => {
+    const next = s.editors.map((e) => (e.id === id ? { ...e, ...patch } : e));
+    persistEditors(next, s.defaultEditorId);
+    return { editors: next };
+  }),
+
+  removeEditor: (id) => set((s) => {
+    const next = s.editors.filter((e) => e.id !== id);
+    // If the default was removed, fall back to the first remaining editor.
+    const defaultEditorId = s.defaultEditorId === id ? (next[0]?.id ?? null) : s.defaultEditorId;
+    persistEditors(next, defaultEditorId);
+    return { editors: next, defaultEditorId };
+  }),
+
+  setDefaultEditor: (id) => set((s) => {
+    persistEditors(s.editors, id);
+    return { defaultEditorId: id };
+  }),
+
   loadSettings: async () => {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const pairs = await invoke<[string, string][]>("load_all_settings");
 
       const updates: Partial<SettingsState> = {};
+      let editorsSeeded = false;
       for (const [key, value] of pairs) {
         switch (key) {
           case "app_theme": updates.themeMode = value === "light" ? "light" : DEFAULTS.themeMode; break;
@@ -247,6 +317,45 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           case "app_interface_font": updates.interfaceFont = value || DEFAULTS.interfaceFont; break;
           case "app_auto_update": updates.autoUpdate = value !== "false"; break;
           case "app_skipped_update": updates.skippedUpdateVersion = value || null; break;
+          case "editors_config": {
+            try {
+              const parsed = JSON.parse(value) as { editors?: EditorConfig[]; defaultEditorId?: string | null };
+              if (Array.isArray(parsed.editors)) updates.editors = parsed.editors;
+              updates.defaultEditorId = parsed.defaultEditorId ?? null;
+            } catch { /* ignore malformed config */ }
+            break;
+          }
+          case "editors_seeded": editorsSeeded = value === "true"; break;
+        }
+      }
+
+      // First run: auto-detect installed editors and add them so "Edit" / "Open
+      // With" work out of the box. Tracked by a dedicated `editors_seeded` flag
+      // (NOT the mere presence of editors_config) so that a user who later
+      // deletes every editor won't have them silently re-added.
+      if (!editorsSeeded) {
+        const current = updates.editors ?? [];
+        if (current.length > 0) {
+          // A real config already exists (e.g. manually added) — respect it.
+          persist("editors_seeded", "true");
+        } else {
+          try {
+            const detected = await invoke<{ name: string; execPath: string; args: string }[]>("detect_editors");
+            if (detected.length > 0) {
+              const editors: EditorConfig[] = detected.map((d) => ({
+                id: crypto.randomUUID(),
+                name: d.name,
+                execPath: d.execPath,
+                args: d.args || "{path}",
+              }));
+              const defaultEditorId = pickDefaultEditorId(editors);
+              updates.editors = editors;
+              updates.defaultEditorId = defaultEditorId;
+              persistEditors(editors, defaultEditorId);
+              persist("editors_seeded", "true");
+            }
+            // Nothing detected → leave unseeded so we retry on the next launch.
+          } catch { /* detection unavailable — leave unseeded to retry next launch */ }
         }
       }
 

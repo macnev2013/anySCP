@@ -5,6 +5,9 @@ import type { S3BucketInfo, S3ListResult } from "../../types";
 import type { ExplorerEntry } from "../../types/explorer";
 import { ExplorerToolbar, ExplorerFileTable, ExplorerDropZone } from "../explorer";
 import { createS3Provider, toS3ExplorerEntry } from "../../providers/s3-provider";
+import { editorLaunchErrorMessage } from "../../lib/editor-errors";
+import { toast } from "../../stores/toast-store";
+import type { EditorConfig } from "../../stores/settings-store";
 
 interface S3BrowserProps {
   sessionId: string;
@@ -294,18 +297,19 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
     } catch { /* best-effort */ }
   }, [sessionId, session]);
 
-  // ─── Edit in VS Code ─────────────────────────────────────────────────────
+  // ─── Edit in external editor ───────────────────────────────────────────────
 
-  const handleEditInEditor = useCallback((entry: ExplorerEntry) => {
+  const handleEditInEditor = useCallback((entry: ExplorerEntry, editor?: EditorConfig) => {
     void (async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("s3_edit_in_vscode", {
+        await invoke("s3_edit_external", {
           s3SessionId: sessionId,
           key: entry.id,
+          editor: editor ?? null,
         });
-      } catch {
-        // VS Code may not be installed
+      } catch (err) {
+        toast.error(editorLaunchErrorMessage(err));
       }
     })();
   }, [sessionId]);

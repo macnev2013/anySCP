@@ -23,6 +23,7 @@ import { PortForwardingPage } from "../port-forwarding";
 import { HistoryPage } from "../history";
 import { usePortForwardEvents } from "../../hooks/use-port-forward-events";
 import { UpdateDialog } from "../updater/UpdateDialog";
+import { Toaster } from "../shared/Toaster";
 
 export function AppShell() {
   const themeMode = useSettingsStore((s) => s.themeMode);
@@ -369,6 +370,9 @@ export function AppShell() {
 
       {/* Snippet command palette */}
       <SnippetPalette />
+
+      {/* Transient notifications (errors, etc.) */}
+      <Toaster />
     </div>
   );
 }

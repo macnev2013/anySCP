@@ -1,5 +1,6 @@
 mod ai;
 mod db;
+mod editors;
 mod import;
 mod portforward;
 mod s3;
@@ -180,7 +181,7 @@ pub fn run() {
             sftp::commands::sftp_download,
             sftp::commands::sftp_upload,
             sftp::commands::sftp_cancel_transfer,
-            sftp::commands::sftp_edit_in_vscode,
+            sftp::commands::sftp_edit_external,
             // SFTP — queue-based Transfer Manager
             sftp::commands::sftp_enqueue_upload,
             sftp::commands::sftp_enqueue_download,
@@ -205,7 +206,7 @@ pub fn run() {
             scp::commands::scp_download,
             scp::commands::scp_upload,
             scp::commands::scp_cancel_transfer,
-            scp::commands::scp_edit_in_vscode,
+            scp::commands::scp_edit_external,
             // SCP — queue-based Transfer Manager
             scp::commands::scp_enqueue_upload,
             scp::commands::scp_enqueue_download,
@@ -243,6 +244,8 @@ pub fn run() {
             // App settings
             db::commands::save_setting,
             db::commands::load_all_settings,
+            // External editors
+            editors::detect_editors,
             // Credential vault
             vault::vault_save_credential,
             vault::vault_delete_credential,
@@ -276,7 +279,7 @@ pub fn run() {
             s3::commands::s3_retry_transfer,
             s3::commands::s3_list_transfers,
             s3::commands::s3_clear_finished_transfers,
-            s3::commands::s3_edit_in_vscode,
+            s3::commands::s3_edit_external,
             // SSH config import
             import::commands::import_parse_ssh_config,
             import::commands::import_save_ssh_hosts,
