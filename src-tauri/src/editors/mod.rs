@@ -96,7 +96,7 @@ const fn term_spec(
 /// terminal editors are listed for completeness but skipped by `detect`.
 #[rustfmt::skip]
 const REGISTRY: &[EditorSpec] = &[
-    spec("Visual Studio Code", &["Visual Studio Code.app"], &["code"], &["com.visualstudio.code"],
+    spec("VS Code", &["Visual Studio Code.app"], &["code"], &["com.visualstudio.code"],
         &[r"%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe", r"%ProgramFiles%\Microsoft VS Code\Code.exe", r"%ProgramFiles(x86)%\Microsoft VS Code\Code.exe", r"%LOCALAPPDATA%\Programs\Microsoft VS Code\bin\code.cmd", r"%ProgramFiles%\Microsoft VS Code\bin\code.cmd"],
         &["code.cmd", "Code.exe"]),
     spec("VS Code Insiders", &["Visual Studio Code - Insiders.app"], &["code-insiders"], &["com.visualstudio.code.insiders"],
@@ -455,7 +455,7 @@ fn wildcard_match(pattern: &str, name: &str) -> bool {
 /// editor, preferring the popular IDEs (and the VS Code family the old
 /// hard-coded path targeted).
 pub fn resolve_default() -> Option<EditorConfig> {
-    const PREFERRED: &[&str] = &["Visual Studio Code", "VSCodium", "Cursor", "Windsurf", "Sublime Text", "Zed"];
+    const PREFERRED: &[&str] = &["VS Code", "VSCodium", "Cursor", "Windsurf", "Sublime Text", "Zed"];
     let detected = detect();
     detected
         .iter()

@@ -159,7 +159,11 @@ function persistEditors(editors: EditorConfig[], defaultEditorId: string | null)
 
 /** Editors that make the best out-of-the-box default, most-preferred first.
  *  Names must match the backend registry display names (see editors/mod.rs). */
-const PREFERRED_DEFAULT_EDITORS = ["Visual Studio Code", "VSCodium", "Cursor", "Windsurf", "Sublime Text", "Zed"];
+const PREFERRED_DEFAULT_EDITORS = ["VS Code", "VSCodium", "Cursor", "Windsurf", "Sublime Text", "Zed"];
+
+/** Old → new display names for editors renamed in the backend registry, applied
+ *  to already-saved configs on load so existing users see the canonical name. */
+const RENAMED_EDITORS: Record<string, string> = { "Visual Studio Code": "VS Code" };
 
 /** Choose which seeded editor should be the default — a popular IDE if present,
  *  otherwise just the first one detected. */
@@ -320,8 +324,18 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           case "editors_config": {
             try {
               const parsed = JSON.parse(value) as { editors?: EditorConfig[]; defaultEditorId?: string | null };
-              if (Array.isArray(parsed.editors)) updates.editors = parsed.editors;
-              updates.defaultEditorId = parsed.defaultEditorId ?? null;
+              const defaultEditorId = parsed.defaultEditorId ?? null;
+              if (Array.isArray(parsed.editors)) {
+                let renamed = false;
+                const migrated = parsed.editors.map((e) => {
+                  const next = RENAMED_EDITORS[e.name];
+                  if (next && next !== e.name) { renamed = true; return { ...e, name: next }; }
+                  return e;
+                });
+                updates.editors = migrated;
+                if (renamed) persistEditors(migrated, defaultEditorId); // keep the rename
+              }
+              updates.defaultEditorId = defaultEditorId;
             } catch { /* ignore malformed config */ }
             break;
           }
