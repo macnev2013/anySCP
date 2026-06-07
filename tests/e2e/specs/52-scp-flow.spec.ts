@@ -1,12 +1,17 @@
 // SCP fallback flow, run against a matrix of remote userlands. Each target
 // has the SFTP subsystem stripped, so opening the Explorer must transparently
-// fall back to SCP. The two targets cover the two Linux listing code paths:
+// fall back to SCP. The targets cover the Linux listing code paths:
 //
-//   - GNU     (linuxserver/Alpine + GNU findutils): `find -printf`
-//   - busybox (bare Alpine, no GNU tools):          `find -exec stat -c`
+//   - GNU            (linuxserver/Alpine + GNU findutils): `find -printf`
+//   - busybox        (bare Alpine, no GNU tools):          `find -exec stat -c`
+//   - busybox-nostat (busybox with `stat` removed):        `ls -la` (Posix)
 //
-// BSD/macOS (the third flavor) can't run as a Linux Docker container, so it's
-// covered by unit tests (scp/listing.rs) + manual verification instead.
+// busybox-nostat reproduces issue #3 (Buildroot 2020.02.1): with neither
+// `find -printf` nor any `stat`, listing must fall through to the universal
+// `ls -la` path or the Explorer renders no files.
+//
+// BSD/macOS (the remaining flavor) can't run as a Linux Docker container, so
+// it's covered by unit tests (scp/listing.rs) + manual verification instead.
 
 import { expect } from "chai";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -54,6 +59,12 @@ const TARGETS: Target[] = [
         name: "busybox",
         host: process.env.SSHD_SCP_BUSYBOX_HOST ?? "sshd-scp-busybox",
         port: Number(process.env.SSHD_SCP_BUSYBOX_PORT ?? 2222),
+        home: "/home/testuser",
+    },
+    {
+        name: "busybox-nostat",
+        host: process.env.SSHD_SCP_BUSYBOX_NOSTAT_HOST ?? "sshd-scp-busybox-nostat",
+        port: Number(process.env.SSHD_SCP_BUSYBOX_NOSTAT_PORT ?? 2222),
         home: "/home/testuser",
     },
 ];

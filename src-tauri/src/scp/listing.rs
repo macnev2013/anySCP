@@ -27,6 +27,14 @@ pub enum Flavor {
     Busybox,
     /// BSD / macOS (`stat -f`, no `find -printf`, no `stat -c`).
     Bsd,
+    /// Lowest-common-denominator POSIX: no `find -printf`, no usable `stat`
+    /// (e.g. stripped busybox / Buildroot where the `stat` applet is compiled
+    /// out, ancient or minimal embedded userlands). Everything is derived by
+    /// parsing `ls -l` output, which is mandated by POSIX and present even on
+    /// the most minimal systems — this is the same approach WinSCP uses in SCP
+    /// mode. Also used as the universal fallback when a flavor-specific
+    /// listing command fails (see [`super::exec::list_dir`]).
+    Posix,
 }
 
 impl Default for Flavor {
@@ -43,6 +51,7 @@ impl Flavor {
             Flavor::Gnu => "gnu",
             Flavor::Busybox => "busybox",
             Flavor::Bsd => "bsd",
+            Flavor::Posix => "posix",
         }
     }
 
@@ -51,6 +60,7 @@ impl Flavor {
             "gnu" => Some(Flavor::Gnu),
             "busybox" => Some(Flavor::Busybox),
             "bsd" => Some(Flavor::Bsd),
+            "posix" => Some(Flavor::Posix),
             _ => None,
         }
     }
@@ -103,6 +113,17 @@ pub const STATF_FMT: &str = "%Sp\t%z\t%m";
 pub const STATF_FMT_NAMED: &str = "%Sp\t%z\t%m\t%N";
 /// `stat -f` for a tree walk: perm-string, size, name.
 pub const STATF_TREE_FMT: &str = "%Sp\t%z\t%N";
+
+// `ls`-based commands for the universal POSIX fallback. `ls -l` is mandated by
+// POSIX and present on every userland (unlike `stat`/`find -printf`), so these
+// work where the machine-readable paths don't. `LC_ALL=C` pins month names to
+// the English C-locale form the parser expects; `--` guards leading-dash names.
+/// `ls` flags for a single-directory listing (long format, include dotfiles).
+pub const LS_LISTING_ARGS: &str = "LC_ALL=C ls -la --";
+/// `ls` flags for a recursive tree walk (long format, recursive).
+pub const LS_TREE_ARGS: &str = "LC_ALL=C ls -laR --";
+/// `ls` flags to stat a single path (long format, directory-as-entry via `-d`).
+pub const LS_STAT_ARGS: &str = "LC_ALL=C ls -lad --";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -494,6 +515,264 @@ fn parse_exec_tree(
     Ok(out)
 }
 
+// ─── `ls -l` parsers (universal POSIX fallback) ──────────────────────────────
+//
+// `ls -l` long-format output is the lowest common denominator: it works on
+// GNU, busybox (including stripped builds with no `stat`), and BSD/macOS. The
+// column order is identical everywhere:
+//
+//     <perms> <links> <owner> <group> <size> <month> <day> <time-or-year> <name>
+//
+// Only the inter-column whitespace differs. We anchor on the date triplet
+// (`<Mon> <DD> <HH:MM|YYYY>`) rather than counting columns, because the
+// link/owner/group columns are variable-width and device files split the size
+// into `major, minor`. Type and permission bits come from the mode string's
+// leading char + rwx triads — never from a localizable human word — so the
+// parser is immune to locale and to GNU/busybox `stat %F` wording differences.
+//
+// Trade-off: plain `ls` has no NUL record separator and no machine-readable
+// mtime, so (a) names containing a newline are unparseable (same inherent
+// limit as the existing busybox/BSD `-exec stat` paths) and (b) `modified` is
+// reported as `None` — acceptable for a fallback that exists to make otherwise
+// invisible files visible.
+
+/// One parsed `ls -l` entry line. Borrows `name`/`target` from the input.
+struct LsLine<'a> {
+    entry_type: ScpEntryType,
+    is_symlink: bool,
+    mode: u32,
+    size: u64,
+    name: &'a str,
+}
+
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+fn is_month(tok: &str) -> bool {
+    MONTHS.contains(&tok)
+}
+
+/// A day-of-month token: 1..=31 (`ls` space-pads single digits, so the token
+/// itself is never blank).
+fn is_day(tok: &str) -> bool {
+    matches!(tok.parse::<u32>(), Ok(d) if (1..=31).contains(&d))
+}
+
+/// The third date token is either a clock time `HH:MM` (recent files) or a
+/// 4-digit year (older files).
+fn is_time_or_year(tok: &str) -> bool {
+    if let Some((h, m)) = tok.split_once(':') {
+        return h.len() <= 2
+            && m.len() == 2
+            && h.parse::<u32>().is_ok()
+            && m.parse::<u32>().is_ok();
+    }
+    tok.len() == 4 && tok.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Map an `ls` mode string (e.g. `drwxr-xr-x`, possibly with a trailing `+`/`.`
+/// ACL/SELinux marker) to entry type + symlink flag + permission bits.
+fn type_from_ls_mode(mode_str: &str) -> Option<(ScpEntryType, bool, u32)> {
+    let first = mode_str.chars().next()?;
+    // Need the type char plus 9 rwx chars.
+    if mode_str.len() < 10 {
+        return None;
+    }
+    let (entry_type, is_symlink) = match first {
+        '-' => (ScpEntryType::File, false),
+        'd' => (ScpEntryType::Directory, false),
+        'l' => (ScpEntryType::Symlink, true),
+        'b' | 'c' | 'p' | 's' => (ScpEntryType::Other, false),
+        _ => return None,
+    };
+    // rwx triads are the 9 chars after the type char.
+    let rwx: String = mode_str.chars().skip(1).take(9).collect();
+    Some((entry_type, is_symlink, rwx_to_mode(&rwx)))
+}
+
+/// Split a line into (byte_offset, token) pairs on runs of spaces/tabs, so the
+/// caller can recover the exact remainder (the filename) from the original
+/// bytes without losing internal spacing.
+fn tokens_with_offsets(line: &str) -> Vec<(usize, &str)> {
+    let bytes = line.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let start = i;
+        while i < bytes.len() && bytes[i] != b' ' && bytes[i] != b'\t' {
+            i += 1;
+        }
+        out.push((start, &line[start..i]));
+    }
+    out
+}
+
+/// Parse a single `ls -l` entry line. Returns `None` for non-entry lines (the
+/// `total N` header, `ls -R` `path:` headers, blanks) and for `.`/`..`.
+fn parse_ls_line(line: &str) -> Option<LsLine<'_>> {
+    let line = line.trim_end_matches('\r');
+    let toks = tokens_with_offsets(line);
+    if toks.len() < 6 {
+        return None;
+    }
+    let (entry_type, is_symlink, mode) = type_from_ls_mode(toks[0].1)?;
+
+    // Find the date anchor: <Mon> <DD> <HH:MM|YYYY>. Start past the mandatory
+    // perms/links/owner/group/size columns (index >= 4) to avoid matching an
+    // owner/group literally named like a month.
+    let date_idx = (4..toks.len().saturating_sub(2)).find(|&i| {
+        is_month(toks[i].1) && is_day(toks[i + 1].1) && is_time_or_year(toks[i + 2].1)
+    })?;
+
+    // Size is the token just before the month. Device nodes show `major, minor`
+    // there, which won't parse — treat as 0 (and they're typed `Other` anyway).
+    let size: u64 = toks[date_idx - 1].1.parse().unwrap_or(0);
+
+    // The name is everything after the time/year token (preserving any internal
+    // spaces). Skip exactly the single separating space ls emits.
+    let time_tok = toks[date_idx + 2];
+    let name_start = time_tok.0 + time_tok.1.len();
+    let mut name = line[name_start..].trim_start_matches([' ', '\t']);
+
+    // For symlinks, strip the ` -> target` suffix; keep just the link's name.
+    if is_symlink {
+        if let Some((left, _target)) = name.split_once(" -> ") {
+            name = left;
+        }
+    }
+
+    if name.is_empty() || name == "." || name == ".." {
+        return None;
+    }
+
+    Some(LsLine {
+        entry_type,
+        is_symlink,
+        mode,
+        size,
+        name,
+    })
+}
+
+/// Parse `ls -la <dir>` output into directory entries.
+pub fn parse_ls_listing(stdout: &[u8], dir: &str) -> Result<Vec<ScpEntry>, ScpError> {
+    let text = String::from_utf8_lossy(stdout);
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if let Some(e) = parse_ls_line(line) {
+            out.push(mk_entry(
+                e.name,
+                join_remote(dir, e.name),
+                e.entry_type,
+                e.is_symlink,
+                e.mode,
+                e.size,
+                None, // ls has no machine-readable mtime; omit rather than guess
+            ));
+        }
+    }
+    sort_entries(&mut out);
+    Ok(out)
+}
+
+/// Parse `ls -lad <path>` output (a single entry) into [`StatInfo`].
+pub fn parse_ls_single(stdout: &[u8]) -> Result<Option<StatInfo>, ScpError> {
+    let text = String::from_utf8_lossy(stdout);
+    for line in text.lines() {
+        if let Some(e) = parse_ls_line_allow_self(line) {
+            return Ok(Some(StatInfo {
+                entry_type: e.entry_type,
+                mode: e.mode,
+                size: e.size,
+                mtime: 0,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+/// Like [`parse_ls_line`] but does not reject `.`/`..` — `ls -lad -- <path>`
+/// echoes the path verbatim as the name, which is fine, but a `-d` on `.` would
+/// otherwise be dropped. Used only by single-path stat.
+fn parse_ls_line_allow_self(line: &str) -> Option<LsLine<'_>> {
+    let line = line.trim_end_matches('\r');
+    let toks = tokens_with_offsets(line);
+    if toks.len() < 6 {
+        return None;
+    }
+    let (entry_type, is_symlink, mode) = type_from_ls_mode(toks[0].1)?;
+    let date_idx = (4..toks.len().saturating_sub(2)).find(|&i| {
+        is_month(toks[i].1) && is_day(toks[i + 1].1) && is_time_or_year(toks[i + 2].1)
+    })?;
+    let size: u64 = toks[date_idx - 1].1.parse().unwrap_or(0);
+    let time_tok = toks[date_idx + 2];
+    let name_start = time_tok.0 + time_tok.1.len();
+    let mut name = line[name_start..].trim_start_matches([' ', '\t']);
+    if is_symlink {
+        if let Some((left, _)) = name.split_once(" -> ") {
+            name = left;
+        }
+    }
+    if name.is_empty() {
+        return None;
+    }
+    Some(LsLine {
+        entry_type,
+        is_symlink,
+        mode,
+        size,
+        name,
+    })
+}
+
+/// Parse `ls -laR <dir>` output into a relative-path tree (excluding `dir`).
+///
+/// `ls -R` emits one block per directory, introduced by a `<path>:` header line
+/// and followed by that directory's `ls -l` listing, blocks separated by a
+/// blank line. We track the current header to resolve each entry's full path,
+/// then make it relative to `dir`.
+pub fn parse_ls_tree(stdout: &[u8], dir: &str) -> Result<Vec<TreeEntry>, ScpError> {
+    let text = String::from_utf8_lossy(stdout);
+    let root = dir.trim_end_matches('/');
+    let prefix = format!("{root}/");
+    let mut out = Vec::new();
+    // Current directory context. The first block's header may be absent when
+    // `ls` lists a single directory's contents inline; default to `dir`.
+    let mut current = dir.to_string();
+    for line in text.lines() {
+        let trimmed = line.trim_end_matches('\r');
+        if trimmed.is_empty() {
+            continue;
+        }
+        // A `path:` header: a line ending in ':' that is not an entry line.
+        if trimmed.ends_with(':') && parse_ls_line(trimmed).is_none() {
+            current = trimmed[..trimmed.len() - 1].to_string();
+            continue;
+        }
+        let Some(e) = parse_ls_line(trimmed) else {
+            continue;
+        };
+        let full = join_remote(&current, e.name);
+        let rel = full.strip_prefix(&prefix).unwrap_or(&full);
+        if rel.is_empty() || rel == root {
+            continue;
+        }
+        out.push(TreeEntry {
+            rel_path: rel.to_string(),
+            is_dir: e.entry_type == ScpEntryType::Directory,
+            size: e.size,
+        });
+    }
+    Ok(out)
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -502,7 +781,7 @@ mod tests {
 
     #[test]
     fn flavor_round_trip() {
-        for f in [Flavor::Gnu, Flavor::Busybox, Flavor::Bsd] {
+        for f in [Flavor::Gnu, Flavor::Busybox, Flavor::Bsd, Flavor::Posix] {
             assert_eq!(Flavor::parse(f.as_str()), Some(f));
         }
         assert_eq!(Flavor::parse("nonsense"), None);
@@ -649,5 +928,176 @@ mod tests {
     fn malformed_listing_errors() {
         assert!(parse_gnu_listing(b"f\t644\0", "/d").is_err());
         assert!(parse_statc_listing(b"directory\t755\n", "/d").is_err());
+    }
+
+    // ─── ls -l fallback parser ───────────────────────────────────────────────
+
+    #[test]
+    fn ls_listing_gnu() {
+        // GNU coreutils `ls -la`: single-space-padded columns, `total` header.
+        let raw = b"total 12\n\
+            drwxr-xr-x  3 root root 4096 Jun  7 12:30 .\n\
+            drwxr-xr-x 20 root root 4096 Jun  1 09:00 ..\n\
+            -rw-r--r--  1 root root   12 Jun  7 12:34 seed.txt\n\
+            drwxr-xr-x  2 root root 4096 Jun  7 12:30 seeddir\n\
+            lrwxrwxrwx  1 root root    8 Jun  7 12:31 link -> seed.txt\n";
+        let entries = parse_ls_listing(raw, "/home/u").unwrap();
+        // `.`/`..` and the `total` header are dropped; dirs sort first.
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].name, "seeddir");
+        assert_eq!(entries[0].entry_type, ScpEntryType::Directory);
+        assert_eq!(entries[0].path, "/home/u/seeddir");
+        assert_eq!(entries[1].name, "link");
+        assert!(entries[1].is_symlink);
+        assert_eq!(entries[1].entry_type, ScpEntryType::Symlink);
+        assert_eq!(entries[2].name, "seed.txt");
+        assert_eq!(entries[2].size, 12);
+        assert_eq!(entries[2].permissions, 0o644);
+        assert_eq!(entries[2].modified, None);
+    }
+
+    #[test]
+    fn ls_listing_busybox_wide_columns_and_year() {
+        // busybox `ls -la`: wider padding, and the `Mon DD  YYYY` form for the
+        // older `..` entry. This is the Buildroot/stripped-busybox case (#3).
+        let raw = b"total 8\n\
+            drwxr-xr-x    3 root     root          4096 Jun  7 12:30 .\n\
+            drwxr-xr-x   20 root     root          4096 Jun  1  2025 ..\n\
+            -rw-r--r--    1 root     root            12 Jun  7 12:34 seed.txt\n\
+            drwxr-xr-x    2 root     root          4096 Jun  7 12:30 seeddir\n\
+            lrwxrwxrwx    1 root     root             8 Jun  7 12:31 link -> seed.txt\n";
+        let entries = parse_ls_listing(raw, "/home/testuser").unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].name, "seeddir");
+        assert_eq!(entries[1].name, "link");
+        assert_eq!(entries[1].path, "/home/testuser/link");
+        assert_eq!(entries[2].name, "seed.txt");
+        assert_eq!(entries[2].size, 12);
+    }
+
+    #[test]
+    fn ls_listing_bsd() {
+        let raw = b"total 16\n\
+            drwxr-xr-x   4 root  wheel   128 Jun  7 12:30 .\n\
+            drwxr-xr-x  20 root  wheel   640 Jun  1 09:00 ..\n\
+            -rw-r--r--   1 root  wheel    12 Jun  7 12:34 seed.txt\n\
+            drwxr-xr-x   2 root  wheel    64 Jun  7 12:30 seeddir\n\
+            lrwxr-xr-x   1 root  wheel     8 Jun  7 12:31 link -> seed.txt\n";
+        let entries = parse_ls_listing(raw, "/home/u").unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].name, "seeddir");
+        assert_eq!(entries[2].name, "seed.txt");
+        assert_eq!(entries[2].size, 12);
+    }
+
+    #[test]
+    fn ls_listing_root_dir_paths() {
+        let raw = b"drwxr-xr-x 2 root root 4096 Jun  7 12:30 etc\n";
+        let entries = parse_ls_listing(raw, "/").unwrap();
+        assert_eq!(entries[0].path, "/etc");
+    }
+
+    #[test]
+    fn ls_listing_name_with_spaces() {
+        let raw = b"-rw-r--r-- 1 root root 0 Jun  7 12:35 a file with spaces.txt\n";
+        let entries = parse_ls_listing(raw, "/d").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "a file with spaces.txt");
+        assert_eq!(entries[0].path, "/d/a file with spaces.txt");
+    }
+
+    #[test]
+    fn ls_listing_special_perm_bits() {
+        // setuid binary + sticky dir round-trip through rwx_to_mode.
+        let raw = b"-rwsr-xr-x 1 root root 1234 Jun  7 12:34 sudo\n\
+            drwxrwxrwt 5 root root 4096 Jun  7 12:34 tmp\n";
+        let entries = parse_ls_listing(raw, "/x").unwrap();
+        // dir first
+        assert_eq!(entries[0].name, "tmp");
+        assert_eq!(entries[0].permissions, 0o1777);
+        assert_eq!(entries[1].name, "sudo");
+        assert_eq!(entries[1].permissions, 0o4755);
+    }
+
+    #[test]
+    fn ls_listing_selinux_acl_marker_tolerated() {
+        // A trailing '.'/'+' after the rwx triads (SELinux/ACL) must not break.
+        let raw = b"drwxr-xr-x. 2 root root 4096 Jun  7 12:30 sys\n\
+            -rw-rw-r--+ 1 root root   10 Jun  7 12:34 acl.txt\n";
+        let entries = parse_ls_listing(raw, "/x").unwrap();
+        assert_eq!(entries[0].name, "sys");
+        assert_eq!(entries[0].entry_type, ScpEntryType::Directory);
+        assert_eq!(entries[1].name, "acl.txt");
+        assert_eq!(entries[1].permissions, 0o664);
+    }
+
+    #[test]
+    fn ls_listing_device_file_is_other() {
+        // Device nodes show `major, minor` in the size column.
+        let raw = b"crw-rw-rw- 1 root root 1, 3 Jun  7 12:00 null\n";
+        let entries = parse_ls_listing(raw, "/dev").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "null");
+        assert_eq!(entries[0].entry_type, ScpEntryType::Other);
+    }
+
+    #[test]
+    fn ls_listing_empty_dir() {
+        // A genuinely empty directory: just the total line (or nothing).
+        assert!(parse_ls_listing(b"total 0\n", "/x").unwrap().is_empty());
+        assert!(parse_ls_listing(b"", "/x").unwrap().is_empty());
+    }
+
+    #[test]
+    fn ls_single_parses() {
+        let info = parse_ls_single(b"drwxr-xr-x 2 root root 4096 Jun  7 12:30 /home/u/dir\n")
+            .unwrap()
+            .unwrap();
+        assert_eq!(info.entry_type, ScpEntryType::Directory);
+        assert_eq!(info.mode, 0o755);
+        assert_eq!(info.size, 4096);
+    }
+
+    #[test]
+    fn ls_single_file() {
+        let info = parse_ls_single(b"-rw-r--r-- 1 root root 42 Jun  7 12:34 /home/u/f.txt\n")
+            .unwrap()
+            .unwrap();
+        assert_eq!(info.entry_type, ScpEntryType::File);
+        assert_eq!(info.size, 42);
+    }
+
+    #[test]
+    fn ls_single_missing_is_none() {
+        // stderr is captured separately; empty stdout means not found.
+        assert!(parse_ls_single(b"").unwrap().is_none());
+    }
+
+    #[test]
+    fn ls_tree_parses() {
+        // `ls -laR` output: per-directory blocks with `path:` headers.
+        let raw = b"/root:\n\
+            total 8\n\
+            drwxr-xr-x 3 root root 4096 Jun  7 12:30 .\n\
+            drwxr-xr-x 5 root root 4096 Jun  7 12:00 ..\n\
+            -rw-r--r-- 1 root root   12 Jun  7 12:34 top.txt\n\
+            drwxr-xr-x 2 root root 4096 Jun  7 12:30 sub\n\
+            \n\
+            /root/sub:\n\
+            total 4\n\
+            drwxr-xr-x 2 root root 4096 Jun  7 12:30 .\n\
+            drwxr-xr-x 3 root root 4096 Jun  7 12:30 ..\n\
+            -rw-r--r-- 1 root root   34 Jun  7 12:31 inner.txt\n";
+        let tree = parse_ls_tree(raw, "/root").unwrap();
+        // top.txt, sub, sub/inner.txt — 3 nodes, root itself excluded.
+        assert_eq!(tree.len(), 3);
+        let top = tree.iter().find(|t| t.rel_path == "top.txt").unwrap();
+        assert!(!top.is_dir);
+        assert_eq!(top.size, 12);
+        let sub = tree.iter().find(|t| t.rel_path == "sub").unwrap();
+        assert!(sub.is_dir);
+        let inner = tree.iter().find(|t| t.rel_path == "sub/inner.txt").unwrap();
+        assert!(!inner.is_dir);
+        assert_eq!(inner.size, 34);
     }
 }

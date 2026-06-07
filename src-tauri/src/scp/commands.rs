@@ -52,10 +52,12 @@ pub async fn scp_open(
         ));
     }
 
-    // Detect the remote userland once so listings use the right command.
+    // Detect the remote userland once so listings use the right command. If the
+    // probe itself errors, fall back to the universal `ls`-based Posix path
+    // rather than Default (Gnu), which would hard-fail on `find -printf`.
     let flavor = exec::detect_flavor(handle.clone())
         .await
-        .unwrap_or_default();
+        .unwrap_or(super::listing::Flavor::Posix);
 
     let scp_id = uuid::Uuid::new_v4().to_string();
     scp_manager.insert_session(

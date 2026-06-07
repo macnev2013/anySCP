@@ -200,13 +200,22 @@ pub async fn copy(
 }
 
 /// Detect the remote's userland once. GNU has `find -printf`; busybox lacks
-/// it but keeps `stat -c`; BSD/macOS have neither (only `stat -f`).
+/// it but keeps `stat -c`; BSD/macOS have neither but have `stat -f`.
+///
+/// Crucially, each branch is a *positive* capability probe, including BSD —
+/// stripped busybox / Buildroot builds compile the `stat` applet out entirely,
+/// so `stat -c` AND `stat -f` both fail there. Such hosts must NOT be assumed
+/// to be BSD (which would route listings to `stat -f`, which also fails);
+/// instead they fall through to the universal `ls`-based [`Flavor::Posix`]
+/// path. Likewise an inconclusive probe defaults to `Posix`, not `Gnu`, since
+/// `ls` works everywhere whereas a wrong `Gnu` guess hard-fails on `-printf`.
 pub async fn detect_flavor(handle: SshHandle) -> Result<Flavor, ScpError> {
     let probe = "if find / -maxdepth 0 -printf '' >/dev/null 2>&1; then echo gnu; \
                  elif stat -c '%s' / >/dev/null 2>&1; then echo busybox; \
-                 else echo bsd; fi";
+                 elif stat -f '%z' / >/dev/null 2>&1; then echo bsd; \
+                 else echo posix; fi";
     let out = ssh_exec_str(handle, probe).await?;
-    Ok(Flavor::parse(&out).unwrap_or(Flavor::Gnu))
+    Ok(Flavor::parse(&out).unwrap_or(Flavor::Posix))
 }
 
 /// Stat a single path. Returns None when the path doesn't exist.
@@ -226,15 +235,36 @@ pub async fn stat(
             fmt = listing::STATF_FMT,
             p = shell_quote(path)
         ),
+        // No usable `stat` applet — derive from `ls -lad`.
+        Flavor::Posix => {
+            return stat_ls(handle, path).await;
+        }
     };
-    let (stdout, _, exit) = ssh_exec(handle, &cmd).await?;
+    let (stdout, _, exit) = ssh_exec(handle.clone(), &cmd).await?;
     if exit != 0 {
-        return Ok(None);
+        // The flavor-specific `stat` failed. It may genuinely not exist, but on
+        // a misdetected host the command itself is unsupported — confirm with
+        // the portable `ls` path before reporting "not found".
+        return stat_ls(handle, path).await;
     }
     match flavor {
         Flavor::Gnu | Flavor::Busybox => listing::parse_statc_single(&stdout),
         Flavor::Bsd => listing::parse_statf_single(&stdout),
+        Flavor::Posix => unreachable!("handled above"),
     }
+}
+
+/// Stat a single path via `ls -lad` (universal fallback). Returns `None` when
+/// the path doesn't exist (empty stdout); a parse of any other failure is
+/// surfaced as an error by the parser.
+async fn stat_ls(handle: SshHandle, path: &str) -> Result<Option<StatInfo>, ScpError> {
+    let cmd = format!(
+        "{args} {p} 2>/dev/null",
+        args = listing::LS_STAT_ARGS,
+        p = shell_quote(path)
+    );
+    let (stdout, _, _exit) = ssh_exec(handle, &cmd).await?;
+    listing::parse_ls_single(&stdout)
 }
 
 /// Whether a remote path exists. Used by deduplicate_name for copy/move.
@@ -258,7 +288,35 @@ pub async fn exists(
 /// - GNU: one `find -printf` pass (NUL-delimited).
 /// - busybox: `find … -exec stat -c …` (busybox find has no `-printf`).
 /// - BSD/macOS: `find … -exec stat -f …`.
+/// - Posix: `ls -la` (works anywhere; see [`list_dir_ls`]).
+///
+/// For the three machine-readable flavors, a failure of the native command
+/// (unsupported `find`/`stat` features, misdetection, …) transparently falls
+/// back to the universal `ls -la` path rather than surfacing an empty listing
+/// — this is what fixes SCP browsing on stripped busybox / Buildroot hosts.
 pub async fn list_dir(
+    handle: SshHandle,
+    flavor: Flavor,
+    dir: &str,
+) -> Result<Vec<ScpEntry>, ScpError> {
+    if flavor == Flavor::Posix {
+        return list_dir_ls(handle, dir).await;
+    }
+    match list_dir_native(handle.clone(), flavor, dir).await {
+        Ok(entries) => Ok(entries),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                flavor = %flavor.as_str(),
+                "native SCP listing failed; falling back to `ls -la`"
+            );
+            list_dir_ls(handle, dir).await
+        }
+    }
+}
+
+/// The fast, machine-readable listing for GNU/busybox/BSD flavors.
+async fn list_dir_native(
     handle: SshHandle,
     flavor: Flavor,
     dir: &str,
@@ -289,13 +347,59 @@ pub async fn list_dir(
             let stdout = ssh_exec_ok(handle, &cmd).await?;
             listing::parse_statf_listing(&stdout, dir)
         }
+        Flavor::Posix => unreachable!("Posix is handled by list_dir before dispatch"),
     }
+}
+
+/// Universal `ls -la`-based listing (the WinSCP approach). Used directly for
+/// [`Flavor::Posix`] and as the fallback for the other flavors.
+///
+/// `ls` prints whatever entries it can even when some are unreadable, so a
+/// non-zero exit is only fatal when it yielded nothing — that distinguishes a
+/// genuinely empty directory (exit 0, no rows) from one we can't read at all
+/// (permission denied / no such file: non-zero exit, empty stdout, stderr set).
+async fn list_dir_ls(handle: SshHandle, dir: &str) -> Result<Vec<ScpEntry>, ScpError> {
+    let cmd = format!(
+        "{args} {q}",
+        args = listing::LS_LISTING_ARGS,
+        q = shell_quote(dir)
+    );
+    let (stdout, stderr, exit) = ssh_exec(handle, &cmd).await?;
+    let entries = listing::parse_ls_listing(&stdout, dir)?;
+    if entries.is_empty() && exit != 0 {
+        return Err(ScpError::CommandFailed {
+            exit_code: exit,
+            stderr: String::from_utf8_lossy(&stderr).trim().to_string(),
+        });
+    }
+    Ok(entries)
 }
 
 /// Recursively enumerate everything under `dir` (excluding `dir` itself),
 /// each node's path relative to `dir`. Ordering is not guaranteed — callers
 /// that need dirs-before-files should sort by depth.
 pub async fn enumerate_tree(
+    handle: SshHandle,
+    flavor: Flavor,
+    dir: &str,
+) -> Result<Vec<TreeEntry>, ScpError> {
+    if flavor == Flavor::Posix {
+        return enumerate_tree_ls(handle, dir).await;
+    }
+    match enumerate_tree_native(handle.clone(), flavor, dir).await {
+        Ok(tree) => Ok(tree),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                flavor = %flavor.as_str(),
+                "native SCP tree walk failed; falling back to `ls -laR`"
+            );
+            enumerate_tree_ls(handle, dir).await
+        }
+    }
+}
+
+async fn enumerate_tree_native(
     handle: SshHandle,
     flavor: Flavor,
     dir: &str,
@@ -326,7 +430,27 @@ pub async fn enumerate_tree(
             let stdout = ssh_exec_ok(handle, &cmd).await?;
             listing::parse_statf_tree(&stdout, dir)
         }
+        Flavor::Posix => unreachable!("Posix is handled by enumerate_tree before dispatch"),
     }
+}
+
+/// Universal recursive walk via `ls -laR`. Same empty-vs-unreadable handling as
+/// [`list_dir_ls`].
+async fn enumerate_tree_ls(handle: SshHandle, dir: &str) -> Result<Vec<TreeEntry>, ScpError> {
+    let cmd = format!(
+        "{args} {q}",
+        args = listing::LS_TREE_ARGS,
+        q = shell_quote(dir)
+    );
+    let (stdout, stderr, exit) = ssh_exec(handle, &cmd).await?;
+    let tree = listing::parse_ls_tree(&stdout, dir)?;
+    if tree.is_empty() && exit != 0 {
+        return Err(ScpError::CommandFailed {
+            exit_code: exit,
+            stderr: String::from_utf8_lossy(&stderr).trim().to_string(),
+        });
+    }
+    Ok(tree)
 }
 
 /// Sum (total_bytes, file_count) under a remote directory in one walk.

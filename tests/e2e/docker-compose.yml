@@ -92,6 +92,18 @@ services:
     container_name: anyscp-e2e-sshd-scp-busybox
     networks: [e2e]
 
+  # Stripped-busybox SCP-only target — busybox with NO `stat` applet (and no GNU
+  # tools). Reproduces issue #3 (Buildroot 2020.02.1): neither `stat -c` nor
+  # `stat -f` exists, so listing must fall through to the universal `ls -la`
+  # Posix path. Without that fallback the Explorer connects but lists no files.
+  sshd-scp-busybox-nostat:
+    build:
+      context: ../scp-server-busybox-nostat
+      dockerfile: Dockerfile
+    image: anyscp-test-scp-busybox-nostat:latest
+    container_name: anyscp-e2e-sshd-scp-busybox-nostat
+    networks: [e2e]
+
   # ─── ProxyJump / tunnel pair ────────────────────────────────────────────────
   # Proves a connection is genuinely tunnelled. `sshd-bastion` bridges the
   # runner-reachable `e2e` network and an isolated `e2e-internal` network.
@@ -272,6 +284,8 @@ services:
         condition: service_started
       sshd-scp-busybox:
         condition: service_started
+      sshd-scp-busybox-nostat:
+        condition: service_started
       sshd-bastion:
         condition: service_started
       sshd-tunnel-target:
@@ -293,6 +307,8 @@ services:
       SSHD_SCP_PORT: "2222"
       SSHD_SCP_BUSYBOX_HOST: sshd-scp-busybox
       SSHD_SCP_BUSYBOX_PORT: "2222"
+      SSHD_SCP_BUSYBOX_NOSTAT_HOST: sshd-scp-busybox-nostat
+      SSHD_SCP_BUSYBOX_NOSTAT_PORT: "2222"
       # ProxyJump pair: bastion is runner-reachable; the tunnel target is not.
       SSHD_BASTION_HOST: sshd-bastion
       SSHD_BASTION_PORT: "2222"
