@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useSettingsStore } from "../../stores/settings-store";
 import { CustomSelect, type SelectOption } from "../shared/CustomSelect";
 import { useUpdaterStore } from "../../stores/updater-store";
+import { toast } from "../../stores/toast-store";
 import { RefreshCw, CheckCircle2, AlertCircle, Palette, SquareTerminal, ArrowUpDown, Info, ExternalLink, Check, FileCode, Plus, Trash2, FolderOpen, Star, Search } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { CursorStyle, ThemeMode, EditorConfig } from "../../stores/settings-store";
@@ -34,6 +35,8 @@ const TEXT_INPUT_CLASS = [
   "outline-none focus:border-border-focus focus:ring-2 focus:ring-ring",
   "transition-[border-color,box-shadow] duration-[var(--duration-fast)]",
 ].join(" ");
+
+const FIELD_LABEL_CLASS = "block text-[length:var(--text-xs)] font-medium text-text-secondary mb-1.5";
 
 const REPO_URL = "https://github.com/macnev2013/anySCP";
 
@@ -619,35 +622,39 @@ function EditorsSettings() {
 
   const [detected, setDetected] = useState<DetectedEditor[] | null>(null);
   const [detecting, setDetecting] = useState(false);
+  const [customOpen, setCustomOpen] = useState(false);
+
+  const configuredPaths = new Set(editors.map((e) => e.execPath));
+  const newlyDetected = (detected ?? []).filter((e) => !configuredPaths.has(e.execPath));
 
   const scan = useCallback(async () => {
     setDetecting(true);
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      setDetected(await invoke<DetectedEditor[]>("detect_editors"));
+      const found = await invoke<DetectedEditor[]>("detect_editors");
+      setDetected(found);
+      // Feedback when the scan adds nothing new (the common case after the
+      // first-run auto-seed) so the button doesn't feel inert.
+      const configured = new Set(useSettingsStore.getState().editors.map((e) => e.execPath));
+      if (found.filter((e) => !configured.has(e.execPath)).length === 0) {
+        toast.info(found.length === 0
+          ? "No editors found on this computer."
+          : "All detected editors are already added.");
+      }
     } catch {
-      setDetected([]);
+      toast.error("Couldn't scan for editors.");
     } finally {
       setDetecting(false);
     }
   }, []);
 
-  // Auto-scan once when the user has nothing configured yet, so the section
-  // isn't empty on first visit.
-  useEffect(() => {
-    if (editors.length === 0 && detected === null) void scan();
-  }, [editors.length, detected, scan]);
-
-  const configuredPaths = new Set(editors.map((e) => e.execPath));
-  const newlyDetected = (detected ?? []).filter((e) => !configuredPaths.has(e.execPath));
-
   return (
     <>
-      <SettingsGroup label="Your editors">
+      <SettingsGroup label="Editors">
         {editors.length === 0 ? (
           <div className="px-4 py-6 rounded-xl bg-bg-surface border border-border/50 text-center">
             <p className="text-[length:var(--text-sm)] text-text-muted">
-              No editors configured yet. Add a detected one below, or set up a custom editor.
+              No editors configured. Scan for installed editors, or add one manually.
             </p>
           </div>
         ) : (
@@ -661,37 +668,33 @@ function EditorsSettings() {
                 onRemove={() => removeEditor(ed.id)}
               />
             ))}
-            <p className="px-1 text-[length:var(--text-xs)] text-text-muted">
-              The starred editor is used by “Edit” in the file browser; the rest appear under “Open With”.
-            </p>
           </div>
         )}
-      </SettingsGroup>
 
-      <SettingsGroup label="Detected on this computer">
-        <div className="flex items-center justify-between gap-4 px-4 py-3 rounded-xl bg-bg-surface border border-border/50">
-          <div>
-            <p className={LABEL_CLASS}>Scan for installed editors</p>
-            <p className={DESC_CLASS}>Looks for common editors like VS Code, Sublime Text, and more</p>
-          </div>
+        {/* Actions: the two ways to add an editor. */}
+        <div className="flex items-center gap-2 mt-3">
           <button onClick={() => void scan()} disabled={detecting} className={BTN_SECONDARY}>
             {detecting
               ? <RefreshCw size={13} strokeWidth={2} className="motion-safe:animate-spin" />
               : <Search size={13} strokeWidth={2} />}
-            {detecting ? "Scanning…" : "Scan"}
+            {detecting ? "Scanning…" : "Scan for editors"}
+          </button>
+          <button onClick={() => setCustomOpen(true)} className={BTN_SECONDARY}>
+            <Plus size={13} strokeWidth={2} /> Add custom editor
           </button>
         </div>
 
-        {detected !== null && newlyDetected.length === 0 && (
+        {editors.length > 0 && (
           <p className="px-1 mt-2 text-[length:var(--text-xs)] text-text-muted">
-            {detected.length === 0
-              ? "No editors detected. Add one manually below."
-              : "All detected editors have been added."}
+            The starred editor is used by “Edit”; the rest appear under “Open With”.
           </p>
         )}
+      </SettingsGroup>
 
-        {newlyDetected.length > 0 && (
-          <div className="flex flex-col gap-2 mt-2">
+      {/* Detected-but-not-added editors appear only after a scan turns some up. */}
+      {newlyDetected.length > 0 && (
+        <SettingsGroup label="Found on this computer">
+          <div className="flex flex-col gap-2">
             {newlyDetected.map((ed) => (
               <div
                 key={ed.execPath}
@@ -712,12 +715,10 @@ function EditorsSettings() {
               </div>
             ))}
           </div>
-        )}
-      </SettingsGroup>
+        </SettingsGroup>
+      )}
 
-      <SettingsGroup label="Add a custom editor">
-        <AddEditorForm onAdd={addEditor} />
-      </SettingsGroup>
+      <AddEditorModal open={customOpen} onClose={() => setCustomOpen(false)} onAdd={addEditor} />
     </>
   );
 }
@@ -772,89 +773,163 @@ function EditorRow({ editor, isDefault, onMakeDefault, onRemove }: {
   );
 }
 
-function AddEditorForm({ onAdd }: { onAdd: (editor: Omit<EditorConfig, "id">) => void }) {
+/** Modal form for adding a custom editor — opened from the Editors section so
+ *  the multi-field form isn't always taking up space on the page. */
+function AddEditorModal({ open, onClose, onAdd }: {
+  open: boolean;
+  onClose: () => void;
+  onAdd: (editor: Omit<EditorConfig, "id">) => void;
+}) {
   const [name, setName] = useState("");
   const [execPath, setExecPath] = useState("");
   const [args, setArgs] = useState("{path}");
+  const [visible, setVisible] = useState(false);
+
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  // Reset fields and play the open transition each time it's shown.
+  useEffect(() => {
+    if (open) {
+      setName("");
+      setExecPath("");
+      setArgs("{path}");
+      requestAnimationFrame(() => setVisible(true));
+    } else {
+      setVisible(false);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (visible) requestAnimationFrame(() => nameRef.current?.focus());
+  }, [visible]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
 
   const browse = useCallback(async () => {
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const picked = await open({ multiple: false, directory: false, title: "Select editor executable" });
+      const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
+      const picked = await openDialog({ multiple: false, directory: false, title: "Select editor executable" });
       if (typeof picked === "string") {
         setExecPath(picked);
-        // Pre-fill the name from the file/app name if it's still blank.
-        if (!name.trim()) {
-          const base = picked.split(/[\\/]/).pop() ?? "";
-          setName(base.replace(/\.(app|exe)$/i, ""));
-        }
+        // Pre-fill the name from the file/app name when it's still blank.
+        setName((cur) => (cur.trim() ? cur : (picked.split(/[\\/]/).pop() ?? "").replace(/\.(app|exe)$/i, "")));
       }
     } catch { /* dialog cancelled / unavailable */ }
-  }, [name]);
+  }, []);
 
   const canAdd = name.trim().length > 0 && execPath.trim().length > 0;
 
-  const submit = () => {
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
     if (!canAdd) return;
     onAdd({ name: name.trim(), execPath: execPath.trim(), args: args.trim() || "{path}" });
-    setName("");
-    setExecPath("");
-    setArgs("{path}");
+    onClose();
   };
 
+  if (!open) return null;
+
   return (
-    <div className="flex flex-col gap-3 px-4 py-4 rounded-xl bg-bg-surface border border-border/50">
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor="ed-name" className={LABEL_CLASS}>Name</label>
-        <input
-          id="ed-name"
-          data-testid="ed-name"
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Sublime Text"
-          className={TEXT_INPUT_CLASS}
-        />
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor="ed-path" className={LABEL_CLASS}>Executable path</label>
-        <div className="flex items-center gap-2">
-          <input
-            id="ed-path"
-            data-testid="ed-path"
-            type="text"
-            value={execPath}
-            onChange={(e) => setExecPath(e.target.value)}
-            placeholder="/path/to/editor"
-            className={TEXT_INPUT_CLASS}
-          />
-          <button type="button" onClick={() => void browse()} className={BTN_SECONDARY}>
-            <FolderOpen size={13} strokeWidth={2} /> Browse
-          </button>
+    <div
+      ref={backdropRef}
+      onClick={(e) => { if (e.target === backdropRef.current) onClose(); }}
+      className={[
+        "fixed inset-0 z-50 flex items-start justify-center pt-[12vh]",
+        "transition-[background-color,backdrop-filter] duration-[var(--duration-base)]",
+        visible ? "bg-black/50 backdrop-blur-sm" : "bg-black/0 backdrop-blur-none",
+      ].join(" ")}
+    >
+      <div
+        className={[
+          "w-full max-w-md rounded-xl bg-bg-overlay border border-border p-6 shadow-[var(--shadow-lg)]",
+          "transition-[opacity,transform] duration-[var(--duration-slow)] ease-[var(--ease-expo-out)]",
+          visible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-3",
+        ].join(" ")}
+      >
+        <div className="flex items-center gap-3 mb-5">
+          <div className="flex items-center justify-center w-10 h-10 rounded-lg shrink-0 bg-accent/15">
+            <FileCode size={20} strokeWidth={1.8} className="text-accent" aria-hidden="true" />
+          </div>
+          <h2 className="text-[length:var(--text-lg)] font-semibold text-text-primary">Add custom editor</h2>
         </div>
-      </div>
 
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor="ed-args" className={LABEL_CLASS}>Arguments</label>
-        <input
-          id="ed-args"
-          data-testid="ed-args"
-          type="text"
-          value={args}
-          onChange={(e) => setArgs(e.target.value)}
-          placeholder="{path}"
-          className={TEXT_INPUT_CLASS}
-        />
-        <p className={DESC_CLASS}>
-          Use <code className="px-1 rounded bg-bg-base">{"{path}"}</code> where the file should go. If omitted, it's added at the end.
-        </p>
-      </div>
+        <form onSubmit={submit} className="flex flex-col gap-4">
+          <div>
+            <label htmlFor="ed-name" className={FIELD_LABEL_CLASS}>Name</label>
+            <input
+              ref={nameRef}
+              id="ed-name"
+              data-testid="ed-name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Sublime Text"
+              className={TEXT_INPUT_CLASS}
+            />
+          </div>
 
-      <div className="flex justify-end">
-        <button type="button" onClick={submit} disabled={!canAdd} className={BTN_SECONDARY}>
-          <Plus size={13} strokeWidth={2} /> Add editor
-        </button>
+          <div>
+            <label htmlFor="ed-path" className={FIELD_LABEL_CLASS}>Executable path</label>
+            <div className="flex items-center gap-2">
+              <input
+                id="ed-path"
+                data-testid="ed-path"
+                type="text"
+                value={execPath}
+                onChange={(e) => setExecPath(e.target.value)}
+                placeholder="/path/to/editor"
+                className={TEXT_INPUT_CLASS}
+              />
+              <button type="button" onClick={() => void browse()} className={BTN_SECONDARY}>
+                <FolderOpen size={13} strokeWidth={2} /> Browse
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor="ed-args" className={FIELD_LABEL_CLASS}>Arguments</label>
+            <input
+              id="ed-args"
+              data-testid="ed-args"
+              type="text"
+              value={args}
+              onChange={(e) => setArgs(e.target.value)}
+              placeholder="{path}"
+              className={TEXT_INPUT_CLASS}
+            />
+            <p className={DESC_CLASS}>
+              Use <code className="px-1 rounded bg-bg-base">{"{path}"}</code> where the file should go. If omitted, it's added at the end.
+            </p>
+          </div>
+
+          <div className="flex justify-end gap-2 mt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-[length:var(--text-sm)] text-text-secondary hover:text-text-primary rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={!canAdd}
+              className={[
+                "px-4 py-2 text-[length:var(--text-sm)] font-medium rounded-lg",
+                "text-text-inverse bg-accent hover:bg-accent-hover",
+                "disabled:opacity-50 disabled:cursor-not-allowed",
+                "transition-colors duration-[var(--duration-fast)]",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg-overlay",
+              ].join(" ")}
+            >
+              Add editor
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );
