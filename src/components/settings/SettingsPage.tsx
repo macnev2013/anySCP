@@ -29,14 +29,15 @@ const BTN_SECONDARY = [
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
 ].join(" ");
 
+// Mirrors the input/label styling used by the Host modal so dialogs feel uniform.
 const TEXT_INPUT_CLASS = [
-  "w-full px-2.5 py-1.5 rounded-lg text-[length:var(--text-sm)]",
+  "w-full px-3 py-2 rounded-lg text-[length:var(--text-sm)]",
   "bg-bg-base border border-border text-text-primary placeholder:text-text-muted",
   "outline-none focus:border-border-focus focus:ring-2 focus:ring-ring",
   "transition-[border-color,box-shadow] duration-[var(--duration-fast)]",
 ].join(" ");
 
-const FIELD_LABEL_CLASS = "block text-[length:var(--text-xs)] font-medium text-text-secondary mb-1.5";
+const FIELD_LABEL_CLASS = "block text-[length:var(--text-xs)] font-medium text-text-secondary mb-1";
 
 const REPO_URL = "https://github.com/macnev2013/anySCP";
 
@@ -839,26 +840,38 @@ function AddEditorModal({ open, onClose, onAdd }: {
       ref={backdropRef}
       onClick={(e) => { if (e.target === backdropRef.current) onClose(); }}
       className={[
-        "fixed inset-0 z-50 flex items-start justify-center pt-[12vh]",
+        "fixed inset-0 z-50 flex items-start justify-center pt-[8vh]",
         "transition-[background-color,backdrop-filter] duration-[var(--duration-base)]",
         visible ? "bg-black/50 backdrop-blur-sm" : "bg-black/0 backdrop-blur-none",
       ].join(" ")}
     >
-      <div
+      <form
+        onSubmit={submit}
+        data-testid="editor-modal"
         className={[
-          "w-full max-w-md rounded-xl bg-bg-overlay border border-border p-6 shadow-[var(--shadow-lg)]",
+          "w-full max-w-md rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)]",
+          "flex flex-col max-h-[84vh]",
           "transition-[opacity,transform] duration-[var(--duration-slow)] ease-[var(--ease-expo-out)]",
           visible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-3",
         ].join(" ")}
       >
-        <div className="flex items-center gap-3 mb-5">
-          <div className="flex items-center justify-center w-10 h-10 rounded-lg shrink-0 bg-accent/15">
-            <FileCode size={20} strokeWidth={1.8} className="text-accent" aria-hidden="true" />
-          </div>
-          <h2 className="text-[length:var(--text-lg)] font-semibold text-text-primary">Add custom editor</h2>
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border shrink-0">
+          <h2 className="text-[length:var(--text-lg)] font-semibold text-text-primary">Add Editor</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M1 1l12 12M13 1L1 13" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+          </button>
         </div>
 
-        <form onSubmit={submit} className="flex flex-col gap-4">
+        {/* Body */}
+        <div className="px-6 py-4 overflow-y-auto flex-1 min-h-0 flex flex-col gap-4">
           <div>
             <label htmlFor="ed-name" className={FIELD_LABEL_CLASS}>Name</label>
             <input
@@ -885,7 +898,11 @@ function AddEditorModal({ open, onClose, onAdd }: {
                 placeholder="/path/to/editor"
                 className={TEXT_INPUT_CLASS}
               />
-              <button type="button" onClick={() => void browse()} className={BTN_SECONDARY}>
+              <button
+                type="button"
+                onClick={() => void browse()}
+                className="inline-flex items-center gap-1.5 px-3 py-2 shrink-0 rounded-lg text-[length:var(--text-sm)] font-medium bg-bg-base border border-border text-text-secondary hover:text-text-primary hover:border-border-focus hover:bg-bg-overlay transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
                 <FolderOpen size={13} strokeWidth={2} /> Browse
               </button>
             </div>
@@ -906,31 +923,26 @@ function AddEditorModal({ open, onClose, onAdd }: {
               Use <code className="px-1 rounded bg-bg-base">{"{path}"}</code> where the file should go. If omitted, it's added at the end.
             </p>
           </div>
+        </div>
 
-          <div className="flex justify-end gap-2 mt-1">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-[length:var(--text-sm)] text-text-secondary hover:text-text-primary rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={!canAdd}
-              className={[
-                "px-4 py-2 text-[length:var(--text-sm)] font-medium rounded-lg",
-                "text-text-inverse bg-accent hover:bg-accent-hover",
-                "disabled:opacity-50 disabled:cursor-not-allowed",
-                "transition-colors duration-[var(--duration-fast)]",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg-overlay",
-              ].join(" ")}
-            >
-              Add editor
-            </button>
-          </div>
-        </form>
-      </div>
+        {/* Footer */}
+        <div className="px-6 pb-5 pt-3 flex items-center justify-end gap-2 border-t border-border shrink-0">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-[length:var(--text-sm)] text-text-secondary hover:text-text-primary rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={!canAdd}
+            className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-text-inverse bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg-overlay"
+          >
+            Add editor
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
