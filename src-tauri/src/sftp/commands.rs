@@ -817,9 +817,7 @@ pub async fn sftp_edit_external(
     let editor = editor
         .or_else(crate::editors::resolve_default)
         .ok_or_else(|| {
-            SftpError::LocalIoError(
-                "No editor found. Add one in Settings → Editors.".to_string(),
-            )
+            SftpError::LocalIoError("No editor found. Add one in Settings → Editors.".to_string())
         })?;
     crate::editors::launch(&editor, &local_path).map_err(SftpError::LocalIoError)?;
 

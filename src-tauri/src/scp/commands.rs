@@ -447,9 +447,7 @@ pub async fn scp_edit_external(
     let editor = editor
         .or_else(crate::editors::resolve_default)
         .ok_or_else(|| {
-            ScpError::LocalIoError(
-                "No editor found. Add one in Settings → Editors.".to_string(),
-            )
+            ScpError::LocalIoError("No editor found. Add one in Settings → Editors.".to_string())
         })?;
     crate::editors::launch(&editor, &local_path).map_err(ScpError::LocalIoError)?;
 

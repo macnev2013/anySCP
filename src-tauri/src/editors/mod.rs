@@ -76,7 +76,16 @@ const fn spec(
     win_paths: &'static [&'static str],
     win_bins: &'static [&'static str],
 ) -> EditorSpec {
-    EditorSpec { name, mac_apps, linux_bins, linux_flatpak_ids, win_paths, win_bins, args: "{path}", terminal: false }
+    EditorSpec {
+        name,
+        mac_apps,
+        linux_bins,
+        linux_flatpak_ids,
+        win_paths,
+        win_bins,
+        args: "{path}",
+        terminal: false,
+    }
 }
 
 /// Same as `spec` but flagged as a terminal/TUI editor.
@@ -89,7 +98,16 @@ const fn term_spec(
     win_bins: &'static [&'static str],
     args: &'static str,
 ) -> EditorSpec {
-    EditorSpec { name, mac_apps, linux_bins, linux_flatpak_ids, win_paths, win_bins, args, terminal: true }
+    EditorSpec {
+        name,
+        mac_apps,
+        linux_bins,
+        linux_flatpak_ids,
+        win_paths,
+        win_bins,
+        args,
+        terminal: true,
+    }
 }
 
 /// Known editors, ordered roughly by popularity. GUI editors are auto-detected;
@@ -219,7 +237,11 @@ pub fn detect() -> Vec<EditorConfig> {
             .flat_map(|app| dirs.iter().map(move |d| d.join(app)))
             .find(|p| p.exists())
         {
-            out.push(EditorConfig { name: s.name.into(), exec_path: path.to_string_lossy().into(), args: s.args.into() });
+            out.push(EditorConfig {
+                name: s.name.into(),
+                exec_path: path.to_string_lossy().into(),
+                args: s.args.into(),
+            });
         }
     }
     dedup(out)
@@ -242,7 +264,11 @@ pub fn detect() -> Vec<EditorConfig> {
             .chain(s.linux_flatpak_ids.iter())
             .find_map(|name| which_in(&dirs, name));
         if let Some(path) = found {
-            out.push(EditorConfig { name: s.name.into(), exec_path: path.to_string_lossy().into(), args: s.args.into() });
+            out.push(EditorConfig {
+                name: s.name.into(),
+                exec_path: path.to_string_lossy().into(),
+                args: s.args.into(),
+            });
         }
     }
     dedup(out)
@@ -262,7 +288,11 @@ pub fn detect() -> Vec<EditorConfig> {
             .find_map(|p| resolve_win_path(p))
             .or_else(|| s.win_bins.iter().find_map(|b| which_windows(b)));
         if let Some(path) = found {
-            out.push(EditorConfig { name: s.name.into(), exec_path: path.to_string_lossy().into(), args: s.args.into() });
+            out.push(EditorConfig {
+                name: s.name.into(),
+                exec_path: path.to_string_lossy().into(),
+                args: s.args.into(),
+            });
         }
     }
     dedup(out)
@@ -381,7 +411,7 @@ fn resolve_glob(path: &str) -> Vec<PathBuf> {
         let pb = PathBuf::from(path);
         return if pb.exists() { vec![pb] } else { vec![] };
     }
-    let segments: Vec<&str> = path.split(|c| c == '/' || c == '\\').collect();
+    let segments: Vec<&str> = path.split(['/', '\\']).collect();
     // Seed the search base from the first segment (root / drive / relative).
     let first = segments[0];
     let mut current: Vec<PathBuf> = if first.is_empty() {
@@ -455,7 +485,14 @@ fn wildcard_match(pattern: &str, name: &str) -> bool {
 /// editor, preferring the popular IDEs (and the VS Code family the old
 /// hard-coded path targeted).
 pub fn resolve_default() -> Option<EditorConfig> {
-    const PREFERRED: &[&str] = &["VS Code", "VSCodium", "Cursor", "Windsurf", "Sublime Text", "Zed"];
+    const PREFERRED: &[&str] = &[
+        "VS Code",
+        "VSCodium",
+        "Cursor",
+        "Windsurf",
+        "Sublime Text",
+        "Zed",
+    ];
     let detected = detect();
     detected
         .iter()
@@ -570,13 +607,19 @@ mod tests {
     #[test]
     fn substitutes_path_placeholder() {
         assert_eq!(build_args("{path}", "/tmp/a.txt"), vec!["/tmp/a.txt"]);
-        assert_eq!(build_args("-n -w {path}", "/tmp/a.txt"), vec!["-n", "-w", "/tmp/a.txt"]);
+        assert_eq!(
+            build_args("-n -w {path}", "/tmp/a.txt"),
+            vec!["-n", "-w", "/tmp/a.txt"]
+        );
     }
 
     #[test]
     fn appends_path_when_no_placeholder() {
         assert_eq!(build_args("", "/tmp/a.txt"), vec!["/tmp/a.txt"]);
-        assert_eq!(build_args("--reuse-window", "/tmp/a.txt"), vec!["--reuse-window", "/tmp/a.txt"]);
+        assert_eq!(
+            build_args("--reuse-window", "/tmp/a.txt"),
+            vec!["--reuse-window", "/tmp/a.txt"]
+        );
     }
 
     #[test]
@@ -589,7 +632,10 @@ mod tests {
 
     #[test]
     fn placeholder_inside_quoted_token() {
-        assert_eq!(build_args("\"{path}\"", "/tmp/a b.txt"), vec!["/tmp/a b.txt"]);
+        assert_eq!(
+            build_args("\"{path}\"", "/tmp/a b.txt"),
+            vec!["/tmp/a b.txt"]
+        );
     }
 
     #[test]
