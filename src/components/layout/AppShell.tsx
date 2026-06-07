@@ -290,7 +290,7 @@ export function AppShell() {
       <Sidebar />
 
       {/* Main content */}
-      <div className="flex flex-col flex-1 min-w-0 rounded-xl overflow-hidden">
+      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         {/* Unified tab bar — always shown */}
         <UnifiedTabBar />
 

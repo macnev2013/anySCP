@@ -82,7 +82,7 @@ export function UnifiedTabBar() {
   return (
     <div className="flex items-center h-[var(--tabbar-height)] no-select px-2">
       <div
-        className="flex items-center gap-1.5 overflow-x-auto overflow-y-hidden flex-1 min-w-0"
+        className="flex items-center gap-2.5 overflow-x-auto overflow-y-hidden flex-1 min-w-0"
         role="tablist"
         aria-label="Open sessions"
       >
@@ -133,7 +133,7 @@ export function UnifiedTabBar() {
               title={tab.label + (paneCount > 1 ? ` (${paneCount} panes)` : "")}
               className={[
                 "group relative flex items-center gap-2 px-3.5 h-[30px] shrink-0 max-w-[220px]",
-                "text-[length:var(--text-sm)] leading-none rounded-lg cursor-pointer",
+                "text-[length:var(--text-sm)] leading-none rounded-md cursor-pointer",
                 "transition-[color,background-color] duration-[var(--duration-fast)]",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 isActive
