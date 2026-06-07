@@ -141,6 +141,9 @@ AnySCP is a free, open-source desktop application that combines an SSH terminal,
 
 > **macOS note**: If you see "app is damaged", run: `xattr -cr /Applications/anyscp.app`
 
+### Updating
+Already have anySCP installed? Go to **Settings → About & Updates** and click **Check** to update in-app — or turn on **Automatic Updates** to install new releases automatically.
+
 ### Requirements
 - macOS 11+, Windows 10+, or Linux (Ubuntu 22.04+)
 - For SFTP: SSH access to remote servers
