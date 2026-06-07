@@ -628,7 +628,7 @@ function DataSettings() {
         multiple: false,
         directory: false,
         title: "Select anySCP backup",
-        filters: [{ name: "anySCP backup", extensions: ["json"] }],
+        filters: [{ name: "anySCP backup", extensions: ["ascpbak"] }],
       });
       if (typeof picked === "string") setImportPath(picked);
     } catch { /* dialog cancelled / unavailable */ }
@@ -759,8 +759,8 @@ function BackupPasswordModal({ mode, open, path, onClose }: {
         const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
         const dest = await save({
           title: "Save anySCP backup",
-          defaultPath: `anyscp-backup-${stamp}.json`,
-          filters: [{ name: "anySCP backup", extensions: ["json"] }],
+          defaultPath: `anyscp-backup-${stamp}.ascpbak`,
+          filters: [{ name: "anySCP backup", extensions: ["ascpbak"] }],
         });
         if (!dest) { setBusy(false); return; } // dialog cancelled — keep the modal open
         await invoke("backup_export", { password: pw, path: dest });

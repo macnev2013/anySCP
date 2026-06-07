@@ -1,17 +1,27 @@
 //! Encrypted backup / restore of all anySCP data.
 //!
-//! A backup is a single JSON *envelope* written to a file the user chooses. Its
-//! payload — a raw SQLite snapshot of the whole database plus every stored
-//! credential — is encrypted with a key derived from the user's passphrase via
-//! **Argon2id**, using **AES-256-GCM**. Secrets therefore never touch disk in
-//! plaintext, and a backup is useless without the passphrase.
+//! A backup is a compact **binary container** (not JSON): a small plaintext
+//! header — magic, KDF parameters, salt, nonce — followed directly by the raw
+//! **AES-256-GCM** ciphertext. The header is the AEAD associated data, so any
+//! tampering with the parameters is detected. The key is derived from the
+//! user's passphrase with **Argon2id**; the payload (a raw SQLite snapshot of
+//! the whole database plus every stored credential) is gzip-compressed before
+//! encryption. Secrets never touch disk in plaintext, and a backup is useless
+//! without the passphrase.
 //!
 //! - Export: snapshot the DB ([`crate::db::HostDb::export_db_snapshot`]) +
-//!   gather credentials from the OS keychain → encrypt → write the envelope.
-//! - Import: decrypt with the passphrase → restore the DB snapshot
-//!   ([`crate::db::HostDb::import_db_snapshot`]) + write credentials back to the
-//!   keychain. A wrong password fails the AEAD tag check and is reported as
-//!   such; nothing is modified.
+//!   gather credentials from the OS keychain → frame + gzip → seal → write the
+//!   container bytes.
+//! - Import: open the container with the passphrase → gunzip → restore the DB
+//!   snapshot ([`crate::db::HostDb::import_db_snapshot`]) + write credentials
+//!   back to the keychain. A wrong password fails the AEAD tag check and is
+//!   reported as such; nothing is modified.
+//!
+//! ## Container layout (little-endian)
+//! ```text
+//! magic "ASCPBAK\x01" (8) | kdf_id u8 | m_kib u32 | t u32 | p u32 |
+//! compression u8 | salt_len u8 | salt | nonce_len u8 | nonce | ciphertext…
+//! ```
 
 pub mod commands;
 
@@ -20,22 +30,21 @@ use std::collections::BTreeMap;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use argon2::{Algorithm, Argon2, Params, Version};
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::db::HostDb;
 use crate::vault::{self, StoredCredential};
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
-const FORMAT_TAG: &str = "anyscp.backup";
-const ENVELOPE_VERSION: u32 = 1;
-/// AEAD associated data — binds the ciphertext to this format/version so a blob
-/// can't be transplanted into a different context.
-const AAD: &[u8] = b"anyscp.backup.v1";
+/// Container magic + format version (last byte). Bumping the version byte lets
+/// future formats be told apart and rejected cleanly.
+const MAGIC: &[u8; 8] = b"ASCPBAK\x01";
+const KDF_ARGON2ID: u8 = 1;
+const COMPRESSION_NONE: u8 = 0;
+const COMPRESSION_GZIP: u8 = 1;
 // Argon2id parameters: m = 64 MiB, t = 3, p = 1 — strong, well under a second on
-// modern hardware. Stored in the envelope so import derives the same key.
+// modern hardware. Written into the header so import derives the same key.
 const ARGON2_M_KIB: u32 = 64 * 1024;
 const ARGON2_T: u32 = 3;
 const ARGON2_P: u32 = 1;
@@ -88,32 +97,47 @@ impl From<crate::db::DbError> for BackupError {
 
 // ─── On-disk format ──────────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, Deserialize)]
+/// KDF parameters carried in the header (algorithm is fixed to Argon2id).
 struct KdfParams {
-    algorithm: String,
+    algorithm: &'static str,
     m_kib: u32,
     t: u32,
     p: u32,
 }
 
-/// The JSON written to the backup file. Only `ciphertext` holds user data; the
-/// rest are the public parameters needed to derive the key and decrypt.
-#[derive(Debug, Serialize, Deserialize)]
-struct Envelope {
-    format: String,
-    version: u32,
-    kdf: KdfParams,
-    /// How the plaintext was compressed before encryption: `"gzip"` or `"none"`.
-    #[serde(default = "compression_none")]
-    compression: String,
-    salt: String,
-    nonce: String,
-    ciphertext: String,
-    created_at_unix: u64,
+/// Bounds-checked sequential reader over the (untrusted) container bytes. Every
+/// accessor returns a `Format` error rather than panicking on a short read.
+struct Reader<'a> {
+    data: &'a [u8],
+    pos: usize,
 }
 
-fn compression_none() -> String {
-    "none".into()
+impl<'a> Reader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0 }
+    }
+
+    fn take(&mut self, n: usize) -> Result<&'a [u8], BackupError> {
+        let end = self
+            .pos
+            .checked_add(n)
+            .ok_or_else(|| BackupError::Format("backup header overflow".into()))?;
+        if end > self.data.len() {
+            return Err(BackupError::Format("truncated backup file".into()));
+        }
+        let out = &self.data[self.pos..end];
+        self.pos = end;
+        Ok(out)
+    }
+
+    fn u8(&mut self) -> Result<u8, BackupError> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn u32_le(&mut self) -> Result<u32, BackupError> {
+        let b = self.take(4)?;
+        Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
 }
 
 // ─── Crypto ─────────────────────────────────────────────────────────────────────
@@ -144,14 +168,29 @@ fn derive_key(password: &str, salt: &[u8], p: &KdfParams) -> Result<[u8; KEY_LEN
     Ok(key)
 }
 
-fn encrypt(password: &str, plaintext: &[u8], compression: &str) -> Result<Envelope, BackupError> {
+/// Encrypt `plaintext` into a self-describing binary container. The header
+/// (magic + KDF params + compression + salt + nonce) is both written verbatim
+/// and used as the AEAD associated data, so any edit to it fails decryption.
+fn seal(password: &str, plaintext: &[u8], compression: u8) -> Result<Vec<u8>, BackupError> {
     let mut salt = [0u8; SALT_LEN];
     let mut nonce = [0u8; NONCE_LEN];
     getrandom::getrandom(&mut salt).map_err(|e| BackupError::Crypto(e.to_string()))?;
     getrandom::getrandom(&mut nonce).map_err(|e| BackupError::Crypto(e.to_string()))?;
 
+    let mut header = Vec::with_capacity(MAGIC.len() + 14 + SALT_LEN + NONCE_LEN);
+    header.extend_from_slice(MAGIC);
+    header.push(KDF_ARGON2ID);
+    header.extend_from_slice(&ARGON2_M_KIB.to_le_bytes());
+    header.extend_from_slice(&ARGON2_T.to_le_bytes());
+    header.extend_from_slice(&ARGON2_P.to_le_bytes());
+    header.push(compression);
+    header.push(SALT_LEN as u8);
+    header.extend_from_slice(&salt);
+    header.push(NONCE_LEN as u8);
+    header.extend_from_slice(&nonce);
+
     let kdf = KdfParams {
-        algorithm: "argon2id".into(),
+        algorithm: "argon2id",
         m_kib: ARGON2_M_KIB,
         t: ARGON2_T,
         p: ARGON2_P,
@@ -163,21 +202,14 @@ fn encrypt(password: &str, plaintext: &[u8], compression: &str) -> Result<Envelo
             Nonce::from_slice(&nonce),
             Payload {
                 msg: plaintext,
-                aad: AAD,
+                aad: &header,
             },
         )
         .map_err(|e| BackupError::Crypto(e.to_string()))?;
 
-    Ok(Envelope {
-        format: FORMAT_TAG.into(),
-        version: ENVELOPE_VERSION,
-        kdf,
-        compression: compression.to_string(),
-        salt: STANDARD.encode(salt),
-        nonce: STANDARD.encode(nonce),
-        ciphertext: STANDARD.encode(ciphertext),
-        created_at_unix: now_unix(),
-    })
+    let mut out = header;
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
 }
 
 // ─── Compression + binary framing ──────────────────────────────────────────────
@@ -229,57 +261,59 @@ fn decode_frame(frame: &[u8]) -> Result<(&[u8], &[u8]), BackupError> {
     Ok((&rest[..len], &rest[len..]))
 }
 
-fn decrypt(password: &str, env: &Envelope) -> Result<Vec<u8>, BackupError> {
-    if env.format != FORMAT_TAG {
-        return Err(BackupError::Format(format!(
-            "unexpected format tag {:?}",
-            env.format
-        )));
+/// Parse a binary container, derive the key, and decrypt. Returns the decrypted
+/// plaintext and the compression byte. Every malformed/truncated input yields a
+/// `Format` error; a wrong password (or any tampering, including the header)
+/// yields `Decrypt` via the GCM tag check.
+fn open(password: &str, data: &[u8]) -> Result<(Vec<u8>, u8), BackupError> {
+    let mut r = Reader::new(data);
+    if r.take(MAGIC.len())? != MAGIC {
+        return Err(BackupError::Format("not an anySCP backup file".into()));
     }
-    if env.version > ENVELOPE_VERSION {
-        return Err(BackupError::Format(format!(
-            "backup format v{} is newer than this app supports (v{ENVELOPE_VERSION})",
-            env.version
-        )));
+    let kdf_id = r.u8()?;
+    if kdf_id != KDF_ARGON2ID {
+        return Err(BackupError::Format(format!("unsupported KDF id {kdf_id}")));
     }
-    let salt = STANDARD
-        .decode(env.salt.as_bytes())
-        .map_err(|e| BackupError::Format(e.to_string()))?;
-    let nonce = STANDARD
-        .decode(env.nonce.as_bytes())
-        .map_err(|e| BackupError::Format(e.to_string()))?;
-    let ciphertext = STANDARD
-        .decode(env.ciphertext.as_bytes())
-        .map_err(|e| BackupError::Format(e.to_string()))?;
+    let m_kib = r.u32_le()?;
+    let t = r.u32_le()?;
+    let p = r.u32_le()?;
+    let compression = r.u8()?;
+    let salt_len = r.u8()? as usize;
+    let salt = r.take(salt_len)?.to_vec();
+    let nonce_len = r.u8()? as usize;
+    let nonce = r.take(nonce_len)?;
     if nonce.len() != NONCE_LEN {
         return Err(BackupError::Format("invalid nonce length".into()));
     }
+    // Everything consumed so far is the header; it is the AEAD associated data.
+    let header = &data[..r.pos];
+    let ciphertext = &data[r.pos..];
 
-    let key = derive_key(password, &salt, &env.kdf)?;
+    let kdf = KdfParams {
+        algorithm: "argon2id",
+        m_kib,
+        t,
+        p,
+    };
+    // derive_key clamps the (untrusted) KDF parameters before use.
+    let key = derive_key(password, &salt, &kdf)?;
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
-    cipher
+    let plaintext = cipher
         .decrypt(
-            Nonce::from_slice(&nonce),
+            Nonce::from_slice(nonce),
             Payload {
-                msg: &ciphertext,
-                aad: AAD,
+                msg: ciphertext,
+                aad: header,
             },
         )
-        // A wrong password (or any tampering) fails the GCM tag check here.
-        .map_err(|_| BackupError::Decrypt)
-}
-
-fn now_unix() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_err(|_| BackupError::Decrypt)?;
+    Ok((plaintext, compression))
 }
 
 // ─── Orchestration (sync — callers use spawn_blocking) ──────────────────────────
 
-/// Build the encrypted backup envelope (as a JSON string) for the whole app.
-pub fn build_backup(db: &HostDb, password: &str) -> Result<String, BackupError> {
+/// Build the encrypted backup container (raw bytes) for the whole app.
+pub fn build_backup(db: &HostDb, password: &str) -> Result<Vec<u8>, BackupError> {
     let db_bytes = db.export_db_snapshot()?;
 
     // Gather every stored secret keyed by its vault key. Missing entries are
@@ -301,21 +335,19 @@ pub fn build_backup(db: &HostDb, password: &str) -> Result<String, BackupError> 
         serde_json::to_vec(&credentials).map_err(|e| BackupError::Crypto(e.to_string()))?;
     let frame = encode_frame(&creds_json, &db_bytes);
     let compressed = gzip(&frame)?;
-    let envelope = encrypt(password, &compressed, "gzip")?;
-    serde_json::to_string_pretty(&envelope).map_err(|e| BackupError::Crypto(e.to_string()))
+    seal(password, &compressed, COMPRESSION_GZIP)
 }
 
-/// Decrypt and restore a backup, replacing all current data and credentials.
-pub fn restore_backup(db: &HostDb, password: &str, envelope_json: &str) -> Result<(), BackupError> {
-    let envelope: Envelope = serde_json::from_str(envelope_json)
-        .map_err(|_| BackupError::Format("not an anySCP backup file".into()))?;
-    let plaintext = decrypt(password, &envelope)?;
-    let frame = match envelope.compression.as_str() {
-        "gzip" => gunzip(&plaintext)?,
-        "none" => plaintext,
+/// Decrypt and restore a backup container, replacing all current data and
+/// credentials.
+pub fn restore_backup(db: &HostDb, password: &str, container: &[u8]) -> Result<(), BackupError> {
+    let (plaintext, compression) = open(password, container)?;
+    let frame = match compression {
+        COMPRESSION_GZIP => gunzip(&plaintext)?,
+        COMPRESSION_NONE => plaintext,
         other => {
             return Err(BackupError::Format(format!(
-                "unsupported backup compression {other:?}"
+                "unsupported backup compression id {other}"
             )))
         }
     };
@@ -342,58 +374,80 @@ mod tests {
     use super::*;
 
     fn roundtrip(password: &str, msg: &[u8]) -> Vec<u8> {
-        let env = encrypt(password, msg, "none").expect("encrypt");
-        decrypt(password, &env).expect("decrypt")
+        let container = seal(password, msg, COMPRESSION_NONE).expect("seal");
+        let (plaintext, comp) = open(password, &container).expect("open");
+        assert_eq!(comp, COMPRESSION_NONE);
+        plaintext
     }
 
     #[test]
-    fn encrypt_decrypt_roundtrip() {
+    fn seal_open_roundtrip() {
         let msg = br#"{"hello":"world"}"#;
         assert_eq!(roundtrip("correct horse battery staple", msg), msg);
     }
 
     #[test]
+    fn container_starts_with_magic_and_hides_plaintext() {
+        let container = seal("pw", b"TOP-SECRET-MARKER", COMPRESSION_NONE).unwrap();
+        assert!(container.starts_with(MAGIC));
+        // The plaintext marker must not appear anywhere in the container.
+        assert!(!container
+            .windows(b"TOP-SECRET-MARKER".len())
+            .any(|w| w == b"TOP-SECRET-MARKER"));
+    }
+
+    #[test]
     fn wrong_password_fails() {
-        let env = encrypt("right-password", b"secret data", "none").expect("encrypt");
-        let err = decrypt("wrong-password", &env).expect_err("must fail");
+        let container = seal("right-password", b"secret data", COMPRESSION_NONE).expect("seal");
+        let err = open("wrong-password", &container).expect_err("must fail");
         assert!(matches!(err, BackupError::Decrypt), "got {err:?}");
     }
 
     #[test]
     fn tampered_ciphertext_fails() {
-        let mut env = encrypt("pw", b"secret data", "none").expect("encrypt");
-        // Flip a byte in the (base64) ciphertext.
-        let mut ct = STANDARD.decode(env.ciphertext.as_bytes()).unwrap();
-        ct[0] ^= 0xff;
-        env.ciphertext = STANDARD.encode(ct);
-        assert!(matches!(decrypt("pw", &env), Err(BackupError::Decrypt)));
+        let mut container = seal("pw", b"secret data", COMPRESSION_NONE).expect("seal");
+        // Flip the last byte (inside the ciphertext/tag).
+        *container.last_mut().unwrap() ^= 0xff;
+        assert!(matches!(open("pw", &container), Err(BackupError::Decrypt)));
     }
 
     #[test]
-    fn each_backup_uses_fresh_salt_and_nonce() {
-        let a = encrypt("pw", b"data", "none").unwrap();
-        let b = encrypt("pw", b"data", "none").unwrap();
-        // Same password + plaintext must still yield different salt/nonce/ct.
-        assert_ne!(a.salt, b.salt);
-        assert_ne!(a.nonce, b.nonce);
-        assert_ne!(a.ciphertext, b.ciphertext);
+    fn tampered_header_fails() {
+        let mut container = seal("pw", b"secret data", COMPRESSION_NONE).expect("seal");
+        // Flip the compression byte in the header — it's part of the AEAD AAD,
+        // so the tag check must fail.
+        let comp_off = MAGIC.len() + 1 + 4 + 4 + 4; // after magic+kdf_id+m+t+p
+        container[comp_off] ^= 0xff;
+        assert!(matches!(open("pw", &container), Err(BackupError::Decrypt)));
     }
 
     #[test]
-    fn envelope_serializes_with_expected_fields() {
-        let env = encrypt("pw", b"x", "none").unwrap();
-        let json = serde_json::to_string(&env).unwrap();
-        assert!(json.contains("\"format\":\"anyscp.backup\""));
-        assert!(json.contains("\"argon2id\""));
-        // The plaintext must not leak into the envelope.
-        assert!(!json.contains("\"x\""));
+    fn each_backup_is_unique() {
+        let a = seal("pw", b"data", COMPRESSION_NONE).unwrap();
+        let b = seal("pw", b"data", COMPRESSION_NONE).unwrap();
+        // Fresh salt + nonce per backup → different bytes despite same input.
+        assert_ne!(a, b);
     }
 
     #[test]
-    fn rejects_foreign_format_tag() {
-        let mut env = encrypt("pw", b"x", "none").unwrap();
-        env.format = "something.else".into();
-        assert!(matches!(decrypt("pw", &env), Err(BackupError::Format(_))));
+    fn rejects_bad_magic() {
+        let mut container = seal("pw", b"x", COMPRESSION_NONE).unwrap();
+        container[0] ^= 0xff;
+        assert!(matches!(
+            open("pw", &container),
+            Err(BackupError::Format(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_truncated_container() {
+        let container = seal("pw", b"x", COMPRESSION_NONE).unwrap();
+        // Cut into the header — the reader must error, not panic.
+        assert!(matches!(
+            open("pw", &container[..5]),
+            Err(BackupError::Format(_))
+        ));
+        assert!(matches!(open("pw", &[]), Err(BackupError::Format(_))));
     }
 
     #[test]
@@ -448,9 +502,9 @@ mod tests {
 
         let backup = build_backup(&src, "hunter2-strong-pw").expect("build_backup");
 
-        // Compression + framing: the encrypted backup is smaller than the raw
-        // SQLite snapshot, despite base64 + the GCM tag (the old double-base64
-        // format was ~1.8x the snapshot).
+        // Compression + framing + binary container: the encrypted backup is far
+        // smaller than the raw SQLite snapshot (the old JSON+double-base64 format
+        // was ~1.8x the snapshot).
         let raw = src.export_db_snapshot().expect("snapshot");
         assert!(
             backup.len() < raw.len(),

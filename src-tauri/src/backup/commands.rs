@@ -27,8 +27,8 @@ pub async fn backup_export(
     }
     let db = Arc::clone(&state);
     task::spawn_blocking(move || {
-        let json = build_backup(&db, &password)?;
-        std::fs::write(&path, json).map_err(|e| BackupError::Io(e.to_string()))?;
+        let bytes = build_backup(&db, &password)?;
+        std::fs::write(&path, bytes).map_err(|e| BackupError::Io(e.to_string()))?;
         crate::telemetry::capture("backup_exported", serde_json::json!({}));
         Ok::<(), BackupError>(())
     })
@@ -50,8 +50,8 @@ pub async fn backup_import(
     }
     let db = Arc::clone(&state);
     task::spawn_blocking(move || {
-        let json = std::fs::read_to_string(&path).map_err(|e| BackupError::Io(e.to_string()))?;
-        restore_backup(&db, &password, &json)?;
+        let bytes = std::fs::read(&path).map_err(|e| BackupError::Io(e.to_string()))?;
+        restore_backup(&db, &password, &bytes)?;
         crate::telemetry::capture("backup_imported", serde_json::json!({}));
         Ok::<(), BackupError>(())
     })
