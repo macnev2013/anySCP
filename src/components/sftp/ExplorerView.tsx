@@ -432,7 +432,17 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
     } else {
       await explorerInvoke(transport, "chmod", sessionId, { path: entry.id, mode });
     }
-    if (session) await loadDirectory(session.currentPath);
+    // The chmod has already succeeded here. Refresh the listing best-effort: a
+    // reload failure (e.g. a dropped connection) must NOT propagate as a chmod
+    // error, or the user would be told it failed and retry an applied change.
+    const refreshPath = session?.currentPath;
+    if (refreshPath !== undefined) {
+      try {
+        await loadDirectory(refreshPath);
+      } catch (err) {
+        console.error("Directory refresh after chmod failed:", err);
+      }
+    }
     return result;
   }, [sessionId, transport, session, loadDirectory]);
 
@@ -530,7 +540,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         path: e.id,
         entry_type: e.entryType as "File" | "Directory" | "Symlink" | "Other",
         size: e.size,
-        permissions: 0,
+        permissions: e.permissions ?? 0,
         permissions_display: e.permissionsDisplay ?? "",
         modified: e.modified,
         is_symlink: e.isSymlink,

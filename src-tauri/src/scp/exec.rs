@@ -45,22 +45,42 @@ pub async fn ssh_exec(
     let mut exit_code: Option<i32> = None;
 
     while let Some(msg) = channel.wait().await {
-        match msg {
-            ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
-            // ext = 1 is stderr per RFC 4254 §5.2.
-            ChannelMsg::ExtendedData { data, ext: 1 } => {
-                stderr.extend_from_slice(&data);
-            }
-            ChannelMsg::ExitStatus { exit_status } => {
-                exit_code = Some(exit_status as i32);
-            }
-            ChannelMsg::Eof | ChannelMsg::Close => break,
-            _ => {}
+        if fold_exec_msg(msg, &mut stdout, &mut stderr, &mut exit_code) {
+            break;
         }
     }
 
     // Some servers close without sending ExitStatus; treat as 0 then.
     Ok((stdout, stderr, exit_code.unwrap_or(0)))
+}
+
+/// Fold one channel message into the running stdout / stderr / exit-code,
+/// returning `true` when the read loop should stop.
+///
+/// `Eof` must NOT stop the loop: a server sends Eof (end of data) BEFORE its
+/// `exit-status` request (RFC 4254 §5.3), so stopping there would discard the
+/// exit code and report a failed command as success. In russh 0.46 the loop
+/// in practice terminates when `wait()` returns `None` — the `CHANNEL_CLOSE`
+/// handler drops the channel sender instead of forwarding `ChannelMsg::Close` —
+/// but `Close` is still handled defensively, matching the existing
+/// sudo-preflight loop in `sftp::commands`, so the logic stays correct if a
+/// future russh ever delivers it.
+fn fold_exec_msg(
+    msg: ChannelMsg,
+    stdout: &mut Vec<u8>,
+    stderr: &mut Vec<u8>,
+    exit_code: &mut Option<i32>,
+) -> bool {
+    match msg {
+        ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
+        // ext = 1 is stderr per RFC 4254 §5.2.
+        ChannelMsg::ExtendedData { data, ext: 1 } => stderr.extend_from_slice(&data),
+        ChannelMsg::ExitStatus { exit_status } => *exit_code = Some(exit_status as i32),
+        ChannelMsg::Close => return true,
+        // Eof (and any other message): keep reading.
+        _ => {}
+    }
+    false
 }
 
 /// Run `command` and require exit code 0. Returns stdout. Errors include
@@ -214,7 +234,8 @@ pub async fn chmod(
 /// Recursively `chmod -R <octal> <path>`. Returns the list of stderr lines on a
 /// non-zero exit (chmod continues past per-file errors and reports them on
 /// stderr) so callers can build a summary instead of aborting; an empty list
-/// means full success.
+/// means full success. A non-zero exit that produced *no* diagnostics is a hard
+/// failure (see [`interpret_recursive_chmod`]).
 pub async fn chmod_recursive(
     handle: Arc<Mutex<Handle<SshClientHandler>>>,
     path: &str,
@@ -222,15 +243,33 @@ pub async fn chmod_recursive(
 ) -> Result<Vec<String>, ScpError> {
     let cmd = format!("chmod -R {:o} -- {}", mode & 0o7777, shell_quote(path));
     let (_out, stderr, exit) = ssh_exec(handle, &cmd).await?;
+    interpret_recursive_chmod(&stderr, exit)
+}
+
+/// Interpret a `chmod -R` exit code + stderr.
+///
+/// `chmod` continues past per-file errors and reports each on stderr, so a
+/// non-zero exit *with* stderr lines is a partial success: return those lines
+/// as the per-entry error list. A non-zero exit with *no* diagnostics (e.g. the
+/// remote `chmod` was signal-killed, or the connection dropped) is a genuine
+/// failure that must NOT be collapsed into the empty-list "full success"
+/// sentinel — return an error so the caller can surface it.
+fn interpret_recursive_chmod(stderr: &[u8], exit: i32) -> Result<Vec<String>, ScpError> {
     if exit == 0 {
         return Ok(Vec::new());
     }
-    let errors = String::from_utf8_lossy(&stderr)
+    let errors: Vec<String> = String::from_utf8_lossy(stderr)
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .map(String::from)
         .collect();
+    if errors.is_empty() {
+        return Err(ScpError::CommandFailed {
+            exit_code: exit,
+            stderr: String::new(),
+        });
+    }
     Ok(errors)
 }
 
@@ -541,4 +580,119 @@ pub async fn deduplicate_name(
     }
 
     Ok(format!("{stem} (copy){ext}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use russh::CryptoVec;
+
+    fn data_msg(bytes: &[u8]) -> ChannelMsg {
+        ChannelMsg::Data {
+            data: CryptoVec::from(bytes.to_vec()),
+        }
+    }
+
+    #[test]
+    fn exec_eof_before_exit_status_still_captures_exit() {
+        // Realistic ordering: data, EOF, exit-status, close. The pre-fix code
+        // broke on Eof and lost the exit status, reporting a failed command as
+        // success. fold_exec_msg must keep reading past Eof.
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut exit: Option<i32> = None;
+
+        assert!(!fold_exec_msg(
+            data_msg(b"hello"),
+            &mut out,
+            &mut err,
+            &mut exit
+        ));
+        assert!(!fold_exec_msg(
+            ChannelMsg::Eof,
+            &mut out,
+            &mut err,
+            &mut exit
+        ));
+        assert!(!fold_exec_msg(
+            ChannelMsg::ExitStatus { exit_status: 3 },
+            &mut out,
+            &mut err,
+            &mut exit
+        ));
+        // Close (defensive) stops the loop.
+        assert!(fold_exec_msg(
+            ChannelMsg::Close,
+            &mut out,
+            &mut err,
+            &mut exit
+        ));
+
+        assert_eq!(out, b"hello");
+        assert_eq!(
+            exit,
+            Some(3),
+            "exit status captured because Eof did not break"
+        );
+    }
+
+    #[test]
+    fn exec_collects_stderr_and_defaults_exit_to_zero() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut exit: Option<i32> = None;
+
+        fold_exec_msg(
+            ChannelMsg::ExtendedData {
+                data: CryptoVec::from(b"oops".to_vec()),
+                ext: 1,
+            },
+            &mut out,
+            &mut err,
+            &mut exit,
+        );
+        fold_exec_msg(ChannelMsg::Eof, &mut out, &mut err, &mut exit);
+
+        assert!(out.is_empty());
+        assert_eq!(err, b"oops");
+        assert_eq!(exit.unwrap_or(0), 0, "no ExitStatus defaults to 0");
+    }
+
+    #[test]
+    fn recursive_chmod_zero_exit_is_full_success() {
+        // Exit 0 means success regardless of any stray stderr output.
+        assert_eq!(
+            interpret_recursive_chmod(b"", 0).unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            interpret_recursive_chmod(b"warning: noise\n", 0).unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn recursive_chmod_nonzero_with_stderr_returns_trimmed_lines() {
+        let stderr = b"chmod: cannot access 'a': Permission denied\n  \nchmod: cannot access 'b': No such file or directory\n";
+        let errors = interpret_recursive_chmod(stderr, 1).unwrap();
+        assert_eq!(
+            errors,
+            vec![
+                "chmod: cannot access 'a': Permission denied".to_string(),
+                "chmod: cannot access 'b': No such file or directory".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn recursive_chmod_nonzero_without_stderr_is_hard_failure() {
+        // The regression guard for the "vacuous success" bug: a non-zero exit
+        // that produced no diagnostics must NOT look like full success.
+        for stderr in [&b""[..], &b"   \n\t\n"[..]] {
+            match interpret_recursive_chmod(stderr, 137) {
+                Err(ScpError::CommandFailed { exit_code, .. }) => assert_eq!(exit_code, 137),
+                other => panic!("expected CommandFailed, got {other:?}"),
+            }
+        }
+    }
 }

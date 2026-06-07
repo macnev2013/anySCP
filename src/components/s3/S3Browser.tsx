@@ -330,8 +330,8 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
 
   // ─── Get Info ─────────────────────────────────────────────────────────────
   // For S3, `s3_head_object` returns fresh metadata. We don't need special
-  // handling since the built-in FileInfoDialog in ExplorerFileTable works with
-  // the existing ExplorerEntry data. If we wanted richer metadata, we could
+  // handling since the built-in FilePropertiesDialog in ExplorerFileTable works
+  // with the existing ExplorerEntry data. If we wanted richer metadata, we could
   // fetch it here, but the current entry data is sufficient.
 
   // ─── Breadcrumb segments ──────────────────────────────────────────────────

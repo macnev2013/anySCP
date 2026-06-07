@@ -21,7 +21,13 @@ export interface PermissionBits {
 }
 
 /** Parse an `rwxr-xr-x` (or `drwxr-xr-x` with a leading type char) string into
- *  its 9-bit octal value. Unknown characters are treated as "unset". */
+ *  its 9-bit octal value. Unknown characters are treated as "unset".
+ *
+ *  Note: the special-bit glyphs 's'/'S'/'t'/'T' set the underlying execute bit
+ *  only — setuid/setgid/sticky are NOT recovered from the string (it can't
+ *  represent them unambiguously). The raw mode (`ExplorerEntry.permissions`) is
+ *  the source of truth for special bits; this round-trip is intentionally lossy
+ *  and always returns a value in the 0–0o777 range. */
 export function permissionsStringToOctal(perms: string): number {
   // Drop a leading file-type character if present (10-char form).
   const p = perms.length >= 10 ? perms.slice(1, 10) : perms.slice(0, 9);
@@ -29,10 +35,25 @@ export function permissionsStringToOctal(perms: string): number {
   for (let i = 0; i < 9; i++) {
     octal <<= 1;
     const ch = p[i];
-    // 'r'/'w'/'x' (and setuid/sticky variants s/S/t/T) all mean the bit is set.
     if (ch && ch !== "-") octal |= 1;
   }
   return octal;
+}
+
+/** Sanitize raw octal text-input into the canonical 3-digit (max) string.
+ *
+ *  Keeps only octal digits, then takes the LAST three significant digits so the
+ *  conventional leading-zero form pastes correctly: "0755" → "755" (not "075"),
+ *  "4755" → "755" (the special-bit digit is dropped here — special bits are
+ *  edited via the raw mode, not this field). "" stays "". */
+export function sanitizeOctalInput(raw: string): string {
+  return raw.replace(/[^0-7]/g, "").slice(-3);
+}
+
+/** Parse sanitized octal text into a 9-bit value, or `null` when empty. */
+export function octalInputToValue(input: string): number | null {
+  const cleaned = sanitizeOctalInput(input);
+  return cleaned.length > 0 ? parseInt(cleaned, 8) & 0o777 : null;
 }
 
 /** Expand a 9-bit octal value into individual checkbox booleans. */

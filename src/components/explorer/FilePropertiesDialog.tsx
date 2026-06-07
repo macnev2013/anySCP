@@ -8,6 +8,7 @@ import {
   permissionBitsToOctal,
   octalToString,
   octalToPermissionsString,
+  sanitizeOctalInput,
   type PermissionBits,
 } from "../../lib/permissions";
 
@@ -37,6 +38,7 @@ function locationOf(id: string): string {
 
 // Rows: Owner / Group / Other; columns: Read / Write / Execute.
 const ROW_LABELS = ["Owner", "Group", "Other"] as const;
+const COL_LABELS = ["Read", "Write", "Execute"] as const;
 const ROW_KEYS: ReadonlyArray<ReadonlyArray<keyof PermissionBits>> = [
   ["ownerR", "ownerW", "ownerX"],
   ["groupR", "groupW", "groupX"],
@@ -53,6 +55,18 @@ export function FilePropertiesDialog({
 }: FilePropertiesDialogProps) {
   const isDir = entry.entryType === "Directory";
 
+  // Special permission bits (setuid/setgid/sticky) live in the raw mode but the
+  // rwx editor only covers the lower 9 bits. Track them so a chmod preserves
+  // them instead of silently stripping e.g. a setuid binary's bit.
+  const specialBits = (entry.permissions ?? 0) & 0o7000;
+  const specialBitsLabel = [
+    specialBits & 0o4000 ? "setuid" : null,
+    specialBits & 0o2000 ? "setgid" : null,
+    specialBits & 0o1000 ? "sticky" : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
   // Initial octal derived from the rwx display string (SFTP only).
   const initialOctal = useMemo(
     () => (entry.permissionsDisplay ? permissionsStringToOctal(entry.permissionsDisplay) : 0),
@@ -64,6 +78,16 @@ export function FilePropertiesDialog({
   const [recursive, setRecursive] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Re-sync local edit state when the entry's permissions change underneath us
+  // (e.g. the parent refreshes the listing after a partial recursive chmod that
+  // kept the dialog open). Without this, `octal` keeps its stale value and the
+  // dirty/Apply state desyncs from what's shown. `initialOctal` is a number, so
+  // this only fires when the mode actually changed, never on unrelated rerenders.
+  useEffect(() => {
+    setOctal(initialOctal);
+    setOctalInput(octalToString(initialOctal));
+  }, [initialOctal]);
 
   const bits = octalToPermissionBits(octal);
 
@@ -91,11 +115,17 @@ export function FilePropertiesDialog({
   };
 
   const handleOctalInput = (raw: string) => {
-    // Only 0–7 digits, max 3 places.
-    const cleaned = raw.replace(/[^0-7]/g, "").slice(0, 3);
+    // Keep the last 3 octal digits so the conventional leading-zero form pastes
+    // correctly ("0755" → "755", not "075"). See `sanitizeOctalInput`.
+    const cleaned = sanitizeOctalInput(raw);
     setOctalInput(cleaned);
     if (cleaned.length > 0) {
-      setOctal(parseInt(cleaned.padStart(3, "0"), 8) & 0o777);
+      setOctal(parseInt(cleaned, 8) & 0o777);
+    } else {
+      // Empty field means "no change specified": roll `octal` back to the
+      // initial mode so Apply doesn't stay enabled with a stale, invisible value
+      // (blur then re-normalises the text to the initial octal string).
+      setOctal(initialOctal);
     }
   };
 
@@ -112,7 +142,12 @@ export function FilePropertiesDialog({
     setApplying(true);
     setError(null);
     try {
-      const result = await onApplyPermissions(entry, octal, isRecursive);
+      // Preserve setuid/setgid/sticky for a single-file chmod (the rwx editor
+      // only covers the lower 9 bits). A recursive apply deliberately sends just
+      // those 9 bits, matching `chmod -R <octal>` — propagating the root's
+      // special bits onto every descendant would be dangerous.
+      const modeToApply = isRecursive ? octal : octal | specialBits;
+      const result = await onApplyPermissions(entry, modeToApply, isRecursive);
       // Recursive apply collects per-entry failures instead of throwing. Show a
       // summary and keep the dialog open when some entries failed; otherwise
       // close as for a normal apply.
@@ -135,7 +170,7 @@ export function FilePropertiesDialog({
     } finally {
       setApplying(false);
     }
-  }, [onApplyPermissions, canApply, applying, recursive, isDir, entry, octal, onClose]);
+  }, [onApplyPermissions, canApply, applying, recursive, isDir, entry, octal, specialBits, onClose]);
 
   // ─── Escape to close ──────────────────────────────────────────────────────
 
@@ -151,6 +186,7 @@ export function FilePropertiesDialog({
 
   const modified =
     entry.modified !== null ? new Date(entry.modified * 1000).toLocaleString() : "—";
+  const location = locationOf(entry.id);
 
   const labelClass = "text-[length:var(--text-xs)] text-text-muted w-[76px] shrink-0";
   const valueClass = "text-[length:var(--text-xs)] text-text-primary truncate min-w-0 flex-1";
@@ -209,8 +245,8 @@ export function FilePropertiesDialog({
 
           <div className="flex items-baseline gap-3 py-1">
             <span className={labelClass}>Location</span>
-            <span className={`${valueClass} font-mono text-[length:var(--text-2xs)]`} title={locationOf(entry.id)}>
-              {locationOf(entry.id)}
+            <span className={`${valueClass} font-mono text-[length:var(--text-2xs)]`} title={location}>
+              {location}
             </span>
           </div>
 
@@ -267,7 +303,7 @@ export function FilePropertiesDialog({
                 {ROW_LABELS.map((rowLabel, r) => (
                   <tr key={rowLabel}>
                     <td className="py-1 text-text-secondary">{rowLabel}</td>
-                    {ROW_KEYS[r].map((key) => (
+                    {ROW_KEYS[r].map((key, c) => (
                       <td key={key} className="text-center py-1">
                         <input
                           type="checkbox"
@@ -276,7 +312,7 @@ export function FilePropertiesDialog({
                           disabled={!canEditPermissions}
                           onChange={() => toggleBit(key)}
                           className="h-3.5 w-3.5 cursor-pointer accent-accent disabled:cursor-not-allowed disabled:opacity-50"
-                          aria-label={`${rowLabel} ${key.replace(/^(owner|group|other)/, "")}`}
+                          aria-label={`${rowLabel} ${COL_LABELS[c]}`}
                         />
                       </td>
                     ))}
@@ -304,6 +340,19 @@ export function FilePropertiesDialog({
               </span>
             </div>
 
+            {/* Special-bit notice — these can't be edited here but are kept. */}
+            {specialBits !== 0 && (
+              <p
+                data-testid="perm-special-bits"
+                className="mt-2 text-[length:var(--text-2xs)] text-text-muted"
+              >
+                Special bits set ({specialBitsLabel}); not editable here and{" "}
+                {recursive && isDir
+                  ? "dropped on a recursive apply."
+                  : "preserved on apply."}
+              </p>
+            )}
+
             {/* Recursive apply — directories only */}
             {isDir && canEditPermissions && (
               <label className="flex items-center gap-2 mt-3 cursor-pointer text-[length:var(--text-xs)] text-text-secondary select-none">
@@ -323,7 +372,12 @@ export function FilePropertiesDialog({
 
         {/* Error */}
         {error && (
-          <div className="flex items-start gap-2 px-4 py-2 mx-4 mb-2 rounded-md bg-status-error/10 text-status-error">
+          <div
+            role="alert"
+            aria-live="assertive"
+            data-testid="file-properties-error"
+            className="flex items-start gap-2 px-4 py-2 mx-4 mb-2 rounded-md bg-status-error/10 text-status-error"
+          >
             <AlertCircle size={14} strokeWidth={2} aria-hidden="true" className="shrink-0 mt-0.5" />
             <p className="text-[length:var(--text-xs)] break-words min-w-0">{error}</p>
           </div>

@@ -162,18 +162,31 @@ export async function setPermissions(
     recursive = false,
 ): Promise<void> {
     await waitForEntry(name);
-    await browser.execute(
-        (n: string, m: number, r: boolean) => {
+    // Drive the chmod and AWAIT its promise inside the page so a rejection from
+    // the Tauri command surfaces here as a real error (with its reason) instead
+    // of being dropped — which would otherwise show up only as the waitUntil
+    // timeout below, hiding the actual cause.
+    const chmodError = await browser.executeAsync(
+        (n: string, m: number, r: boolean, done: (err: string | null) => void) => {
             const fn = (window as unknown as {
                 __e2eExplorerChmod?: (n: string, m: number, r?: boolean) => Promise<unknown> | undefined;
             }).__e2eExplorerChmod;
-            if (!fn) throw new Error("__e2eExplorerChmod not registered");
-            void fn(n, m, r);
+            if (!fn) {
+                done("__e2eExplorerChmod not registered");
+                return;
+            }
+            Promise.resolve(fn(n, m, r)).then(
+                () => done(null),
+                (e: unknown) => done(String((e as { message?: string })?.message ?? e)),
+            );
         },
         name,
         mode,
         recursive,
     );
+    if (chmodError) {
+        throw new Error(`chmod('${name}', ${mode.toString(8)}) failed: ${chmodError}`);
+    }
     await browser.waitUntil(
         async () => (await entryPermissions(name)) === expectedDisplay,
         {
