@@ -72,6 +72,18 @@ tauri-plugin-process = "2"
 ssh2-config = "0.7.0"
 rust-s3 = { version = "0.37.1", default-features = false, features = ["tokio-rustls-tls"] }
 
+# Encrypted backup/restore: Argon2id key derivation + AES-256-GCM, with the
+# secret material kept out of the plaintext export file. `getrandom` provides
+# the OS CSPRNG for the per-backup salt and nonce; `base64` encodes the binary
+# blobs into the JSON envelope.
+argon2 = "0.5"
+aes-gcm = "0.10"
+getrandom = "0.2"
+base64 = "0.22"
+# Compress the backup payload before encrypting — a raw SQLite snapshot is
+# mostly zero-filled pages, so this shrinks the file ~10-50x. Pure-Rust backend.
+flate2 = "1"
+
 # Telemetry
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 dirs = "6"

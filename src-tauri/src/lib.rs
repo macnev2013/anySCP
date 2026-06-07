@@ -1,4 +1,5 @@
 mod ai;
+mod backup;
 mod db;
 mod editors;
 mod import;
@@ -246,6 +247,9 @@ pub fn run() {
             db::commands::load_all_settings,
             // Factory reset (wipe all data + credentials)
             db::commands::factory_reset,
+            // Encrypted backup / restore
+            backup::commands::backup_export,
+            backup::commands::backup_import,
             // External editors
             editors::detect_editors,
             // Credential vault
