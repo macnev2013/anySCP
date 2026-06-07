@@ -196,8 +196,10 @@ mod tests {
     // matching get/has — exactly the cross-instance persistence these tests rely
     // on. This builder keeps a shared map keyed by (service, user) instead.
 
-    static MOCK_STORE: LazyLock<Mutex<HashMap<(String, String), Vec<u8>>>> =
-        LazyLock::new(|| Mutex::new(HashMap::new()));
+    /// Secrets keyed by `(service, user)` — the same key the real stores use.
+    type MockStore = HashMap<(String, String), Vec<u8>>;
+
+    static MOCK_STORE: LazyLock<Mutex<MockStore>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
     #[derive(Debug)]
     struct MemCredential {
