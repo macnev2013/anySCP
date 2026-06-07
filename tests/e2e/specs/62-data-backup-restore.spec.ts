@@ -29,7 +29,7 @@ import {
 } from "../helpers/host.js";
 import { openNewGroupModal, fillGroupAndSave } from "../helpers/groups.js";
 import { gotoSnippetsPage, openNewSnippetModal, fillSnippetAndSave } from "../helpers/snippets.js";
-import { backupExport, backupImport, factoryReset } from "../helpers/backup.js";
+import { backupExport, backupImport, factoryReset, dataCounts } from "../helpers/backup.js";
 
 const PASSWORD = "e2e-backup-pass-123";
 const createdFiles: string[] = [];
@@ -53,18 +53,6 @@ async function seedHost(label: string): Promise<void> {
     await clickSave();
     await waitForModalClosed();
     await findHostCardByLabel(label); // confirm it landed on the dashboard
-}
-
-/** Row counts straight from the backend, so "everything is back" is verified at
- *  the data layer across entity types, not just via the dashboard. */
-async function dataCounts(): Promise<{ hosts: number; groups: number; snippets: number }> {
-    return await browser.execute(async () => {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const hosts = (await invoke("list_hosts")) as unknown[];
-        const groups = (await invoke("list_groups")) as unknown[];
-        const snippets = (await invoke("list_snippets", { folderId: null })) as unknown[];
-        return { hosts: hosts.length, groups: groups.length, snippets: snippets.length };
-    });
 }
 
 async function openSettingsData(): Promise<void> {

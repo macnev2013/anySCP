@@ -101,10 +101,37 @@ export const useHostsStore = create<HostsState>((set) => ({
   },
 }));
 
-// E2E test hook — lets WebDriver tests invoke duplicate without driving the
-// right-click context menu (which is flaky in WebKitWebDriver). No production
-// code reads this.
+// E2E test hooks. Defined in bundled source (not in injected browser.execute
+// callbacks) so the dynamic Tauri-API import resolves — a bare module specifier
+// can't be resolved in code injected at runtime. No production code reads these.
 if (typeof window !== "undefined") {
-  (window as unknown as { __e2eDuplicateHost?: (id: string) => Promise<void> })
-    .__e2eDuplicateHost = (id) => useHostsStore.getState().duplicateHost(id);
+  const w = window as unknown as {
+    __e2eDuplicateHost?: (id: string) => Promise<void>;
+    __e2eBackupExport?: (password: string, path: string) => Promise<void>;
+    __e2eBackupImport?: (password: string, path: string) => Promise<void>;
+    __e2eFactoryReset?: () => Promise<void>;
+    __e2eDataCounts?: () => Promise<{ hosts: number; groups: number; snippets: number }>;
+  };
+  w.__e2eDuplicateHost = (id) => useHostsStore.getState().duplicateHost(id);
+  w.__e2eBackupExport = async (password, path) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("backup_export", { password, path });
+  };
+  w.__e2eBackupImport = async (password, path) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("backup_import", { password, path });
+  };
+  w.__e2eFactoryReset = async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("factory_reset");
+  };
+  w.__e2eDataCounts = async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const [hosts, groups, snippets] = await Promise.all([
+      invoke<unknown[]>("list_hosts"),
+      invoke<unknown[]>("list_groups"),
+      invoke<unknown[]>("list_snippets", { folderId: null }),
+    ]);
+    return { hosts: hosts.length, groups: groups.length, snippets: snippets.length };
+  };
 }
