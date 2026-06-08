@@ -6,6 +6,20 @@ import {
   useMemo,
 } from "react";
 import { Search, Plus, ArrowLeft, FolderPlus, Import, Cloud } from "lucide-react";
+import {
+  DndContext,
+  closestCenter,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  rectSortingStrategy,
+  arrayMove,
+} from "@dnd-kit/sortable";
 import { ImportSshConfigModal } from "./ImportSshConfigModal";
 import { S3ConnectDialog } from "../s3/S3ConnectDialog";
 import { useHostsStore } from "../../stores/hosts-store";
@@ -16,18 +30,19 @@ import { useTabStore } from "../../stores/tab-store";
 import { useSftpStore } from "../../stores/sftp-store";
 import { useS3Store } from "../../stores/s3-store";
 import type { SavedHost, HostGroup, RecentConnection, S3Connection } from "../../types";
-import { HostCard } from "./HostCard";
+import { SortableHostCard } from "./SortableHostCard";
 import { S3Card } from "./S3Card";
 import { GroupCard } from "./GroupCard";
 import { GroupDeleteDialog } from "./GroupDeleteDialog";
 import { GroupModal } from "./GroupModal";
 import { ConnectionDialog } from "./ConnectionDialog";
 import { RecentConnections } from "./RecentConnections";
+import { toast } from "../../stores/toast-store";
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function HostsDashboard() {
-  const { hosts, loadHosts, recentConnections, loadRecent, saveHost, deleteHost } =
+  const { hosts, loadHosts, recentConnections, loadRecent, saveHost, deleteHost, reorderHosts } =
     useHostsStore();
   const { groups, loadGroups, createGroup, deleteGroup } = useGroupsStore();
   const setEditingHostId = useUiStore((s) => s.setEditingHostId);
@@ -329,6 +344,44 @@ export function HostsDashboard() {
     [saveHost],
   );
 
+  // ─── Drag-and-drop reordering ────────────────────────────────────────────────
+
+  // The whole card is the drag surface, so a drag must only begin on a
+  // deliberate gesture — otherwise every click-to-connect would be a drag.
+  // Mouse: require a 5px move. Touch: require a 250ms press (with 5px slop) so
+  // a tap connects and a scroll still scrolls.
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
+  );
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      const oldIndex = filteredHosts.findIndex((h) => h.id === active.id);
+      const newIndex = filteredHosts.findIndex((h) => h.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      // Reorder within the currently visible subset, then splice that new order
+      // back into the full host list — hosts hidden by a group/search filter keep
+      // their positions. This keeps the persisted global order self-consistent
+      // even when the user reorders inside a filtered view.
+      const reorderedVisible = arrayMove(filteredHosts, oldIndex, newIndex);
+      const visibleIds = new Set(filteredHosts.map((h) => h.id));
+      let cursor = 0;
+      const newFullOrder = hosts.map((h) =>
+        visibleIds.has(h.id) ? reorderedVisible[cursor++] : h,
+      );
+
+      void reorderHosts(newFullOrder).catch(() => {
+        toast.error("Couldn't save the new host order — reverted.");
+      });
+    },
+    [filteredHosts, hosts, reorderHosts],
+  );
+
   // ─── Group handlers ────────────────────────────────────────────────────────
 
   const handleGroupSelect = (groupId: string) => {
@@ -562,19 +615,30 @@ export function HostsDashboard() {
 
             {/* Host grid or empty state */}
             {filteredHosts.length > 0 ? (
-              <div className="grid grid-cols-3 gap-2.5">
-                {filteredHosts.map((host) => (
-                  <HostCard
-                    key={host.id}
-                    host={host}
-                    onConnect={(h) => void connectToHost(h)}
-                    onExplore={(h) => void exploreHost(h)}
-                    onEdit={setEditingHostId}
-                    onDelete={(id) => void handleDeleteHost(id)}
-                    onDuplicate={(h) => void handleDuplicateHost(h)}
-                  />
-                ))}
-              </div>
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={filteredHosts.map((h) => h.id)}
+                  strategy={rectSortingStrategy}
+                >
+                  <div className="grid grid-cols-3 gap-2.5">
+                    {filteredHosts.map((host) => (
+                      <SortableHostCard
+                        key={host.id}
+                        host={host}
+                        onConnect={(h) => void connectToHost(h)}
+                        onExplore={(h) => void exploreHost(h)}
+                        onEdit={setEditingHostId}
+                        onDelete={(id) => void handleDeleteHost(id)}
+                        onDuplicate={(h) => void handleDuplicateHost(h)}
+                      />
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
             ) : (
               <EmptyHostsState
                 query={query}

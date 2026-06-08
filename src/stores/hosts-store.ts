@@ -11,11 +11,12 @@ interface HostsState {
   saveHost: (host: SavedHost) => Promise<void>;
   duplicateHost: (id: string) => Promise<void>;
   deleteHost: (id: string) => Promise<void>;
+  reorderHosts: (newOrder: SavedHost[]) => Promise<void>;
   loadRecent: () => Promise<void>;
   recordConnection: (hostId: string) => Promise<void>;
 }
 
-export const useHostsStore = create<HostsState>((set) => ({
+export const useHostsStore = create<HostsState>((set, get) => ({
   hosts: [],
   loading: false,
   error: null,
@@ -70,6 +71,22 @@ export const useHostsStore = create<HostsState>((set) => ({
     await invoke("delete_host", { id });
     const hosts = await invoke<SavedHost[]>("list_hosts");
     set({ hosts });
+  },
+
+  // Optimistically apply a drag-and-drop reordering, then persist it. The UI
+  // updates instantly (so the drag feels immediate) and the new order is sent
+  // to the backend in the background. If the persist fails we roll back to the
+  // previous order so the displayed state never diverges from what's stored.
+  reorderHosts: async (newOrder) => {
+    const previous = get().hosts;
+    set({ hosts: newOrder });
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("reorder_hosts", { orderedIds: newOrder.map((h) => h.id) });
+    } catch (err) {
+      set({ hosts: previous });
+      throw err;
+    }
   },
 
   loadRecent: async () => {
