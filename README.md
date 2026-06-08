@@ -13,6 +13,7 @@
   <a href="#building">Building</a> &bull;
   <a href="#contributing">Contributing</a> &bull;
   <a href="https://discord.gg/8UuzYeNVAR">Discord</a> &bull;
+  <a href="https://join.slack.com/t/anyscp/shared_invite/zt-40b1jsfg4-f9rq_xRof_MVQqLXSPDE2Q">Slack</a> &bull;
   <a href="#license">License</a>
 </p>
 
@@ -24,6 +25,7 @@
   <a href="https://github.com/macnev2013/anySCP/stargazers"><img src="https://img.shields.io/github/stars/macnev2013/anySCP?style=social" alt="Stars"/></a>
   <img src="https://visitor-badge.laobi.icu/badge?page_id=macnev2013.anySCP&label=Views&color=blue" alt="Views"/>
   <a href="https://discord.gg/8UuzYeNVAR"><img src="https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white" alt="Discord"/></a>
+  <a href="https://join.slack.com/t/anyscp/shared_invite/zt-40b1jsfg4-f9rq_xRof_MVQqLXSPDE2Q"><img src="https://img.shields.io/badge/Slack-Join%20us-4A154B?logo=slack&logoColor=white" alt="Slack"/></a>
 </p>
 
 <p align="center">
@@ -271,6 +273,7 @@ This project is licensed under the MIT License -- see the [LICENSE](LICENSE) fil
 ## 💬 Support
 
 - **Discord**: [Join our community](https://discord.gg/8UuzYeNVAR)
+- **Slack**: [Join our workspace](https://join.slack.com/t/anyscp/shared_invite/zt-40b1jsfg4-f9rq_xRof_MVQqLXSPDE2Q)
 - **Issues**: [GitHub Issues](https://github.com/macnev2013/anySCP/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/macnev2013/anySCP/discussions)
 
