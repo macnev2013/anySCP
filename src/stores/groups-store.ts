@@ -10,9 +10,10 @@ interface GroupsState {
   createGroup: (group: HostGroup) => Promise<void>;
   updateGroup: (group: HostGroup) => Promise<void>;
   deleteGroup: (id: string) => Promise<void>;
+  reorderGroups: (newOrder: HostGroup[]) => Promise<void>;
 }
 
-export const useGroupsStore = create<GroupsState>((set) => ({
+export const useGroupsStore = create<GroupsState>((set, get) => ({
   groups: [],
   loading: false,
   error: null,
@@ -53,6 +54,22 @@ export const useGroupsStore = create<GroupsState>((set) => ({
     await invoke("delete_group", { id });
     const groups = await invoke<HostGroup[]>("list_groups");
     set({ groups });
+  },
+
+  // Optimistically apply a drag-and-drop group reordering, then persist it. The
+  // UI updates instantly and the new order is sent to the backend in the
+  // background; on failure we roll back so the displayed state never diverges
+  // from what's stored.
+  reorderGroups: async (newOrder) => {
+    const previous = get().groups;
+    set({ groups: newOrder });
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("reorder_groups", { orderedIds: newOrder.map((g) => g.id) });
+    } catch (err) {
+      set({ groups: previous });
+      throw err;
+    }
   },
 }));
 

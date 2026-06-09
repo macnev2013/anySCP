@@ -43,7 +43,7 @@ export function GroupCard({ group, hostCount, isSelected, onSelect, onDelete }: 
         title={group.name}
         aria-pressed={isSelected}
         className={[
-          "group relative flex flex-col gap-2.5 p-3.5 rounded-xl text-left",
+          "group relative flex flex-col gap-2.5 p-3.5 rounded-xl text-left w-full h-full",
           "bg-bg-surface border transition-all duration-[var(--duration-fast)]",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           isSelected

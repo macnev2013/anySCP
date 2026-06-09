@@ -1040,6 +1040,33 @@ impl HostDb {
         Ok(())
     }
 
+    /// Persist a manual group ordering. Assigns `sort_order = position` for each
+    /// id in `ordered_ids` inside a single transaction, so the dashboard renders
+    /// groups in exactly this sequence. If any id does not match an existing
+    /// group the whole transaction rolls back (leaving the previous order intact)
+    /// and `DbError::NotFound` is returned — guarding against a stale frontend
+    /// referencing a group deleted concurrently.
+    #[instrument(skip(self), fields(count = ordered_ids.len()))]
+    pub fn reorder_groups(&self, ordered_ids: &[String]) -> Result<(), DbError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let tx = conn.transaction()?;
+        for (idx, id) in ordered_ids.iter().enumerate() {
+            let affected = tx.execute(
+                "UPDATE host_groups SET sort_order = ?2 WHERE id = ?1",
+                params![id, idx as i64],
+            )?;
+            if affected == 0 {
+                // Dropping `tx` without commit rolls back every prior UPDATE.
+                return Err(DbError::NotFound(id.clone()));
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Return all groups ordered by `sort_order` ascending, then by name.
     #[instrument(skip(self))]
     pub fn list_groups(&self) -> Result<Vec<HostGroup>, DbError> {

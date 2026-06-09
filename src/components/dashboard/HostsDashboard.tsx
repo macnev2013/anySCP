@@ -31,8 +31,8 @@ import { useSftpStore } from "../../stores/sftp-store";
 import { useS3Store } from "../../stores/s3-store";
 import type { SavedHost, HostGroup, RecentConnection, S3Connection } from "../../types";
 import { SortableHostCard } from "./SortableHostCard";
+import { SortableGroupCard } from "./SortableGroupCard";
 import { S3Card } from "./S3Card";
-import { GroupCard } from "./GroupCard";
 import { GroupDeleteDialog } from "./GroupDeleteDialog";
 import { GroupModal } from "./GroupModal";
 import { ConnectionDialog } from "./ConnectionDialog";
@@ -44,7 +44,7 @@ import { toast } from "../../stores/toast-store";
 export function HostsDashboard() {
   const { hosts, loadHosts, recentConnections, loadRecent, saveHost, deleteHost, reorderHosts } =
     useHostsStore();
-  const { groups, loadGroups, createGroup, deleteGroup } = useGroupsStore();
+  const { groups, loadGroups, createGroup, deleteGroup, reorderGroups } = useGroupsStore();
   const setEditingHostId = useUiStore((s) => s.setEditingHostId);
 
   const [query, setQuery] = useState("");
@@ -382,6 +382,26 @@ export function HostsDashboard() {
     [filteredHosts, hosts, reorderHosts],
   );
 
+  // Reorder the group cards themselves. This is a separate DnD layer from the
+  // host reordering above (its own DndContext over the Groups grid), so the two
+  // never interfere. `groups` is never filtered, so a plain arrayMove suffices.
+  const handleGroupDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      const oldIndex = groups.findIndex((g) => g.id === active.id);
+      const newIndex = groups.findIndex((g) => g.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      const newOrder = arrayMove(groups, oldIndex, newIndex);
+      void reorderGroups(newOrder).catch(() => {
+        toast.error("Couldn't save the new group order — reverted.");
+      });
+    },
+    [groups, reorderGroups],
+  );
+
   // ─── Group handlers ────────────────────────────────────────────────────────
 
   const handleGroupSelect = (groupId: string) => {
@@ -571,18 +591,29 @@ export function HostsDashboard() {
               >
                 Groups
               </h2>
-              <div className="grid grid-cols-3 gap-2.5">
-                {groups.map((group) => (
-                  <GroupCard
-                    key={group.id}
-                    group={group}
-                    hostCount={hostCountByGroup[group.id] ?? 0}
-                    isSelected={selectedGroupId === group.id}
-                    onSelect={handleGroupSelect}
-                    onDelete={handleGroupDeleteRequest}
-                  />
-                ))}
-              </div>
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleGroupDragEnd}
+              >
+                <SortableContext
+                  items={groups.map((g) => g.id)}
+                  strategy={rectSortingStrategy}
+                >
+                  <div className="grid grid-cols-3 gap-2.5">
+                    {groups.map((group) => (
+                      <SortableGroupCard
+                        key={group.id}
+                        group={group}
+                        hostCount={hostCountByGroup[group.id] ?? 0}
+                        isSelected={selectedGroupId === group.id}
+                        onSelect={handleGroupSelect}
+                        onDelete={handleGroupDeleteRequest}
+                      />
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
             </section>
           )}
 

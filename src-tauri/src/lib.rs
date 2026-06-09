@@ -240,6 +240,7 @@ pub fn run() {
             db::commands::create_group,
             db::commands::update_group,
             db::commands::list_groups,
+            db::commands::reorder_groups,
             db::commands::delete_group,
             db::commands::delete_group_with_hosts,
             // Connection history
