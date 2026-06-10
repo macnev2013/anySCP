@@ -69,3 +69,17 @@ impl From<russh_keys::Error> for SshError {
         SshError::KeyParseError(e.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The frontend distinguishes a deliberate cancel from a failure by the
+    /// serialized `kind`, so the wire shape is a contract.
+    #[test]
+    fn cancelled_serializes_with_a_distinct_kind() {
+        let json = serde_json::to_value(SshError::Cancelled).expect("serialize");
+        assert_eq!(json["kind"], "cancelled");
+        assert_eq!(json["message"], "Connection cancelled");
+    }
+}

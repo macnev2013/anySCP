@@ -321,7 +321,12 @@ export function HostsDashboard() {
         const { invoke } = await import("@tauri-apps/api/core");
 
         const sessionId = await invoke<string>("connect_saved_host_no_pty", { hostId: host.id, attemptId });
-        if (cancelled) return;
+        if (cancelled) {
+          // The handshake settled before the cancel landed — tear the bare
+          // connection down, otherwise nothing ever references it again.
+          void invoke("ssh_disconnect", { sessionId });
+          return;
+        }
 
         let explorerSessionId: string;
         let transport: "sftp" | "scp" = "sftp";
@@ -336,6 +341,15 @@ export function HostsDashboard() {
             // Surface the original SFTP error if SCP also fails.
             throw sftpErr;
           }
+        }
+
+        if (cancelled) {
+          // Cancel landed while the explorer channel was opening — drop the
+          // explorer session and the connection beneath it; no tab was added.
+          if (transport === "sftp") void invoke("sftp_close", { sftpSessionId: explorerSessionId });
+          else void invoke("scp_close", { scpSessionId: explorerSessionId });
+          void invoke("ssh_disconnect", { sessionId });
+          return;
         }
 
         useSftpStore.getState().openSession(explorerSessionId, sessionId, label, host.username, false, host.start_directory ?? undefined);

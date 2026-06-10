@@ -459,12 +459,24 @@ impl SshManager {
             },
         );
 
-        let (_, session) = self
-            .sessions
-            .remove(session_id)
-            .ok_or_else(|| SshError::SessionNotFound(session_id.to_string()))?;
-
-        session.disconnect().await?;
+        // PTY sessions and bare (SFTP-only) handles live in separate maps —
+        // check both so a no-PTY connection (e.g. an explorer connect whose
+        // cancel landed after the handshake settled) can be torn down through
+        // this same command instead of lingering in `bare_handles` forever.
+        if let Some((_, session)) = self.sessions.remove(session_id) {
+            session.disconnect().await?;
+        } else if let Some((_, bare)) = self.bare_handles.remove(session_id) {
+            // Best-effort goodbye — dropping the handles closes the connection
+            // (and any ProxyJump tunnel beneath it) even if the server is gone.
+            let _ = bare
+                .handle
+                .lock()
+                .await
+                .disconnect(russh::Disconnect::ByApplication, "", "en")
+                .await;
+        } else {
+            return Err(SshError::SessionNotFound(session_id.to_string()));
+        }
 
         let _ = app_handle.emit(
             "ssh:status",
@@ -476,5 +488,55 @@ impl SshManager {
 
         info!(session_id = %session_id, "SSH disconnected");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Cancelling an attempt ID that was never registered (or whose attempt
+    /// already settled) must report that nothing was found.
+    #[test]
+    fn cancel_connect_returns_false_for_unknown_attempt() {
+        let manager = SshManager::new();
+        assert!(!manager.cancel_connect("no-such-attempt"));
+    }
+
+    /// The token handed to the connect path observes a cancel issued through
+    /// the manager by attempt ID.
+    #[test]
+    fn cancel_connect_signals_the_registered_token() {
+        let manager = SshManager::new();
+        let token = manager.register_pending("attempt-1".to_string());
+        assert!(!token.is_cancelled());
+
+        assert!(manager.cancel_connect("attempt-1"));
+        assert!(token.is_cancelled());
+    }
+
+    /// Once an attempt settles and clears its registration, a late cancel is a
+    /// no-op: the settled attempt's token must not be signalled.
+    #[test]
+    fn clear_pending_makes_a_late_cancel_a_no_op() {
+        let manager = SshManager::new();
+        let token = manager.register_pending("attempt-1".to_string());
+        manager.clear_pending("attempt-1");
+
+        assert!(!manager.cancel_connect("attempt-1"));
+        assert!(!token.is_cancelled());
+    }
+
+    /// Re-registering an attempt ID replaces the token: a cancel reaches the
+    /// new attempt, never the orphaned one.
+    #[test]
+    fn reregistering_an_attempt_id_replaces_the_token() {
+        let manager = SshManager::new();
+        let orphaned = manager.register_pending("attempt-1".to_string());
+        let active = manager.register_pending("attempt-1".to_string());
+
+        assert!(manager.cancel_connect("attempt-1"));
+        assert!(active.is_cancelled());
+        assert!(!orphaned.is_cancelled());
     }
 }
