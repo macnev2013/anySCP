@@ -1,13 +1,8 @@
-import { ExternalLink } from "lucide-react";
+import { useEffect } from "react";
+import { ExternalLink, X } from "lucide-react";
 import { useUpdaterStore } from "../../stores/updater-store";
 
 const REPO_URL = "https://github.com/macnev2013/anySCP";
-
-const BTN_BASE = [
-  "px-3 py-1.5 rounded-lg text-[length:var(--text-sm)] font-medium",
-  "transition-all duration-[var(--duration-fast)]",
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-].join(" ");
 
 /**
  * Shown when an update is available and automatic updates are off (or the user
@@ -22,6 +17,15 @@ export function UpdateDialog() {
   const dismiss = useUpdaterStore((s) => s.dismissDialog);
   const skip = useUpdaterStore((s) => s.skipUpdate);
 
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); dismiss(); }
+    };
+    document.addEventListener("keydown", handler, true);
+    return () => document.removeEventListener("keydown", handler, true);
+  }, [open, dismiss]);
+
   if (!open || !version) return null;
 
   const openChangelog = async () => {
@@ -32,49 +36,69 @@ export function UpdateDialog() {
   };
 
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 p-4 no-select animate-[fadeIn_120ms_var(--ease-expo-out)_both]">
+    <div
+      className="fixed inset-0 z-[200] flex items-start justify-center pt-[8vh] bg-black/50 backdrop-blur-sm no-select"
+      onClick={(e) => e.target === e.currentTarget && dismiss()}
+    >
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Update available"
-        className="w-full max-w-md rounded-2xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)] p-5"
+        className="w-full max-w-sm rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)] flex flex-col animate-in fade-in slide-in-from-top-2 duration-[var(--duration-base)]"
       >
-        <h2 className="text-[length:var(--text-lg)] font-semibold text-text-primary">
-          Update available
-        </h2>
-        <p className="mt-1 text-[length:var(--text-sm)] text-text-secondary">
-          anySCP <span className="font-medium text-text-primary">v{version}</span> is available
-          {appVersion ? <span className="text-text-muted"> — you have v{appVersion}</span> : null}.
-        </p>
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border shrink-0">
+          <h2 className="text-[length:var(--text-lg)] font-semibold text-text-primary">
+            Update available
+          </h2>
+          <button
+            type="button"
+            onClick={dismiss}
+            aria-label="Close"
+            className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <X size={14} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+        </div>
 
-        <button
-          type="button"
-          onClick={() => void openChangelog()}
-          className="mt-3 inline-flex items-center gap-1.5 text-[length:var(--text-sm)] font-medium text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
-        >
-          View changelog on GitHub
-          <ExternalLink size={13} strokeWidth={2} />
-        </button>
+        {/* Body */}
+        <div className="px-6 py-4 flex flex-col gap-3">
+          <p className="text-[length:var(--text-sm)] text-text-secondary">
+            anySCP <span className="font-medium text-text-primary">v{version}</span> is available
+            {appVersion ? <span className="text-text-muted"> — you have v{appVersion}</span> : null}.
+          </p>
+          <button
+            type="button"
+            onClick={() => void openChangelog()}
+            className="self-start inline-flex items-center gap-1.5 text-[length:var(--text-sm)] font-medium text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+          >
+            View changelog on GitHub
+            <ExternalLink size={13} strokeWidth={2} />
+          </button>
+        </div>
 
-        <div className="mt-5 flex items-center justify-end gap-2">
+        {/* Footer */}
+        <div className="px-6 pb-5 pt-3 flex items-center justify-end gap-2 border-t border-border shrink-0">
           <button
             type="button"
             onClick={skip}
-            className={`${BTN_BASE} text-text-muted hover:text-text-primary`}
+            className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-text-muted hover:text-text-primary rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             Skip this version
           </button>
           <button
             type="button"
             onClick={dismiss}
-            className={`${BTN_BASE} bg-bg-base border border-border text-text-secondary hover:text-text-primary hover:border-border-focus`}
+            className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-text-secondary bg-bg-subtle border border-border hover:text-text-primary hover:border-border-focus rounded-lg transition-all duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             Later
           </button>
           <button
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
             type="button"
             onClick={() => void install()}
-            className={`${BTN_BASE} bg-accent text-text-inverse hover:bg-accent-hover`}
+            className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-text-inverse bg-accent hover:bg-accent-hover rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             Install
           </button>
