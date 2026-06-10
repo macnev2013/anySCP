@@ -16,7 +16,7 @@ pub enum DbError {
     #[error("Database error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
-    #[error("Host not found: {0}")]
+    #[error("Not found: {0}")]
     NotFound(String),
 
     #[error("Failed to initialize database: {0}")]
@@ -2400,6 +2400,35 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM connection_history", [], |r| r.get(0))
             .expect("count");
         assert_eq!(count, 0, "history should be empty after host deletion");
+    }
+
+    #[test]
+    fn delete_history_entry_removes_single_row() {
+        let (db, _dir) = test_db();
+        let h = sample_host("history-del-host");
+        db.save_host(&h).expect("save_host");
+        db.record_connection("history-del-host").expect("record 1");
+        db.record_connection("history-del-host").expect("record 2");
+
+        let entries = db.list_connection_history(None, 10, 0).expect("list");
+        assert_eq!(entries.len(), 2);
+
+        let target_id = entries[0].id;
+        db.delete_connection_history_entry(target_id)
+            .expect("delete should succeed");
+
+        let remaining = db.list_connection_history(None, 10, 0).expect("list after");
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining.iter().all(|e| e.id != target_id));
+    }
+
+    #[test]
+    fn delete_history_entry_returns_not_found_for_missing_id() {
+        let (db, _dir) = test_db();
+        let err = db
+            .delete_connection_history_entry(99999)
+            .expect_err("should fail for unknown id");
+        assert!(matches!(err, DbError::NotFound(_)));
     }
 
     // -----------------------------------------------------------------------

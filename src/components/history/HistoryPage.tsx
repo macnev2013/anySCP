@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { Search, Clock, ChevronDown, Loader2, TerminalSquare, FolderOpen, Trash2 } from "lucide-react";
+import { toast } from "../../stores/toast-store";
 import { CustomSelect } from "../shared/CustomSelect";
 import { useSftpStore } from "../../stores/sftp-store";
 import { useSessionStore } from "../../stores/session-store";
@@ -164,8 +165,10 @@ export function HistoryPage() {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("delete_connection_history_entry", { id: entryId });
       setEntries((prev) => prev.filter((entry) => entry.id !== entryId));
+      offsetRef.current -= 1;
+      setConfirmDeleteId(null);
     } catch {
-      // best-effort
+      toast.error("Failed to delete history entry.");
     } finally {
       setMutating(false);
     }
@@ -384,11 +387,7 @@ export function HistoryPage() {
         busy={mutating}
         onCancel={() => setConfirmDeleteId(null)}
         onConfirm={() => {
-          const id = confirmDeleteId;
-          setConfirmDeleteId(null);
-          if (id !== null) {
-            void handleDeleteHistoryEntry(id);
-          }
+          if (confirmDeleteId !== null) void handleDeleteHistoryEntry(confirmDeleteId);
         }}
       />
     </>
