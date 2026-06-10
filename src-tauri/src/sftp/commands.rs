@@ -1,8 +1,10 @@
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use russh_sftp::protocol::{FileAttributes, FileType, OpenFlags};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, State, Window};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
@@ -11,8 +13,9 @@ use crate::ssh::manager::SshManager;
 
 use super::transfer_manager::TransferManager;
 use super::{
-    format_permissions, ChmodSummary, SftpEntry, SftpEntryType, SftpError, SftpManager,
-    SftpSessionWrapper, TransferDirection, TransferInfo, TransferProgress, TransferStatus,
+    format_permissions, validate_remote_name, ChmodSummary, SftpEntry, SftpEntryType, SftpError,
+    SftpManager, SftpSessionWrapper, TransferDirection, TransferInfo, TransferProgress,
+    TransferStatus,
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -695,16 +698,118 @@ pub async fn sftp_download(
 }
 
 /// Preview image handed to the OS drag session. Embedded so we don't depend on
-/// a resolvable bundle-resource path at runtime.
+/// a resolvable bundle-resource path at runtime, and handed to the drag API as
+/// raw bytes so it never needs to live in the staging directory (where a remote
+/// file of the same name could clobber it).
 static DRAG_ICON_PNG: &[u8] = include_bytes!("../../icons/32x32.png");
 
-/// Result of staging files for an OS-level drag-out.
+// Hard caps on a single drag-out so a hostile server (e.g. a top-level symlink
+// pointing at `/`) cannot coerce the client into mirroring an unbounded tree
+// into local temp.
+const MAX_DRAGOUT_BYTES: u64 = 8 * 1024 * 1024 * 1024; // 8 GiB total
+const MAX_DRAGOUT_ENTRIES: usize = 50_000;
+const MAX_DRAGOUT_DEPTH: usize = 64;
+/// Staged drag-out trees older than this are swept on the next drag-out. Long
+/// enough that the OS has certainly finished copying a dropped selection.
+const DRAGOUT_STALE_AFTER: Duration = Duration::from_secs(60 * 60);
+
+/// Outcome of a drag-out: whether the OS drag ended in a drop and how many
+/// top-level items were dragged.
 #[derive(serde::Serialize)]
-pub struct DragOutPrep {
-    /// Absolute local paths of the staged files, ready to hand to the drag plugin.
-    pub files: Vec<String>,
-    /// Absolute local path of the drag-preview image (required by `startDrag`).
-    pub icon: String,
+pub struct DragOutResult {
+    pub dropped: bool,
+    pub count: usize,
+}
+
+/// Budget shared across one drag-out, enforcing the caps above.
+struct StageBudget {
+    bytes: u64,
+    entries: usize,
+}
+
+impl StageBudget {
+    fn new() -> Self {
+        Self {
+            bytes: MAX_DRAGOUT_BYTES,
+            entries: MAX_DRAGOUT_ENTRIES,
+        }
+    }
+
+    fn take_entry(&mut self) -> Result<(), SftpError> {
+        self.entries = self.entries.checked_sub(1).ok_or_else(|| {
+            SftpError::InvalidPath("drag-out selection has too many files".into())
+        })?;
+        Ok(())
+    }
+
+    fn take_bytes(&mut self, n: u64) -> Result<(), SftpError> {
+        self.bytes = self
+            .bytes
+            .checked_sub(n)
+            .ok_or_else(|| SftpError::InvalidPath("drag-out selection is too large".into()))?;
+        Ok(())
+    }
+}
+
+/// Create a directory (and parents) restricted to the current user (0700 on
+/// Unix) so secrets staged for a drag-out aren't world-readable in `/tmp`.
+async fn create_private_dir(path: &Path) -> Result<(), SftpError> {
+    #[cfg(unix)]
+    {
+        tokio::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)
+            .await
+            .map_err(|e| SftpError::LocalIoError(e.to_string()))
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::fs::create_dir_all(path)
+            .await
+            .map_err(|e| SftpError::LocalIoError(e.to_string()))
+    }
+}
+
+/// Choose a collision-free local path for a staged top-level entry. Same-named
+/// entries from different source dirs are isolated under a hidden `.dupN`
+/// subdir. Collisions are detected case-INSENSITIVELY because the staging
+/// filesystem often is (macOS APFS, Windows NTFS default) — without this, two
+/// remote files differing only in case ("File" vs "file") would map to the same
+/// on-disk path and silently merge.
+fn staged_path(stage: &Path, used: &mut HashSet<String>, file_name: &str) -> PathBuf {
+    let key = |p: &Path| p.to_string_lossy().to_lowercase();
+    let mut path = stage.join(file_name);
+    let mut n = 1;
+    while used.contains(&key(&path)) {
+        path = stage.join(format!(".dup{n}")).join(file_name);
+        n += 1;
+    }
+    used.insert(key(&path));
+    path
+}
+
+/// Best-effort removal of staged drag-out trees left behind by earlier drops
+/// (a successful OS drop gives us no completion signal, so we reap on the next
+/// drag rather than guessing when the OS finished copying).
+async fn sweep_stale_dragout(root: &Path) {
+    let Ok(mut rd) = tokio::fs::read_dir(root).await else {
+        return;
+    };
+    let now = SystemTime::now();
+    while let Ok(Some(entry)) = rd.next_entry().await {
+        let stale = entry
+            .metadata()
+            .await
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| now.duration_since(t).ok())
+            .map(|age| age > DRAGOUT_STALE_AFTER)
+            .unwrap_or(false);
+        if stale {
+            let _ = tokio::fs::remove_dir_all(entry.path()).await;
+        }
+    }
 }
 
 /// Stream one remote file to a local path. The session lock is held only for
@@ -757,18 +862,25 @@ async fn stage_file(
 /// structure. Walks iteratively (an explicit stack) to avoid boxing async
 /// recursion. Symlinks and other special entries are skipped — we only descend
 /// real directories and copy regular files, which also guards against symlink
-/// loops.
+/// loops. Every server-supplied name is validated before it is joined onto a
+/// local path (a hostile server must not be able to escape `local_dir`), and
+/// the shared `budget` caps total bytes/entries/depth.
 async fn stage_dir(
     sftp_arc: &Arc<tokio::sync::Mutex<russh_sftp::client::SftpSession>>,
     remote_dir: &str,
-    local_dir: &std::path::Path,
+    local_dir: &Path,
+    budget: &mut StageBudget,
 ) -> Result<(), SftpError> {
-    let mut stack = vec![(remote_dir.to_string(), local_dir.to_path_buf())];
+    let mut stack = vec![(remote_dir.to_string(), local_dir.to_path_buf(), 0usize)];
 
-    while let Some((rdir, ldir)) = stack.pop() {
-        tokio::fs::create_dir_all(&ldir)
-            .await
-            .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
+    while let Some((rdir, ldir, depth)) = stack.pop() {
+        if depth > MAX_DRAGOUT_DEPTH {
+            return Err(SftpError::InvalidPath(
+                "drag-out directory tree is nested too deeply".into(),
+            ));
+        }
+
+        create_private_dir(&ldir).await?;
 
         // read_dir already skips "." and ".." entries internally.
         let entries = {
@@ -779,7 +891,13 @@ async fn stage_dir(
         };
 
         for entry in entries {
-            let name = entry.file_name();
+            let raw = entry.file_name();
+            // Reject unsafe server-supplied names ("..", separators, absolute)
+            // rather than aborting the whole drag on one bad entry.
+            let name = match validate_remote_name(&raw) {
+                Ok(n) => n.to_string(),
+                Err(_) => continue,
+            };
             let rpath = if rdir == "/" {
                 format!("/{name}")
             } else {
@@ -787,9 +905,17 @@ async fn stage_dir(
             };
             let lpath = ldir.join(&name);
 
-            match entry.metadata().file_type() {
-                FileType::Dir => stack.push((rpath, lpath)),
-                FileType::File => stage_file(sftp_arc, &rpath, &lpath).await?,
+            let md = entry.metadata();
+            match md.file_type() {
+                FileType::Dir => {
+                    budget.take_entry()?;
+                    stack.push((rpath, lpath, depth + 1));
+                }
+                FileType::File => {
+                    budget.take_entry()?;
+                    budget.take_bytes(md.size.unwrap_or(0))?;
+                    stage_file(sftp_arc, &rpath, &lpath).await?;
+                }
                 _ => {} // skip symlinks / specials
             }
         }
@@ -797,90 +923,188 @@ async fn stage_dir(
     Ok(())
 }
 
-/// Download remote files **and folders** to a temp staging directory and return
-/// their local paths, **awaiting completion**.
+/// Stage every selected top-level entry into `stage`, returning the local paths
+/// to hand to the OS drag. Top-level entries are classified with `lstat`
+/// (`symlink_metadata`) so a symlinked directory can't be followed into an
+/// unbounded recursive download; symlinks/specials are skipped.
+async fn stage_entries(
+    sftp_arc: &Arc<tokio::sync::Mutex<russh_sftp::client::SftpSession>>,
+    remote_paths: &[String],
+    stage: &Path,
+) -> Result<Vec<PathBuf>, SftpError> {
+    let mut files = Vec::with_capacity(remote_paths.len());
+    let mut used: HashSet<String> = HashSet::new();
+    let mut budget = StageBudget::new();
+
+    for remote_path in remote_paths {
+        let attrs = {
+            let sftp = sftp_arc.lock().await;
+            sftp.symlink_metadata(remote_path)
+                .await
+                .map_err(|e| SftpError::RemoteIoError(e.to_string()))?
+        };
+
+        let file_type = attrs.file_type();
+        if file_type != FileType::Dir && file_type != FileType::File {
+            continue; // skip symlinks / specials at the top level
+        }
+
+        let raw = Path::new(remote_path)
+            .file_name()
+            .ok_or_else(|| {
+                SftpError::InvalidPath(format!("cannot derive a file name from {remote_path:?}"))
+            })?
+            .to_string_lossy()
+            .to_string();
+        validate_remote_name(&raw)?;
+
+        let local_path = staged_path(stage, &mut used, &raw);
+        if let Some(parent) = local_path.parent() {
+            create_private_dir(parent).await?;
+        }
+
+        if file_type == FileType::Dir {
+            stage_dir(sftp_arc, remote_path, &local_path, &mut budget).await?;
+        } else {
+            budget.take_entry()?;
+            budget.take_bytes(attrs.size.unwrap_or(0))?;
+            stage_file(sftp_arc, remote_path, &local_path).await?;
+        }
+
+        files.push(local_path);
+    }
+
+    Ok(files)
+}
+
+/// Run the native OS drag on the main thread with already-staged file paths,
+/// resolving to `true` if the drag ended in a drop. Mirrors how
+/// `tauri-plugin-drag` drives the `drag` crate, but the path list is fixed by
+/// the backend (only validated staging paths) rather than accepted from the
+/// webview — so a compromised webview can't drag arbitrary local files.
 ///
-/// This backs drag-to-desktop ("drag-out"). Unlike `sftp_download` — which is
-/// fire-and-forget and streams progress events — the native OS drag API
-/// (tauri-plugin-drag) needs real, fully-written local file handles *before*
-/// the drag begins, so this resolves only once every byte is on disk.
+/// Platform note: the `drag` crate's GTK backend is X11-oriented and best-effort
+/// under Wayland. The `drag` callback (Dropped/Cancel) is the only completion
+/// signal we await, so if a platform fails to fire it the command stays pending
+/// for that drag; the frontend's re-entrancy guard still recovers on the next
+/// attempt and staged files are reaped by `sweep_stale_dragout`.
+async fn start_native_drag(
+    app: AppHandle,
+    window: Window,
+    files: Vec<PathBuf>,
+) -> Result<bool, SftpError> {
+    let icon_bytes = DRAG_ICON_PNG.to_vec();
+
+    tokio::task::spawn_blocking(move || -> Result<bool, SftpError> {
+        let (tx, rx) = std::sync::mpsc::channel::<Result<bool, SftpError>>();
+        let tx_cb = tx.clone();
+
+        app.run_on_main_thread(move || {
+            #[cfg(target_os = "linux")]
+            let raw_window = window.gtk_window();
+            #[cfg(not(target_os = "linux"))]
+            let raw_window = tauri::Result::Ok(window.clone());
+
+            match raw_window {
+                Ok(w) => {
+                    let started = drag::start_drag(
+                        &w,
+                        drag::DragItem::Files(files),
+                        drag::Image::Raw(icon_bytes),
+                        move |result, _cursor| {
+                            let _ = tx_cb.send(Ok(matches!(result, drag::DragResult::Dropped)));
+                        },
+                        drag::Options::default(),
+                    );
+                    if let Err(e) = started {
+                        let _ = tx.send(Err(SftpError::LocalIoError(format!(
+                            "could not start drag: {e}"
+                        ))));
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(SftpError::LocalIoError(format!(
+                        "no window handle for drag: {e}"
+                    ))));
+                }
+            }
+        })
+        .map_err(|e| SftpError::LocalIoError(format!("main-thread dispatch failed: {e}")))?;
+
+        rx.recv()
+            .map_err(|e| SftpError::LocalIoError(format!("drag result channel closed: {e}")))?
+    })
+    .await
+    .map_err(|e| SftpError::LocalIoError(format!("drag task failed: {e}")))?
+}
+
+/// Stage the selected remote files/folders to a private temp dir and start a
+/// native OS drag-out (download to desktop/Finder), resolving once the drag
+/// ends. Returns whether it ended in a drop and how many top-level items moved.
 ///
-/// Every selected entry is staged (fixing the "only one file downloaded"
-/// multi-select bug); directories are copied recursively, preserving their
-/// tree. Each call stages into a unique subdir so same-named entries from
-/// different directories and concurrent drags don't collide. We don't delete
-/// the staged files — the OS copies them out asynchronously on drop and gives
-/// us no completion signal — so cleanup is left to the OS temp reaper.
+/// Unlike `sftp_download` (fire-and-forget, streams progress) the OS drag API
+/// needs real, fully-written local file handles *before* the drag begins, so
+/// this stages every byte first. Directories are copied recursively. Staging
+/// runs entirely in the backend and the drag is handed only validated staging
+/// paths — the webview never names a path, so it can't drag arbitrary files.
+///
+/// Cleanup: on cancel the staged tree is removed immediately (nothing was
+/// copied out); on a drop we leave it for the OS to finish copying and reap it
+/// on a later drag via `sweep_stale_dragout` (the OS gives no copy-complete
+/// signal). Failures remove the partial tree before returning.
 #[tauri::command]
-#[instrument(skip(sftp_manager), fields(sftp_session_id = %sftp_session_id))]
-pub async fn sftp_download_to_temp(
+#[instrument(skip(app, window, sftp_manager), fields(sftp_session_id = %sftp_session_id))]
+pub async fn sftp_drag_out(
+    app: AppHandle,
+    window: Window,
     sftp_session_id: String,
     remote_paths: Vec<String>,
     sftp_manager: State<'_, Arc<SftpManager>>,
-) -> Result<DragOutPrep, SftpError> {
+) -> Result<DragOutResult, SftpError> {
     let sftp_arc = {
         let session_ref = sftp_manager.get_session(&sftp_session_id)?;
         session_ref.sftp.clone()
     };
 
-    let stage = std::env::temp_dir()
-        .join("anyscp-dragout")
-        .join(uuid::Uuid::new_v4().to_string());
-    tokio::fs::create_dir_all(&stage)
-        .await
-        .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
+    let dragout_root = std::env::temp_dir().join("anyscp-dragout");
+    sweep_stale_dragout(&dragout_root).await;
 
-    let mut files = Vec::with_capacity(remote_paths.len());
-    // Tracks paths already staged in this drag so two selected entries sharing
-    // a name don't silently overwrite each other — the second is isolated in
-    // its own numbered subdir, preserving the basename dropped onto the desktop.
-    let mut used: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    let stage = dragout_root.join(uuid::Uuid::new_v4().to_string());
+    create_private_dir(&stage).await?;
 
-    for remote_path in &remote_paths {
-        let attrs = {
-            let sftp = sftp_arc.lock().await;
-            sftp.metadata(remote_path)
-                .await
-                .map_err(|e| SftpError::RemoteIoError(e.to_string()))?
-        };
-
-        let file_name = std::path::Path::new(remote_path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| remote_path.clone());
-
-        let mut local_path = stage.join(&file_name);
-        let mut n = 1;
-        while used.contains(&local_path) {
-            local_path = stage.join(n.to_string()).join(&file_name);
-            n += 1;
+    // Stage everything; on any failure remove the partial tree so a broken drag
+    // doesn't leak bytes into temp.
+    let files = match stage_entries(&sftp_arc, &remote_paths, &stage).await {
+        Ok(files) => files,
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&stage).await;
+            return Err(e);
         }
-        used.insert(local_path.clone());
-        if let Some(parent) = local_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
-        }
+    };
 
-        if attrs.file_type() == FileType::Dir {
-            stage_dir(&sftp_arc, remote_path, &local_path).await?;
-        } else {
-            stage_file(&sftp_arc, remote_path, &local_path).await?;
-        }
-
-        files.push(local_path.to_string_lossy().to_string());
+    if files.is_empty() {
+        let _ = tokio::fs::remove_dir_all(&stage).await;
+        return Ok(DragOutResult {
+            dropped: false,
+            count: 0,
+        });
     }
 
-    // `startDrag` requires a preview image path; write our app icon alongside.
-    let icon_path = stage.join("drag-icon.png");
-    tokio::fs::write(&icon_path, DRAG_ICON_PNG)
-        .await
-        .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
+    let count = files.len();
+    let dropped = match start_native_drag(app, window, files).await {
+        Ok(dropped) => dropped,
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&stage).await;
+            return Err(e);
+        }
+    };
 
-    Ok(DragOutPrep {
-        files,
-        icon: icon_path.to_string_lossy().to_string(),
-    })
+    if !dropped {
+        // Cancelled — nothing was copied out, so reclaim the space now.
+        let _ = tokio::fs::remove_dir_all(&stage).await;
+    }
+
+    Ok(DragOutResult { dropped, count })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1702,6 +1926,50 @@ mod tests {
         // setuid/setgid/sticky in the lower 12 bits are passed through verbatim.
         assert_eq!(chmod_attrs(0o4755).permissions, Some(0o4755));
         assert_eq!(chmod_attrs(0o1777).permissions, Some(0o1777));
+    }
+
+    #[test]
+    fn staged_path_isolates_duplicate_basenames() {
+        let stage = Path::new("/tmp/stage");
+        let mut used = HashSet::new();
+
+        // First file of a given name lands directly under the stage dir.
+        let a = staged_path(stage, &mut used, "report.txt");
+        assert_eq!(a, stage.join("report.txt"));
+
+        // A second entry with the same basename is isolated under a hidden
+        // `.dupN` subdir so it can't clobber the first on the desktop.
+        let b = staged_path(stage, &mut used, "report.txt");
+        assert_eq!(b, stage.join(".dup1").join("report.txt"));
+        assert_ne!(a, b);
+
+        // A different name is unaffected.
+        let c = staged_path(stage, &mut used, "notes.txt");
+        assert_eq!(c, stage.join("notes.txt"));
+
+        // Collision detection is case-insensitive (staging FS often is), so a
+        // case-only variant is isolated rather than silently merged on APFS/NTFS.
+        let d = staged_path(stage, &mut used, "NOTES.TXT");
+        assert_eq!(d, stage.join(".dup1").join("NOTES.TXT"));
+
+        // The `.dupN` parent can never collide with a real top-level entry,
+        // because real entries are validated single components placed directly
+        // under the stage dir.
+        assert!(validate_remote_name(".dup1").is_ok());
+        assert_ne!(b.parent(), Some(stage));
+    }
+
+    #[test]
+    fn staged_budget_caps_entries_and_bytes() {
+        let mut budget = StageBudget {
+            bytes: 100,
+            entries: 1,
+        };
+        assert!(budget.take_entry().is_ok());
+        assert!(budget.take_entry().is_err(), "second entry exceeds cap");
+
+        assert!(budget.take_bytes(100).is_ok());
+        assert!(budget.take_bytes(1).is_err(), "byte cap exceeded");
     }
 
     #[test]

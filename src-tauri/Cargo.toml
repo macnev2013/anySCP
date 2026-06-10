@@ -71,8 +71,11 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 # Native OS drag-out: hands real local file handles to the OS so files can be
 # dragged from the Explorer onto the desktop/Finder. The HTML5 DataTransfer API
-# cannot do this from a webview (see drag-out comment in ExplorerFileTable).
-tauri-plugin-drag = "2"
+# cannot do this from a webview (see drag-out comment in ExplorerFileTable). We
+# use the `drag` crate directly (rather than tauri-plugin-drag) so the drag is
+# driven from a backend command that only ever hands the OS validated staging
+# paths — the webview can't name an arbitrary local file to drag out.
+drag = "2"
 ssh2-config = "0.7.0"
 rust-s3 = { version = "0.37.1", default-features = false, features = ["tokio-rustls-tls"] }
 

@@ -50,7 +50,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_drag::init())
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -183,7 +182,7 @@ pub fn run() {
             sftp::commands::sftp_copy_entries,
             // SFTP — legacy direct transfers (kept for VS Code edit workflow)
             sftp::commands::sftp_download,
-            sftp::commands::sftp_download_to_temp,
+            sftp::commands::sftp_drag_out,
             sftp::commands::sftp_upload,
             sftp::commands::sftp_cancel_transfer,
             sftp::commands::sftp_edit_external,

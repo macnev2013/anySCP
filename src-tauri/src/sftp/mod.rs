@@ -23,6 +23,8 @@ pub enum SftpError {
     LocalIoError(String),
     #[error("Transfer cancelled")]
     TransferCancelled,
+    #[error("Invalid path: {0}")]
+    InvalidPath(String),
     #[allow(dead_code)]
     #[error("Permission denied: {0}")]
     PermissionDenied(String),
@@ -48,6 +50,7 @@ impl Serialize for SftpError {
             SftpError::RemoteIoError(_) => "remote_io_error",
             SftpError::LocalIoError(_) => "local_io_error",
             SftpError::TransferCancelled => "transfer_cancelled",
+            SftpError::InvalidPath(_) => "invalid_path",
             SftpError::PermissionDenied(_) => "permission_denied",
             SftpError::NotFound(_) => "not_found",
             SftpError::ChannelError(_) => "channel_error",
@@ -214,6 +217,34 @@ impl SftpManager {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/// Validate a server-supplied directory-entry name before joining it onto a
+/// local path. The SFTP server controls these strings (READDIR/`SSH_FXP_NAME`),
+/// and `russh-sftp` only filters literal `.`/`..` — so without this guard a
+/// hostile server could return `..`, `/etc/cron.d/evil`, or `a/b` and escape the
+/// local staging directory via `Path::join` (an absolute arg replaces the base;
+/// `..` is resolved by the OS at create time). We require the name to be exactly
+/// one normal path component: no separators, no `.`/`..`, no NUL, not absolute,
+/// not empty. Returns the name on success.
+pub(crate) fn validate_remote_name(name: &str) -> Result<&str, SftpError> {
+    use std::path::{Component, Path};
+
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains('\0') {
+        return Err(SftpError::InvalidPath(format!(
+            "server returned an unsafe entry name: {name:?}"
+        )));
+    }
+
+    let mut components = Path::new(name).components();
+    match (components.next(), components.next()) {
+        // Exactly one component, and it must be a plain file/dir name (not `..`,
+        // `.`, a root, or a Windows drive prefix).
+        (Some(Component::Normal(c)), None) if c == std::ffi::OsStr::new(name) => Ok(name),
+        _ => Err(SftpError::InvalidPath(format!(
+            "server returned an unsafe entry name: {name:?}"
+        ))),
+    }
+}
+
 /// Convert a raw Unix mode word into a 9-character `rwxrwxrwx` string.
 /// Only the lower 9 permission bits are examined.
 pub fn format_permissions(mode: u32) -> String {
@@ -252,5 +283,41 @@ mod tests {
     #[test]
     fn format_permissions_all_zero() {
         assert_eq!(format_permissions(0), "---------");
+    }
+
+    #[test]
+    fn validate_remote_name_accepts_plain_names() {
+        for name in [
+            "file.txt",
+            "My Folder",
+            "résumé.pdf",
+            ".hidden",
+            "a.b.c",
+            "...",
+        ] {
+            assert!(validate_remote_name(name).is_ok(), "should accept {name:?}");
+        }
+    }
+
+    #[test]
+    fn validate_remote_name_rejects_traversal_and_separators() {
+        // The hostile inputs a malicious SFTP server could return.
+        for name in [
+            "",
+            ".",
+            "..",
+            "/",
+            "/etc/passwd",
+            "../../secret",
+            "a/b",
+            "a\\b", // Windows separator
+            "C:\\evil",
+            "with\0nul",
+        ] {
+            assert!(
+                validate_remote_name(name).is_err(),
+                "should reject {name:?}"
+            );
+        }
     }
 }

@@ -4,11 +4,13 @@ import { AlertCircle } from "lucide-react";
 import { useSftpStore } from "../../stores/sftp-store";
 import { useTabStore } from "../../stores/tab-store";
 import type { SftpEntry } from "../../types";
-import type { ExplorerEntry, ExplorerClipboard, ChmodResult } from "../../types/explorer";
+import type { ExplorerEntry, ExplorerClipboard, ChmodResult, DragOutResult } from "../../types/explorer";
 import { ExplorerToolbar, ExplorerFileTable, ExplorerDropZone } from "../explorer";
+import { DropOverwriteDialog } from "./DropOverwriteDialog";
 import { createSftpProvider, toExplorerEntry } from "../../providers/sftp-provider";
 import { explorerInvoke, transferEventName, type Transport } from "../../lib/explorer-transport";
 import { editorLaunchErrorMessage } from "../../lib/editor-errors";
+import { conflictingNames } from "../../lib/drop-conflicts";
 import { toast } from "../../stores/toast-store";
 import type { EditorConfig } from "../../stores/settings-store";
 
@@ -53,6 +55,11 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
   // until the user confirms via the dialog.
   const [pendingDrop, setPendingDrop] = useState<PendingDrop | null>(null);
   const isProcessingDrop = useRef(false);
+  // True while a drag-OUT we started is in flight (staging + native OS drag).
+  // Guards against (a) a re-entrant drag-out re-downloading the same selection
+  // and (b) the OS drag re-entering our own window drop listener and
+  // re-uploading the just-staged temp files (a self-drop).
+  const isDraggingOut = useRef(false);
   const currentPathRef = useRef(session?.currentPath ?? "/");
   currentPathRef.current = session?.currentPath ?? "/";
 
@@ -63,7 +70,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
       try {
         await explorerInvoke(transport, "enqueue_upload", sessionId, { localPaths, remoteDir });
       } catch (err) {
-        toast.error(`Upload failed: ${dragErrorMessage(err)}`);
+        toast.error(`Upload failed: ${errorMessage(err)}`);
       }
     },
     [sessionId, transport],
@@ -83,15 +90,20 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
 
   // Resolve the upload destination for an OS drop/drag at the given window
   // position. Tauri's drag-drop API has no DOM target, so we hit-test the
-  // physical-pixel position (converted to CSS pixels) against the listing: a
-  // drop on a directory row uploads into that directory, otherwise into the
-  // current directory.
+  // position against the listing: a drop on a directory row uploads into that
+  // directory, otherwise into the current directory.
+  //
+  // Tauri labels the event position `PhysicalPosition`, but only Windows
+  // actually reports physical pixels — macOS (wkwebview) and Linux (webkitgtk)
+  // already report CSS/logical pixels. `elementFromPoint` wants CSS pixels, so
+  // we divide by devicePixelRatio ONLY on Windows; doing so elsewhere would
+  // halve the coordinate on HiDPI/Retina and hit the wrong row.
   const resolveDropDir = useCallback(
     (position?: { x: number; y: number }): string => {
       const base = currentPathRef.current;
       if (!position) return base;
-      const dpr = window.devicePixelRatio || 1;
-      const el = document.elementFromPoint(position.x / dpr, position.y / dpr);
+      const scale = isWindowsWebview() ? window.devicePixelRatio || 1 : 1;
+      const el = document.elementFromPoint(position.x / scale, position.y / scale);
       const row = el?.closest("[data-entry-row]") as HTMLElement | null;
       if (row && row.dataset.entryType === "Directory") {
         const name = row.dataset.entryName;
@@ -135,6 +147,10 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         if (!appWindow || aborted) return;
 
         const unsub = await appWindow.onDragDropEvent((event: DragDropEventPayload) => {
+          // Ignore the OS drag WE started: releasing our own drag-out back over
+          // the app must not re-upload the just-staged temp files.
+          if (isDraggingOut.current) return;
+
           const type = event.payload?.type;
           if (type === "enter" || type === "over") {
             setIsDragOver(true);
@@ -144,6 +160,10 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
             setDropTargetDir(null);
 
             const paths: string[] = event.payload?.paths ?? [];
+            // Backstop for the self-drop guard above: never re-upload our own
+            // drag-out staging files even if the in-flight flag was already
+            // cleared by the time the OS delivered the drop.
+            if (paths.some((p) => p.includes(DRAGOUT_STAGING_SEGMENT))) return;
             if (isProcessingDrop.current || paths.length === 0) return;
             isProcessingDrop.current = true;
 
@@ -156,10 +176,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
               let conflicts: string[] = [];
               try {
                 const existing = await explorerInvoke<SftpEntry[]>(transport, "list_dir", sessionId, { path: remoteDir });
-                const names = new Set(existing.map((e) => e.name));
-                conflicts = paths
-                  .map((p) => p.split(/[/\\]/).pop() ?? p)
-                  .filter((n) => names.has(n));
+                conflicts = conflictingNames(paths, new Set(existing.map((e) => e.name)));
               } catch {
                 // Skip the pre-check; proceed to upload.
               }
@@ -234,11 +251,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         const entries = await explorerInvoke<SftpEntry[]>(transport, "list_dir", sessionId, { path });
         setEntries(sessionId, path, entries);
       } catch (err: unknown) {
-        const msg =
-          err && typeof err === "object" && "message" in err
-            ? String((err as { message: string }).message)
-            : "Failed to list directory";
-        setError(sessionId, msg);
+        setError(sessionId, errorMessage(err, "Failed to list directory"));
       }
     },
     [sessionId, transport, setLoading, setEntries, setError],
@@ -276,11 +289,10 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
       // Surface the failure (e.g. host without passwordless sudo) instead of
       // silently no-op'ing. The old session is untouched (close runs only
       // after a successful open), so the view keeps working.
-      const msg =
-        err && typeof err === "object" && "message" in err
-          ? String((err as { message: string }).message)
-          : `Failed to ${newSudoMode ? "enable" : "disable"} sudo mode`;
-      setError(sessionId, msg);
+      setError(
+        sessionId,
+        errorMessage(err, `Failed to ${newSudoMode ? "enable" : "disable"} sudo mode`),
+      );
     } finally {
       // On success the view remounts (tab id changes) and this is a no-op;
       // on failure or a closed tab it re-enables the button.
@@ -389,39 +401,43 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
 
   // ─── Drag-out (Explorer → OS desktop/Finder) ──────────────────────────────
   //
-  // Staging downloads every selected entry to a temp dir — files directly,
-  // folders recursively (fixing the old "only one file" bug) — then hands the
-  // real local paths to the native drag plugin. We must download *before*
-  // starting the drag because the OS drag API needs concrete file handles up
-  // front — see the drag-out comment in ExplorerFileTable for why HTML5
-  // DataTransfer can't do this in a webview.
+  // The whole drag-out runs in the backend `sftp_drag_out` command: it stages
+  // every selected entry to a private temp dir (files directly, folders
+  // recursively — fixing the old "only one file" bug), then drives the native
+  // OS drag with those real local paths and resolves once the drag ends. We
+  // must stage *before* the drag because the OS drag API needs concrete file
+  // handles up front — see the drag-out comment in ExplorerFileTable for why
+  // HTML5 DataTransfer can't do this in a webview.
   //
-  // SCP has no `download_to_temp` command, so drag-out is wired for SFTP only
-  // (see the `onDragOut` prop below); SCP sessions keep the in-app move drag.
+  // SCP has no `drag_out` command, so drag-out is wired for SFTP only (see the
+  // `onDragOut` prop below); SCP sessions keep the in-app move drag.
+  //
+  // Known limitation: staging a very large folder blocks until every byte is on
+  // disk (bounded by a backend size cap), so for big selections the drag may
+  // only begin after the mouse is released. The re-entrancy guard below stops a
+  // retry from re-downloading the same selection.
   const handleDragOut = useCallback((entries: ExplorerEntry[]) => {
+    if (isDraggingOut.current) return; // a drag-out is already staging/dragging
+    isDraggingOut.current = true;
     void (async () => {
       try {
         const remotePaths = entries.map((en) => en.id);
-        const prep = await explorerInvoke<{ files: string[]; icon: string }>(
+        const { dropped, count } = await explorerInvoke<DragOutResult>(
           transport,
-          "download_to_temp",
+          "drag_out",
           sessionId,
           { remotePaths },
         );
-        if (prep.files.length === 0) return;
-
-        const { startDrag } = await import("@crabnebula/tauri-plugin-drag");
-        // The OS gives no signal once files land on the desktop; the plugin's
-        // drag-end callback is the only completion hook, so confirm success
-        // only when the drag actually dropped (not when it was cancelled).
-        await startDrag({ item: prep.files, icon: prep.icon }, (payload) => {
-          if (payload.result === "Dropped") {
-            const n = entries.length;
-            toast.success(`Downloaded ${n} ${n === 1 ? "item" : "items"}`);
-          }
-        });
+        // The OS copies asynchronously after the drop and gives no completion
+        // signal; the backend's drop result is the only success hook, so only
+        // confirm when the drag actually dropped (not when it was cancelled).
+        if (dropped && count > 0) {
+          toast.success(`Downloaded ${count} ${count === 1 ? "item" : "items"}`);
+        }
       } catch (err) {
-        toast.error(`Download failed: ${dragErrorMessage(err)}`);
+        toast.error(`Download failed: ${errorMessage(err)}`);
+      } finally {
+        isDraggingOut.current = false;
       }
     })();
   }, [sessionId, transport]);
@@ -775,78 +791,24 @@ interface PendingDrop {
   conflicts: string[];
 }
 
-function DropOverwriteDialog({
-  conflicts,
-  targetDir,
-  onConfirm,
-  onCancel,
-}: {
-  conflicts: string[];
-  targetDir: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  const count = conflicts.length;
-  return (
-    <div
-      data-testid="explorer-overwrite-confirm"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-      onClick={(e) => e.target === e.currentTarget && onCancel()}
-    >
-      <div className="w-full max-w-sm mx-4 rounded-xl bg-bg-overlay border border-border p-6 shadow-[var(--shadow-lg)]">
-        <h2 className="text-[length:var(--text-lg)] font-semibold text-text-primary mb-2">
-          {count === 1 ? "Overwrite file?" : `Overwrite ${count} files?`}
-        </h2>
-        <p className="text-[length:var(--text-sm)] text-text-secondary mb-3">
-          {count === 1 ? (
-            <>
-              <span className="font-mono text-text-primary">{conflicts[0]}</span> already exists
-              here and will be replaced.
-            </>
-          ) : (
-            <>{count} files already exist here and will be replaced.</>
-          )}
-        </p>
-        {count > 1 && (
-          <ul className="mb-3 max-h-32 overflow-y-auto rounded-md bg-bg-base border border-border/60 p-2 flex flex-col gap-0.5">
-            {conflicts.map((n) => (
-              <li key={n} className="font-mono text-[length:var(--text-2xs)] text-text-secondary truncate">
-                {n}
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="font-mono text-[length:var(--text-2xs)] text-text-muted truncate mb-5">
-          {targetDir}
-        </p>
-
-        <div className="flex justify-end gap-2">
-          <button
-            data-testid="explorer-overwrite-cancel"
-            onClick={onCancel}
-            className="px-4 py-2 text-[length:var(--text-sm)] text-text-secondary hover:text-text-primary rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Cancel
-          </button>
-          <button
-            data-testid="explorer-overwrite-confirm-button"
-            onClick={onConfirm}
-            className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-white bg-accent hover:opacity-90 rounded-lg transition-[opacity] duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {count === 1 ? "Overwrite" : `Overwrite ${count}`}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /** Extract a human-readable message from a Tauri/SftpError rejection. */
-function dragErrorMessage(err: unknown): string {
+function errorMessage(err: unknown, fallback = "Unexpected error"): string {
   if (err && typeof err === "object" && "message" in err) {
     return String((err as { message: string }).message);
   }
-  return typeof err === "string" ? err : "Unexpected error";
+  return typeof err === "string" ? err : fallback;
+}
+
+/** Path segment of our drag-out staging dir (temp_dir/anyscp-dragout/<uuid>). */
+const DRAGOUT_STAGING_SEGMENT = "anyscp-dragout";
+
+/**
+ * Whether the webview is running on Windows. Tauri's drag-drop event position
+ * is physical pixels only on Windows; macOS/Linux report CSS pixels despite the
+ * `PhysicalPosition` label, so HiDPI hit-testing must scale only here.
+ */
+function isWindowsWebview(): boolean {
+  return typeof navigator !== "undefined" && /windows/i.test(navigator.userAgent);
 }
 
 // ─── Internal type for Tauri drag-drop event ─────────────────────────────────

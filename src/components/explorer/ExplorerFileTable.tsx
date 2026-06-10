@@ -58,9 +58,10 @@ interface ExplorerFileTableProps {
   onPaste?: () => void;
   onMoveEntries?: (sourceIds: string[], targetDir: string) => Promise<void>;
   onCopyEntries?: (sourceIds: string[], targetDir: string) => Promise<void>;
-  /** Drag selected files out to the OS (download to desktop/Finder). When
-   *  provided, dragging a file-only selection starts a native OS drag instead
-   *  of an in-app move. Absent for providers without OS drag-out support. */
+  /** Drag the selection out to the OS (download to desktop/Finder), files and
+   *  folders alike. Triggered by a primary-modifier drag (⌘ on macOS, Ctrl
+   *  elsewhere); a plain drag stays an in-app move. Absent for providers
+   *  without OS drag-out support (e.g. SCP/S3). */
   onDragOut?: (entries: ExplorerEntry[]) => void;
   /** Current directory path/prefix. Used to reset scroll on navigation while
    *  preserving it across same-directory refreshes (e.g. after a chmod). */
@@ -813,35 +814,41 @@ export function ExplorerFileTable({
                       }
                     }
                   }}
-                  // Drag-out to OS (download) for files; internal move for folders.
+                  // Plain drag = internal move; Alt-drag = internal copy;
+                  // primary-modifier drag (⌘/Ctrl) = native drag-out to the OS.
                   draggable={caps.canInternalDragMove || !!onDragOut}
                   onDragStart={(caps.canInternalDragMove || onDragOut) ? (e) => {
                     const entriesToDrag = selectedIds.has(entry.id) && selectedIds.size > 1
                       ? selectedEntries : [entry];
 
-                    // Drag-out to the OS (download to desktop/Finder), for both
-                    // files and folders (folders are staged recursively). The
+                    // Primary-modifier drag (⌘ on macOS, Ctrl elsewhere) downloads
+                    // the selection to the OS (desktop/Finder). Alt is reserved
+                    // for internal copy, so it must NOT trigger drag-out. The
                     // HTML5 DataTransfer API CANNOT create real OS files from a
-                    // Tauri webview — setting "text/plain" (or even a
-                    // "DownloadURL") only makes the OS write a junk text blob,
-                    // which is exactly the "odd binary file" bug. OS-level file
-                    // drops require a native drag session (tauri-plugin-drag)
-                    // seeded with real, already-downloaded local paths. So we
-                    // cancel the HTML5 drag and hand off to onDragOut, which
-                    // stages every selected entry and starts the native drag.
-                    if (onDragOut && entriesToDrag.length > 0) {
+                    // Tauri webview — setting "text/plain" (or "DownloadURL")
+                    // only writes a junk text blob (the "odd binary file" bug).
+                    // OS-level file drops need a native drag seeded with real
+                    // local paths, so we cancel the HTML5 drag and hand off to
+                    // onDragOut, which stages the entries in the backend and
+                    // starts the native drag.
+                    if (onDragOut && (e.metaKey || e.ctrlKey)) {
                       e.preventDefault();
                       onDragOut(entriesToDrag);
                       return;
                     }
 
-                    // No OS drag-out available (e.g. SCP/S3) → fall back to the
-                    // in-app move-between-folders drag, which stays within the
-                    // webview and is handled by the HTML5 drop targets below.
+                    // Safety net: a provider that offers drag-out but no in-app
+                    // move would reach here on a plain (non-modifier) drag — cancel
+                    // it so we don't start a broken HTML5 drag session. (Today
+                    // every drag-out provider also has canInternalDragMove, so this
+                    // is unreachable, but it keeps the gesture logic honest.)
                     if (!caps.canInternalDragMove) {
                       e.preventDefault();
                       return;
                     }
+
+                    // In-app move/copy between folders, handled by the row drop
+                    // targets below (Alt selects copy vs. move there).
                     draggedEntriesRef.current = entriesToDrag;
                     e.dataTransfer.effectAllowed = "copyMove";
                     e.dataTransfer.setData("text/plain", entriesToDrag.map((en) => en.name).join(", "));
