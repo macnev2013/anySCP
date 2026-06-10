@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
-import { X, Cloud } from "lucide-react";
+import { Cloud } from "lucide-react";
 import { useS3Store } from "../../stores/s3-store";
+import { ModalShell, BTN_GHOST, BTN_SECONDARY, BTN_PRIMARY } from "../shared/ModalShell";
 import { useGroupsStore } from "../../stores/groups-store";
 import { CustomSelect } from "../shared/CustomSelect";
 import { S3_PROVIDERS } from "../../types";
@@ -25,8 +26,6 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
 
 export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProps) {
   const isEdit = !!editConnection;
-  const [visible, setVisible] = useState(false);
-  const backdropRef = useRef<HTMLDivElement>(null);
   const [provider, setProvider] = useState<S3Provider>(
     (editConnection?.provider as S3Provider) ?? "aws",
   );
@@ -57,17 +56,6 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
     }
   }, [provider, isEdit]);
 
-  useEffect(() => {
-    requestAnimationFrame(() => setVisible(true));
-  }, []);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !connecting) onClose();
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [onClose, connecting]);
 
   const [groupId, setGroupId] = useState(editConnection?.group_id ?? "");
   const [color, setColor] = useState<string | null>(editConnection?.color ?? null);
@@ -175,46 +163,38 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
     "block text-[length:var(--text-xs)] font-medium text-text-secondary mb-1";
 
   return (
-    <div
-      ref={backdropRef}
-      onClick={(e) => e.target === backdropRef.current && !connecting && onClose()}
-      className={[
-        "fixed inset-0 z-50 flex items-start justify-center pt-[8vh]",
-        "transition-[background-color,backdrop-filter] duration-[var(--duration-base)]",
-        visible ? "bg-black/50 backdrop-blur-sm" : "bg-black/0 backdrop-blur-none",
-      ].join(" ")}
-    >
-      <div
-        data-testid="s3-dialog"
-        className={[
-          "w-full max-w-lg rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)] flex flex-col max-h-[84vh]",
-          "transition-[opacity,transform] duration-[var(--duration-slow)] ease-[var(--ease-expo-out)]",
-          visible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-3",
-        ].join(" ")}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-8 h-8 rounded-lg shrink-0 bg-accent/10">
-              <Cloud size={16} strokeWidth={1.8} className="text-accent" aria-hidden="true" />
-            </div>
-            <h2 className="text-[length:var(--text-lg)] font-semibold text-text-primary">
-              {isEdit ? "Edit Connection" : "Connect to S3"}
-            </h2>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={connecting}
-            aria-label="Close"
-            className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-          >
-            <X size={14} strokeWidth={1.8} aria-hidden="true" />
+    <ModalShell
+      open
+      onClose={onClose}
+      title={isEdit ? "Edit Connection" : "Connect to S3"}
+      icon={Cloud}
+      maxWidth="lg"
+      scrollable
+      busy={connecting || saving}
+      testId="s3-dialog"
+      footer={
+        <>
+          <button type="button" onClick={onClose} disabled={connecting || saving} className={BTN_GHOST}>
+            Cancel
           </button>
-        </div>
-
-        {/* Body */}
-        <div className="px-6 py-4 overflow-y-auto flex-1 min-h-0 flex flex-col gap-3.5">
+          {isEdit ? (
+            <button type="button" onClick={() => void handleSave()} disabled={saving || !canSubmit} className={BTN_PRIMARY}>
+              {saving ? "Saving…" : "Save Changes"}
+            </button>
+          ) : (
+            <>
+              <button type="button" data-testid="s3-dialog-save" onClick={() => void handleSave()} disabled={saving || connecting || !canSubmit} className={BTN_SECONDARY}>
+                {saving ? "Saving…" : "Save"}
+              </button>
+              <button type="button" data-testid="s3-dialog-connect" onClick={() => void handleConnect()} disabled={connecting || saving || !canSubmit} className={BTN_PRIMARY}>
+                {connecting ? "Connecting…" : "Connect"}
+              </button>
+            </>
+          )}
+        </>
+      }
+    >
+        <div className="flex flex-col gap-3.5">
           <SectionHeader>Provider</SectionHeader>
 
           <div>
@@ -393,50 +373,6 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
             </p>
           )}
         </div>
-
-        {/* Footer */}
-        <div className="px-6 py-3 flex items-center justify-end gap-2 border-t border-border shrink-0">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={connecting || saving}
-            className="px-4 py-1.5 text-[length:var(--text-sm)] font-medium text-text-secondary hover:text-text-primary rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          {isEdit ? (
-            <button
-              type="button"
-              onClick={() => void handleSave()}
-              disabled={saving || !canSubmit}
-              className="px-4 py-1.5 text-[length:var(--text-sm)] font-medium text-text-inverse bg-accent hover:bg-accent-hover disabled:opacity-50 rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {saving ? "Saving…" : "Save Changes"}
-            </button>
-          ) : (
-            <>
-              <button
-                type="button"
-                data-testid="s3-dialog-save"
-                onClick={() => void handleSave()}
-                disabled={saving || connecting || !canSubmit}
-                className="px-4 py-1.5 text-[length:var(--text-sm)] font-medium text-text-secondary hover:text-text-primary bg-bg-subtle hover:bg-bg-muted disabled:opacity-50 rounded-lg border border-border transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {saving ? "Saving…" : "Save"}
-              </button>
-              <button
-                type="button"
-                data-testid="s3-dialog-connect"
-                onClick={() => void handleConnect()}
-                disabled={connecting || saving || !canSubmit}
-                className="px-4 py-1.5 text-[length:var(--text-sm)] font-medium text-text-inverse bg-accent hover:bg-accent-hover disabled:opacity-50 rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {connecting ? "Connecting…" : "Connect"}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }

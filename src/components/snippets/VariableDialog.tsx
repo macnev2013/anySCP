@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { AlertTriangle, X, Braces } from "lucide-react";
+import { useState, useCallback, useRef } from "react";
+import { AlertTriangle, Braces } from "lucide-react";
 import type { Snippet } from "../../types";
 import { useSessionStore } from "../../stores/session-store";
 import { CustomSelect } from "../shared/CustomSelect";
@@ -10,8 +10,7 @@ import {
   resolveBuiltin,
   BUILTIN_NAMES,
 } from "../../utils/snippet-resolve";
-
-// ─── Types ────────────────────────────────────────────────────────────────────
+import { ModalShell, BTN_GHOST, BTN_PRIMARY } from "../shared/ModalShell";
 
 interface VariableDialogProps {
   snippet: Snippet;
@@ -19,24 +18,16 @@ interface VariableDialogProps {
   onCancel: () => void;
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
-
 export function VariableDialog({ snippet, onExecute, onCancel }: VariableDialogProps) {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const sessions = useSessionStore((s) => s.sessions);
   const session = activeSessionId ? (sessions.get(activeSessionId) ?? null) : null;
 
-  // Parsed variable metadata from snippet.variables JSON
   const variableMeta = parseVariables(snippet.variables);
-
-  // All unique variable names extracted from the command
   const allVarNames = extractVariables(snippet.command);
-
-  // Separate built-ins from user-defined
   const builtinVars = allVarNames.filter((n) => BUILTIN_NAMES.includes(n));
   const userVarNames = allVarNames.filter((n) => !BUILTIN_NAMES.includes(n));
 
-  // Build initial values from defaults
   const initialValues = Object.fromEntries(
     userVarNames.map((name) => {
       const meta = variableMeta.find((v) => v.name === name);
@@ -45,49 +36,17 @@ export function VariableDialog({ snippet, onExecute, onCancel }: VariableDialogP
   );
 
   const [values, setValues] = useState<Record<string, string>>(initialValues);
-  const [visible, setVisible] = useState(false);
-  const backdropRef = useRef<HTMLDivElement>(null);
-  const firstInputRef = useRef<HTMLInputElement | HTMLSelectElement | null>(null);
-
-  useEffect(() => {
-    requestAnimationFrame(() => setVisible(true));
-  }, []);
-
-  useEffect(() => {
-    if (visible) {
-      requestAnimationFrame(() => {
-        if (firstInputRef.current) firstInputRef.current.focus();
-      });
-    }
-  }, [visible]);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onCancel]);
-
-  const handleBackdropClick = (e: React.MouseEvent) => {
-    if (e.target === backdropRef.current) onCancel();
-  };
+  const firstInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleExecute = useCallback(() => {
     const resolved = resolveCommand(snippet.command, values, session);
     onExecute(resolved);
   }, [snippet.command, values, session, onExecute]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    handleExecute();
-  };
-
   const setValue = (name: string, value: string) => {
     setValues((prev) => ({ ...prev, [name]: value }));
   };
 
-  // Check required fields
   const hasUnmetRequired = userVarNames.some((name) => {
     const meta = variableMeta.find((v) => v.name === name);
     return meta?.required && !values[name]?.trim();
@@ -101,161 +60,112 @@ export function VariableDialog({ snippet, onExecute, onCancel }: VariableDialogP
   ].join(" ");
 
   const labelClass = "block text-[length:var(--text-xs)] font-medium text-text-secondary mb-1";
-
   let inputIndex = 0;
 
   return (
-    <div
-      ref={backdropRef}
-      onClick={handleBackdropClick}
-      className={[
-        "fixed inset-0 z-50 flex items-start justify-center pt-[8vh]",
-        "transition-[background-color,backdrop-filter] duration-[var(--duration-base)]",
-        visible ? "bg-black/50 backdrop-blur-sm" : "bg-black/0 backdrop-blur-none",
-      ].join(" ")}
-    >
-      <form
-        onSubmit={handleSubmit}
-        className={[
-          "w-full max-w-md rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)] flex flex-col max-h-[84vh]",
-          "transition-[opacity,transform] duration-[var(--duration-slow)] ease-[var(--ease-expo-out)]",
-          visible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-3",
-        ].join(" ")}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border shrink-0">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className="flex items-center justify-center w-8 h-8 rounded-lg shrink-0 bg-accent/10">
-              <Braces size={16} strokeWidth={1.8} className="text-accent" aria-hidden="true" />
-            </div>
-            <div className="min-w-0">
-              <h2 className="text-[length:var(--text-lg)] font-semibold text-text-primary truncate">
-                {snippet.name}
-              </h2>
-              <p className="text-[length:var(--text-xs)] text-text-muted mt-0.5 font-mono truncate">
-                {snippet.command}
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onCancel}
-            aria-label="Close"
-            className="ml-3 p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
-          >
-            <X size={14} strokeWidth={1.8} aria-hidden="true" />
-          </button>
-        </div>
-
-        {/* Body */}
-        <div className="px-6 py-5 overflow-y-auto flex-1 min-h-0 flex flex-col gap-4">
-          {/* Dangerous warning */}
-          {snippet.is_dangerous && (
-            <div className="flex items-start gap-2.5 p-3 rounded-lg bg-status-error/10 border border-status-error/30">
-              <AlertTriangle size={16} strokeWidth={2} className="text-status-error shrink-0 mt-0.5" aria-hidden="true" />
-              <p className="text-[length:var(--text-xs)] text-status-error leading-relaxed">
-                This snippet is flagged as dangerous. Review the resolved command carefully before execution.
-              </p>
-            </div>
-          )}
-
-          {/* Built-in variables (read-only) */}
-          {builtinVars.length > 0 && (
-            <div className="flex flex-col gap-3">
-              <p className="text-[length:var(--text-xs)] font-semibold uppercase tracking-widest text-text-muted">
-                Auto-filled
-              </p>
-              {builtinVars.map((name) => {
-                const resolved = resolveBuiltin(name, session) ?? "(no active session)";
-                return (
-                  <div key={name}>
-                    <label className={labelClass}>{`{{${name}}}`}</label>
-                    <div className={[
-                      "w-full rounded-lg bg-bg-base border border-border px-3 py-2",
-                      "text-[length:var(--text-sm)] text-text-muted font-mono cursor-default select-text",
-                    ].join(" ")}>
-                      {resolved}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {builtinVars.length > 0 && userVarNames.length > 0 && <hr className="border-border" />}
-
-          {/* User-defined variables */}
-          {userVarNames.length > 0 && (
-            <div className="flex flex-col gap-3">
-              {builtinVars.length > 0 && (
-                <p className="text-[length:var(--text-xs)] font-semibold uppercase tracking-widest text-text-muted">
-                  Variables
-                </p>
-              )}
-              {userVarNames.map((name) => {
-                const meta = variableMeta.find((v) => v.name === name);
-                const isFirst = inputIndex === 0;
-                inputIndex++;
-                const label = meta?.label ?? name;
-                const placeholder = meta?.placeholder ?? `Enter ${name}`;
-                const options = meta?.options ?? null;
-                const required = meta?.required ?? false;
-
-                return (
-                  <div key={name}>
-                    <label className={labelClass}>
-                      {label}
-                      {required && <span className="text-status-error ml-1" aria-label="required">*</span>}
-                    </label>
-                    {options && options.length > 0 ? (
-                      <CustomSelect
-                        value={values[name] ?? ""}
-                        onChange={(v) => setValue(name, v)}
-                        placeholder="— select —"
-                        options={[{ value: "", label: "— select —" }, ...options.map((opt) => ({ value: opt, label: opt }))]}
-                      />
-                    ) : (
-                      <input
-                        ref={isFirst ? (el) => { firstInputRef.current = el; } : undefined}
-                        type="text"
-                        value={values[name] ?? ""}
-                        onChange={(e) => setValue(name, e.target.value)}
-                        placeholder={placeholder}
-                        required={required}
-                        className={inputClass}
-                      />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {allVarNames.length === 0 && (
-            <p className="text-[length:var(--text-sm)] text-text-muted text-center py-2">
-              No variables to fill in.
-            </p>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="px-6 py-3 flex items-center justify-end gap-2 border-t border-border shrink-0">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="px-4 py-1.5 text-[length:var(--text-sm)] font-medium text-text-secondary hover:text-text-primary rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
+    <ModalShell
+      open
+      onClose={onCancel}
+      title={snippet.name}
+      subtitle={snippet.command}
+      icon={Braces}
+      maxWidth="md"
+      scrollable
+      footer={
+        <>
+          <button type="button" onClick={onCancel} className={BTN_GHOST}>
             Cancel
           </button>
           <button
+            form="variable-dialog-form"
             type="submit"
             disabled={hasUnmetRequired}
-            className="px-4 py-1.5 text-[length:var(--text-sm)] font-medium text-text-inverse bg-accent hover:bg-accent-hover disabled:opacity-50 rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg-overlay"
+            className={BTN_PRIMARY}
           >
             Execute
           </button>
-        </div>
+        </>
+      }
+    >
+      <form id="variable-dialog-form" onSubmit={(e) => { e.preventDefault(); handleExecute(); }} className="flex flex-col gap-4">
+        {snippet.is_dangerous && (
+          <div className="flex items-start gap-2.5 p-3 rounded-lg bg-status-error/10 border border-status-error/30">
+            <AlertTriangle size={16} strokeWidth={2} className="text-status-error shrink-0 mt-0.5" aria-hidden="true" />
+            <p className="text-[length:var(--text-xs)] text-status-error leading-relaxed">
+              This snippet is flagged as dangerous. Review the resolved command carefully before execution.
+            </p>
+          </div>
+        )}
+
+        {builtinVars.length > 0 && (
+          <div className="flex flex-col gap-3">
+            <p className="text-[length:var(--text-xs)] font-semibold uppercase tracking-widest text-text-muted">Auto-filled</p>
+            {builtinVars.map((name) => {
+              const resolved = resolveBuiltin(name, session) ?? "(no active session)";
+              return (
+                <div key={name}>
+                  <label className={labelClass}>{`{{${name}}}`}</label>
+                  <div className="w-full rounded-lg bg-bg-base border border-border px-3 py-2 text-[length:var(--text-sm)] text-text-muted font-mono cursor-default select-text">
+                    {resolved}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {builtinVars.length > 0 && userVarNames.length > 0 && <hr className="border-border" />}
+
+        {userVarNames.length > 0 && (
+          <div className="flex flex-col gap-3">
+            {builtinVars.length > 0 && (
+              <p className="text-[length:var(--text-xs)] font-semibold uppercase tracking-widest text-text-muted">Variables</p>
+            )}
+            {userVarNames.map((name) => {
+              const meta = variableMeta.find((v) => v.name === name);
+              const isFirst = inputIndex === 0;
+              inputIndex++;
+              const label = meta?.label ?? name;
+              const placeholder = meta?.placeholder ?? `Enter ${name}`;
+              const options = meta?.options ?? null;
+              const required = meta?.required ?? false;
+
+              return (
+                <div key={name}>
+                  <label className={labelClass}>
+                    {label}
+                    {required && <span className="text-status-error ml-1" aria-label="required">*</span>}
+                  </label>
+                  {options && options.length > 0 ? (
+                    <CustomSelect
+                      value={values[name] ?? ""}
+                      onChange={(v) => setValue(name, v)}
+                      placeholder="— select —"
+                      options={[{ value: "", label: "— select —" }, ...options.map((opt) => ({ value: opt, label: opt }))]}
+                    />
+                  ) : (
+                    <input
+                      ref={isFirst ? (el) => { firstInputRef.current = el; } : undefined}
+                      type="text"
+                      value={values[name] ?? ""}
+                      onChange={(e) => setValue(name, e.target.value)}
+                      placeholder={placeholder}
+                      required={required}
+                      className={inputClass}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {allVarNames.length === 0 && (
+          <p className="text-[length:var(--text-sm)] text-text-muted text-center py-2">
+            No variables to fill in.
+          </p>
+        )}
       </form>
-    </div>
+    </ModalShell>
   );
 }

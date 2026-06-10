@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { X, Monitor } from "lucide-react";
+import { Monitor } from "lucide-react";
+import { ModalShell, BTN_GHOST, BTN_SECONDARY, BTN_PRIMARY } from "../shared/ModalShell";
 import { useUiStore } from "../../stores/ui-store";
 import { useHostsStore } from "../../stores/hosts-store";
 import { useGroupsStore } from "../../stores/groups-store";
@@ -130,9 +131,6 @@ export function HostEditModal() {
   // Whether "Connect through SSH tunnel" is enabled for this host.
   const [tunnelEnabled, setTunnelEnabled] = useState(false);
 
-  // Animation gate — separate from editingHostId to allow exit animation
-  const [visible, setVisible] = useState(false);
-
   // Original host snapshot (preserved for id + created_at on save)
   const [originalHost, setOriginalHost] = useState<SavedHost | null>(null);
 
@@ -149,9 +147,7 @@ export function HostEditModal() {
   /** True when the user has explicitly clicked "Clear" on the saved credential. */
   const [credCleared, setCredCleared] = useState(false);
 
-  const backdropRef = useRef<HTMLDivElement>(null);
   const firstInputRef = useRef<HTMLInputElement>(null);
-  const scrollBodyRef = useRef<HTMLDivElement>(null);
 
   const isOpen = editingHostId !== null;
 
@@ -183,7 +179,6 @@ export function HostEditModal() {
   // ── Load host data when modal opens ────────────────────────────────────────
   useEffect(() => {
     if (!isOpen || !editingHostId) {
-      setVisible(false);
       return;
     }
 
@@ -205,7 +200,6 @@ export function HostEditModal() {
     if (isNewHost) {
       // New host — no fetch needed
       setLoadingHost(false);
-      requestAnimationFrame(() => setVisible(true));
       return;
     }
 
@@ -226,41 +220,23 @@ export function HostEditModal() {
         setError(extractError(err, "Failed to load host data"));
       } finally {
         setLoadingHost(false);
-        requestAnimationFrame(() => setVisible(true));
+        requestAnimationFrame(() => firstInputRef.current?.focus());
       }
     })();
   }, [isOpen, editingHostId, isNewHost, loadGroups, loadHosts]);
 
-  // Scroll to top and focus the first field (Label) when the modal opens.
+  // Focus the first field (Label) when the modal opens.
   useEffect(() => {
-    if (visible && !loadingHost) {
-      requestAnimationFrame(() => {
-        scrollBodyRef.current?.scrollTo(0, 0);
-        firstInputRef.current?.focus();
-      });
+    if (isOpen && !loadingHost) {
+      requestAnimationFrame(() => firstInputRef.current?.focus());
     }
-  }, [visible, loadingHost]);
+  }, [isOpen, loadingHost]);
 
-  // ── Escape key ──────────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        if (deleteConfirm) {
-          setDeleteConfirm(false);
-        } else {
-          close();
-        }
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, deleteConfirm, close]);
-
-  // ── Backdrop click ──────────────────────────────────────────────────────────
-  const handleBackdropClick = (e: React.MouseEvent) => {
-    if (e.target === backdropRef.current) close();
-  };
+  // When deleteConfirm is active, Escape clears it rather than closing the modal.
+  const handleClose = useCallback(() => {
+    if (deleteConfirm) setDeleteConfirm(false);
+    else close();
+  }, [deleteConfirm, close]);
 
   // ── Form field updater ──────────────────────────────────────────────────────
   const setField = <K extends keyof FormState>(key: K, value: FormState[K]) => {
@@ -473,48 +449,53 @@ export function HostEditModal() {
 
 
   return (
-    <div
-      ref={backdropRef}
-      onClick={handleBackdropClick}
-      className={`
-        fixed inset-0 z-50 flex items-start justify-center pt-[8vh]
-        transition-[background-color,backdrop-filter] duration-[var(--duration-base)]
-        ${visible ? "bg-black/50 backdrop-blur-sm" : "bg-black/0 backdrop-blur-none"}
-      `}
+    <ModalShell
+      open={isOpen}
+      onClose={handleClose}
+      title={isNewHost ? "New Host" : "Edit Host"}
+      icon={Monitor}
+      maxWidth="lg"
+      scrollable
+      busy={isBusy}
+      testId="host-modal"
+      footerStart={
+        !isNewHost ? (
+          deleteConfirm ? (
+            <DeleteConfirmRow
+              onCancel={() => setDeleteConfirm(false)}
+              onConfirm={handleDeleteConfirmed}
+              busy={isBusy}
+            />
+          ) : (
+            <button
+              type="button"
+              data-testid="host-modal-delete"
+              onClick={() => setDeleteConfirm(true)}
+              disabled={isBusy || loadingHost}
+              className="px-3 py-1.5 text-[length:var(--text-sm)] font-medium text-status-error hover:bg-status-error/10 rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            >
+              Delete
+            </button>
+          )
+        ) : undefined
+      }
+      footer={
+        !deleteConfirm ? (
+          <>
+            <button type="button" data-testid="host-modal-cancel" onClick={close} disabled={isBusy} className={BTN_GHOST}>
+              Cancel
+            </button>
+            <button type="button" data-testid="host-modal-save" onClick={handleSave} disabled={isBusy || loadingHost} className={BTN_SECONDARY}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button type="button" data-testid="host-modal-connect" onClick={handleConnect} disabled={isBusy || loadingHost} className={BTN_PRIMARY}>
+              {connecting ? "Connecting…" : "Connect"}
+            </button>
+          </>
+        ) : undefined
+      }
     >
-      <div
-        data-testid="host-modal"
-        data-host-modal-mode={isNewHost ? "new" : "edit"}
-        className={`
-          w-full max-w-lg rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)]
-          flex flex-col max-h-[84vh]
-          transition-[opacity,transform] duration-[var(--duration-slow)] ease-[var(--ease-expo-out)]
-          ${visible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-3"}
-        `}
-      >
-        {/* ── Header ─────────────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-8 h-8 rounded-lg shrink-0 bg-accent/10">
-              <Monitor size={16} strokeWidth={1.8} className="text-accent" aria-hidden="true" />
-            </div>
-            <h2 className="text-[length:var(--text-lg)] font-semibold text-text-primary">
-              {isNewHost ? "New Host" : "Edit Host"}
-            </h2>
-          </div>
-          <button
-            type="button"
-            onClick={close}
-            disabled={isBusy}
-            aria-label="Close"
-            className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-          >
-            <X size={14} strokeWidth={1.8} aria-hidden="true" />
-          </button>
-        </div>
-
-        {/* ── Scrollable body ─────────────────────────────────────────────── */}
-        <div ref={scrollBodyRef} className="px-6 py-4 overflow-y-auto flex-1 min-h-0">
+      <div>
           {loadingHost ? (
             <LoadingSkeleton />
           ) : (
@@ -984,69 +965,10 @@ export function HostEditModal() {
             </div>
           )}
         </div>
-
-        {/* ── Footer ─────────────────────────────────────────────────────── */}
-        <div className="px-6 py-3 flex items-center justify-between gap-2 border-t border-border shrink-0">
-          {/* Left: Delete / delete confirmation (hidden for new hosts) */}
-          <div className="flex items-center gap-2">
-            {isNewHost ? (
-              <span />
-            ) : deleteConfirm ? (
-              <DeleteConfirmRow
-                onCancel={() => setDeleteConfirm(false)}
-                onConfirm={handleDeleteConfirmed}
-                busy={isBusy}
-              />
-            ) : (
-              <button
-                type="button"
-                data-testid="host-modal-delete"
-                onClick={() => setDeleteConfirm(true)}
-                disabled={isBusy || loadingHost}
-                className="px-3 py-1.5 text-[length:var(--text-sm)] text-status-error hover:bg-status-error/10 rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                Delete
-              </button>
-            )}
-          </div>
-
-          {/* Right: Cancel / Save / Connect */}
-          {!deleteConfirm && (
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                data-testid="host-modal-cancel"
-                onClick={close}
-                disabled={isBusy}
-                className="px-4 py-1.5 text-[length:var(--text-sm)] font-medium text-text-secondary hover:text-text-primary rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                data-testid="host-modal-save"
-                onClick={handleSave}
-                disabled={isBusy || loadingHost}
-                className="px-4 py-1.5 text-[length:var(--text-sm)] font-medium text-text-secondary hover:text-text-primary bg-bg-subtle hover:bg-bg-muted disabled:opacity-50 rounded-lg border border-border transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {saving ? "Saving\u2026" : "Save"}
-              </button>
-              <button
-                type="button"
-                data-testid="host-modal-connect"
-                onClick={handleConnect}
-                disabled={isBusy || loadingHost}
-                className="px-4 py-1.5 text-[length:var(--text-sm)] font-medium text-text-inverse bg-accent hover:bg-accent-hover disabled:opacity-50 rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg-overlay"
-              >
-                {connecting ? "Connecting\u2026" : "Connect"}
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }
+
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
 

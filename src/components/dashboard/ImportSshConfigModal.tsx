@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Loader2, AlertCircle, Check, FileText } from "lucide-react";
+import { ModalShell, BTN_GHOST, BTN_PRIMARY } from "../shared/ModalShell";
 import type { SshConfigEntry, ImportResult } from "../../types";
 
 interface ImportSshConfigModalProps {
@@ -126,31 +127,33 @@ export function ImportSshConfigModal({ onClose, onImported }: ImportSshConfigMod
   const importableCount = entries.filter((e) => selected.has(e.host_alias) && !e.is_pattern).length;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[8vh]"
-      style={{ backgroundColor: "oklch(0 0 0 / 0.5)", backdropFilter: "blur(4px)" }}
-      onClick={(e) => e.target === e.currentTarget && !importing && onClose()}
+    <ModalShell
+      open
+      onClose={onClose}
+      title="Import SSH Config"
+      maxWidth="lg"
+      scrollable
+      busy={importing}
+      footer={
+        result ? (
+          <button type="button" onClick={onClose} className={BTN_PRIMARY}>Done</button>
+        ) : (
+          <>
+            <button type="button" onClick={onClose} disabled={importing} className={BTN_GHOST}>Cancel</button>
+            <button
+              type="button"
+              data-testid="import-ssh-config-submit"
+              onClick={() => void handleImport()}
+              disabled={importing || importableCount === 0}
+              className={BTN_PRIMARY}
+            >
+              {importing ? "Importing…" : `Import ${importableCount} host${importableCount !== 1 ? "s" : ""}`}
+            </button>
+          </>
+        )
+      }
     >
-      <div className="w-full max-w-lg rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)] flex flex-col max-h-[84vh] animate-[fadeIn_120ms_var(--ease-expo-out)_both]">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border shrink-0">
-          <h2 className="text-[length:var(--text-lg)] font-semibold text-text-primary">
-            Import SSH Config
-          </h2>
-          <button
-            onClick={onClose}
-            disabled={importing}
-            aria-label="Close"
-            className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-              <path d="M1 1l12 12M13 1L1 13" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-            </svg>
-          </button>
-        </div>
-
-        {/* Body */}
-        <div className="px-6 py-4 overflow-y-auto flex-1 min-h-0">
+        <div>
           {/* Result view */}
           {result ? (
             <div className="flex flex-col items-center gap-4 py-8">
@@ -277,37 +280,6 @@ export function ImportSshConfigModal({ onClose, onImported }: ImportSshConfigMod
             </>
           )}
         </div>
-
-        {/* Footer */}
-        <div className="px-6 pb-5 pt-3 flex items-center justify-end gap-2 border-t border-border shrink-0">
-          {result ? (
-            <button
-              onClick={onClose}
-              className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-text-inverse bg-accent hover:bg-accent-hover rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              Done
-            </button>
-          ) : (
-            <>
-              <button
-                onClick={onClose}
-                disabled={importing}
-                className="px-4 py-2 text-[length:var(--text-sm)] text-text-secondary hover:text-text-primary rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                Cancel
-              </button>
-              <button
-                data-testid="import-ssh-config-submit"
-                onClick={() => void handleImport()}
-                disabled={importing || importableCount === 0}
-                className="px-4 py-2 text-[length:var(--text-sm)] font-medium text-text-inverse bg-accent hover:bg-accent-hover disabled:opacity-50 rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {importing ? "Importing..." : `Import ${importableCount} host${importableCount !== 1 ? "s" : ""}`}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }

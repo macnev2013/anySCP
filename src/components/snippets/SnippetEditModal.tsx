@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { X, Braces } from "lucide-react";
+import { Braces } from "lucide-react";
 import type { Snippet, SnippetFolder, SnippetVariable } from "../../types";
 import { extractVariables, parseVariables } from "../../utils/snippet-resolve";
 import { CustomSelect } from "../shared/CustomSelect";
+import { ModalShell, BTN_GHOST, BTN_PRIMARY } from "../shared/ModalShell";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -175,11 +176,8 @@ export function SnippetEditModal({
   const [variableMeta, setVariableMeta] = useState<SnippetVariable[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [visible, setVisible] = useState(false);
 
-  const backdropRef = useRef<HTMLDivElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
-
   const isEdit = !!initial;
 
   // Sync variable metadata whenever command changes
@@ -208,28 +206,9 @@ export function SnippetEditModal({
       syncVariables(base.command, parsed);
       setError(null);
       setSaving(false);
-      requestAnimationFrame(() => setVisible(true));
-    } else {
-      setVisible(false);
+      requestAnimationFrame(() => nameRef.current?.focus());
     }
   }, [open, initial, syncVariables]);
-
-  useEffect(() => {
-    if (visible) requestAnimationFrame(() => nameRef.current?.focus());
-  }, [visible]);
-
-  useEffect(() => {
-    if (!open) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [open, onClose]);
-
-  const handleBackdropClick = (e: React.MouseEvent) => {
-    if (e.target === backdropRef.current) onClose();
-  };
 
   const handleCommandChange = (cmd: string) => {
     setForm((f) => ({ ...f, command: cmd }));
@@ -273,48 +252,33 @@ export function SnippetEditModal({
   const labelClass = "block text-[length:var(--text-xs)] font-medium text-text-secondary mb-1.5";
 
   return (
-    <div
-      ref={backdropRef}
-      onClick={handleBackdropClick}
-      className={[
-        "fixed inset-0 z-50 flex items-start justify-center pt-[8vh]",
-        "transition-[background-color,backdrop-filter] duration-[var(--duration-base)]",
-        visible ? "bg-black/50 backdrop-blur-sm" : "bg-black/0 backdrop-blur-none",
-      ].join(" ")}
-    >
-      <div
-        data-testid="snippet-modal"
-        className={[
-          "w-full max-w-xl rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)]",
-          "flex flex-col max-h-[84vh]",
-          "transition-[opacity,transform] duration-[var(--duration-slow)] ease-[var(--ease-expo-out)]",
-          visible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-3",
-        ].join(" ")}
-      >
-        {/* ── Header (sticky) ─────────────────────────────────────────── */}
-        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-8 h-8 rounded-lg shrink-0 bg-accent/10">
-              <Braces size={16} strokeWidth={1.8} className="text-accent" aria-hidden="true" />
-            </div>
-            <h2 className="text-[length:var(--text-lg)] font-semibold text-text-primary">
-              {isEdit ? "Edit Snippet" : "New Snippet"}
-            </h2>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={saving}
-            aria-label="Close"
-            className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-          >
-            <X size={14} strokeWidth={1.8} aria-hidden="true" />
+    <ModalShell
+      open={open}
+      onClose={onClose}
+      title={isEdit ? "Edit Snippet" : "New Snippet"}
+      icon={Braces}
+      maxWidth="xl"
+      scrollable
+      busy={saving}
+      testId="snippet-modal"
+      footer={
+        <>
+          <button type="button" onClick={onClose} disabled={saving} className={BTN_GHOST}>
+            Cancel
           </button>
-        </div>
-
-        <form onSubmit={handleSave} className="flex flex-col flex-1 min-h-0">
-        {/* ── Scrollable body ───────────────────────────────────────── */}
-        <div className="flex flex-col gap-5 px-6 py-4 overflow-y-auto flex-1 min-h-0">
+          <button
+            form="snippet-edit-form"
+            type="submit"
+            data-testid="snippet-modal-save"
+            disabled={saving || !form.name.trim() || !form.command.trim()}
+            className={BTN_PRIMARY}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </>
+      }
+    >
+      <form id="snippet-edit-form" onSubmit={handleSave} className="flex flex-col gap-5">
           {/* Name */}
           <div>
             <label className={labelClass}>
@@ -460,36 +424,13 @@ export function SnippetEditModal({
             </div>
           )}
 
-        </div>
 
-        {/* ── Footer (sticky) ────────────────────────────────────────── */}
-        <div className="px-6 py-3 border-t border-border shrink-0">
-          {error && (
-            <p className="text-[length:var(--text-sm)] text-status-error bg-status-error/10 rounded-lg px-3 py-2 mb-3" role="alert">
-              {error}
-            </p>
-          )}
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={saving}
-              className="px-4 py-1.5 text-[length:var(--text-sm)] font-medium text-text-secondary hover:text-text-primary rounded-lg disabled:opacity-50 transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              data-testid="snippet-modal-save"
-              disabled={saving || !form.name.trim() || !form.command.trim()}
-              className="px-4 py-1.5 text-[length:var(--text-sm)] font-medium text-text-inverse bg-accent hover:bg-accent-hover disabled:opacity-50 rounded-lg transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg-overlay"
-            >
-              {saving ? "Saving\u2026" : "Save"}
-            </button>
-          </div>
-        </div>
-        </form>
-      </div>
-    </div>
+        {error && (
+          <p className="text-[length:var(--text-sm)] text-status-error bg-status-error/10 rounded-lg px-3 py-2" role="alert">
+            {error}
+          </p>
+        )}
+      </form>
+    </ModalShell>
   );
 }
