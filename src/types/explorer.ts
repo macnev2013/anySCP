@@ -30,6 +30,14 @@ export interface ChmodResult {
   errors: string[];
 }
 
+/** Outcome of an OS drag-out — mirrors the Rust `DragOutResult`. */
+export interface DragOutResult {
+  /** True if the native drag ended in a drop (vs. cancelled). */
+  dropped: boolean;
+  /** Number of top-level items that were dragged. */
+  count: number;
+}
+
 /** Clipboard for copy/cut/paste within a session. */
 export interface ExplorerClipboard {
   entries: ExplorerEntry[];

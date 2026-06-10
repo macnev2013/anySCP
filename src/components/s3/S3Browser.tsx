@@ -42,6 +42,10 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
 
   useEffect(() => {
     if (!session?.currentBucket) return;
+    // Browser tabs stay mounted (issue #17), so without this guard every open
+    // S3 browser's window-level listener would fire on a single drop and upload
+    // into every session at once. Only the visible tab listens.
+    if (!isActive) return;
 
     let aborted = false;
     let unlisten: (() => void) | undefined;
@@ -107,7 +111,7 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
 
     return () => { aborted = true; unlisten?.(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, session?.currentBucket]);
+  }, [sessionId, session?.currentBucket, isActive]);
 
   // ─── Load buckets / objects ───────────────────────────────────────────────
 

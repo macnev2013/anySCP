@@ -182,6 +182,7 @@ pub fn run() {
             sftp::commands::sftp_copy_entries,
             // SFTP — legacy direct transfers (kept for VS Code edit workflow)
             sftp::commands::sftp_download,
+            sftp::commands::sftp_drag_out,
             sftp::commands::sftp_upload,
             sftp::commands::sftp_cancel_transfer,
             sftp::commands::sftp_edit_external,

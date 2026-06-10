@@ -13,7 +13,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use super::{
-    SftpError, SftpManager, TransferDirection, TransferEvent, TransferInfo, TransferStatus,
+    validate_remote_name, SftpError, SftpManager, TransferDirection, TransferEvent, TransferInfo,
+    TransferStatus,
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -899,32 +900,54 @@ async fn run_upload_file(
         .map_err(|e| SftpError::RemoteIoError(format!("Cannot write to {remote_path}: {e}")))?
     };
 
-    let mut buf = vec![0u8; CHUNK_SIZE];
+    // Stream the bytes. A failure *here* (cancellation, a dropped connection
+    // mid-write, a local read error) leaves a truncated/partial file on the
+    // remote, so the result is inspected below and the partial removed
+    // best-effort. The closing `shutdown()` is deliberately kept OUT of this
+    // block: once every byte is written the remote file is complete, and a
+    // failure to cleanly close the handle must NOT delete a fully-uploaded
+    // file (that would be data loss).
+    let stream_result = async {
+        let mut buf = vec![0u8; CHUNK_SIZE];
+        loop {
+            if cancel_token.is_cancelled() {
+                return Err(SftpError::TransferCancelled);
+            }
 
-    loop {
-        if cancel_token.is_cancelled() {
-            // Attempt cleanup of the partial remote file.
-            let sftp = sftp_arc.lock().await;
-            let _ = sftp.remove_file(remote_path).await;
-            return Err(SftpError::TransferCancelled);
+            let n = local_file
+                .read(&mut buf)
+                .await
+                .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+
+            remote_file
+                .write_all(&buf[..n])
+                .await
+                .map_err(|e| SftpError::RemoteIoError(e.to_string()))?;
+
+            update_progress(jobs, job_id, n as u64, cancel_token, app_handle)?;
         }
+        Ok(())
+    }
+    .await;
 
-        let n = local_file
-            .read(&mut buf)
-            .await
-            .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
-        if n == 0 {
-            break;
-        }
-
-        remote_file
-            .write_all(&buf[..n])
-            .await
-            .map_err(|e| SftpError::RemoteIoError(e.to_string()))?;
-
-        update_progress(jobs, job_id, n as u64, cancel_token, app_handle)?;
+    if let Err(e) = stream_result {
+        // The transfer failed mid-stream. Best-effort cleanup of the partial
+        // remote file (this open handle is closed first so servers that reject
+        // remove-while-open still succeed). On a dropped connection the remove
+        // itself fails, which is fine. Note: when overwriting an existing file
+        // the original was already truncated by OPEN(TRUNCATE), so removing the
+        // partial is the better of two lossy outcomes.
+        let _ = remote_file.shutdown().await;
+        let sftp = sftp_arc.lock().await;
+        let _ = sftp.remove_file(remote_path).await;
+        return Err(e);
     }
 
+    // Stream succeeded — close the handle. A close error is surfaced but does
+    // NOT trigger deletion: the bytes are all there.
     remote_file
         .shutdown()
         .await
@@ -1144,9 +1167,13 @@ async fn download_dir_recursive(
 
     for entry in entries {
         let name = entry.file_name();
-        if name == "." || name == ".." {
-            continue;
-        }
+        // Skip "."/".." and reject any unsafe server-supplied name (separators,
+        // traversal, absolute) before joining it onto a local path — a hostile
+        // server must not be able to escape `local_dir`.
+        let name = match validate_remote_name(&name) {
+            Ok(n) => n.to_string(),
+            Err(_) => continue,
+        };
 
         if cancel_token.is_cancelled() {
             return Err(SftpError::TransferCancelled);

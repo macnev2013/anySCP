@@ -4,11 +4,13 @@ import { AlertCircle } from "lucide-react";
 import { useSftpStore } from "../../stores/sftp-store";
 import { useTabStore } from "../../stores/tab-store";
 import type { SftpEntry } from "../../types";
-import type { ExplorerEntry, ExplorerClipboard, ChmodResult } from "../../types/explorer";
+import type { ExplorerEntry, ExplorerClipboard, ChmodResult, DragOutResult } from "../../types/explorer";
 import { ExplorerToolbar, ExplorerFileTable, ExplorerDropZone } from "../explorer";
+import { DropOverwriteDialog } from "./DropOverwriteDialog";
 import { createSftpProvider, toExplorerEntry } from "../../providers/sftp-provider";
 import { explorerInvoke, transferEventName, type Transport } from "../../lib/explorer-transport";
 import { editorLaunchErrorMessage } from "../../lib/editor-errors";
+import { conflictingNames } from "../../lib/drop-conflicts";
 import { toast } from "../../stores/toast-store";
 import type { EditorConfig } from "../../stores/settings-store";
 
@@ -46,11 +48,80 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
   // ─── Drag-and-drop (OS → App) ─────────────────────────────────────────────
 
   const [isDragOver, setIsDragOver] = useState(false);
+  // When the cursor hovers a folder row during an OS drag, this holds that
+  // folder's path so files drop INTO it; otherwise it tracks the current dir.
+  const [dropTargetDir, setDropTargetDir] = useState<string | null>(null);
+  // Set when a drop would overwrite existing remote files, pausing the upload
+  // until the user confirms via the dialog.
+  const [pendingDrop, setPendingDrop] = useState<PendingDrop | null>(null);
   const isProcessingDrop = useRef(false);
+  // True while a drag-OUT we started is in flight (staging + native OS drag).
+  // Guards against (a) a re-entrant drag-out re-downloading the same selection
+  // and (b) the OS drag re-entering our own window drop listener and
+  // re-uploading the just-staged temp files (a self-drop).
+  const isDraggingOut = useRef(false);
   const currentPathRef = useRef(session?.currentPath ?? "/");
   currentPathRef.current = session?.currentPath ?? "/";
 
+  // Enqueue dropped local paths for upload, surfacing failures as a toast
+  // (the per-file transfer progress/errors still show in the transfer popover).
+  const uploadDropped = useCallback(
+    async (localPaths: string[], remoteDir: string) => {
+      try {
+        await explorerInvoke(transport, "enqueue_upload", sessionId, { localPaths, remoteDir });
+      } catch (err) {
+        toast.error(`Upload failed: ${errorMessage(err)}`);
+      }
+    },
+    [sessionId, transport],
+  );
+
+  const confirmOverwrite = useCallback(() => {
+    const pd = pendingDrop;
+    setPendingDrop(null);
+    isProcessingDrop.current = false;
+    if (pd) void uploadDropped(pd.localPaths, pd.remoteDir);
+  }, [pendingDrop, uploadDropped]);
+
+  const cancelOverwrite = useCallback(() => {
+    setPendingDrop(null);
+    isProcessingDrop.current = false;
+  }, []);
+
+  // Resolve the upload destination for an OS drop/drag at the given window
+  // position. Tauri's drag-drop API has no DOM target, so we hit-test the
+  // position against the listing: a drop on a directory row uploads into that
+  // directory, otherwise into the current directory.
+  //
+  // Tauri labels the event position `PhysicalPosition`, but only Windows
+  // actually reports physical pixels — macOS (wkwebview) and Linux (webkitgtk)
+  // already report CSS/logical pixels. `elementFromPoint` wants CSS pixels, so
+  // we divide by devicePixelRatio ONLY on Windows; doing so elsewhere would
+  // halve the coordinate on HiDPI/Retina and hit the wrong row.
+  const resolveDropDir = useCallback(
+    (position?: { x: number; y: number }): string => {
+      const base = currentPathRef.current;
+      if (!position) return base;
+      const scale = isWindowsWebview() ? window.devicePixelRatio || 1 : 1;
+      const el = document.elementFromPoint(position.x / scale, position.y / scale);
+      const row = el?.closest("[data-entry-row]") as HTMLElement | null;
+      if (row && row.dataset.entryType === "Directory") {
+        const name = row.dataset.entryName;
+        const entries = useSftpStore.getState().sessions.get(sessionId)?.entries ?? [];
+        const target = entries.find((e) => e.name === name && e.entry_type === "Directory");
+        if (target) return target.path;
+      }
+      return base;
+    },
+    [sessionId],
+  );
+
   useEffect(() => {
+    // Explorer tabs stay mounted (issue #17), so without this guard every open
+    // explorer's window-level listener would fire on a single drop and upload
+    // the files into every session at once. Only the visible tab listens.
+    if (!isActive) return;
+
     let aborted = false;
     let unlisten: (() => void) | undefined;
 
@@ -76,32 +147,53 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         if (!appWindow || aborted) return;
 
         const unsub = await appWindow.onDragDropEvent((event: DragDropEventPayload) => {
+          // Ignore the OS drag WE started: releasing our own drag-out back over
+          // the app must not re-upload the just-staged temp files.
+          if (isDraggingOut.current) return;
+
           const type = event.payload?.type;
           if (type === "enter" || type === "over") {
             setIsDragOver(true);
+            setDropTargetDir(resolveDropDir(event.payload?.position));
           } else if (type === "drop") {
             setIsDragOver(false);
+            setDropTargetDir(null);
 
             const paths: string[] = event.payload?.paths ?? [];
+            // Backstop for the self-drop guard above: never re-upload our own
+            // drag-out staging files even if the in-flight flag was already
+            // cleared by the time the OS delivered the drop.
+            if (paths.some((p) => p.includes(DRAGOUT_STAGING_SEGMENT))) return;
             if (isProcessingDrop.current || paths.length === 0) return;
             isProcessingDrop.current = true;
 
-            const remoteDir = currentPathRef.current;
+            const remoteDir = resolveDropDir(event.payload?.position);
 
             void (async () => {
+              // Pre-flight overwrite check. Best-effort: if the target listing
+              // can't be fetched (e.g. permissions) we skip the prompt and let
+              // the upload proceed — a real failure surfaces in the popover.
+              let conflicts: string[] = [];
               try {
-                await explorerInvoke(transport, "enqueue_upload", sessionId, {
-                  localPaths: paths,
-                  remoteDir,
-                });
-              } catch (err) {
-                console.error("Drag-drop upload failed:", err);
-              } finally {
-                setTimeout(() => { isProcessingDrop.current = false; }, 500);
+                const existing = await explorerInvoke<SftpEntry[]>(transport, "list_dir", sessionId, { path: remoteDir });
+                conflicts = conflictingNames(paths, new Set(existing.map((e) => e.name)));
+              } catch {
+                // Skip the pre-check; proceed to upload.
               }
+
+              if (conflicts.length > 0) {
+                // Hand off to the confirm dialog — it clears the processing
+                // guard once the user responds.
+                setPendingDrop({ localPaths: paths, remoteDir, conflicts });
+                return;
+              }
+
+              await uploadDropped(paths, remoteDir);
+              setTimeout(() => { isProcessingDrop.current = false; }, 500);
             })();
           } else {
             setIsDragOver(false);
+            setDropTargetDir(null);
           }
         });
 
@@ -113,7 +205,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
 
     return () => { aborted = true; unlisten?.(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, transport]);
+  }, [sessionId, transport, isActive, resolveDropDir, uploadDropped]);
 
   // ─── Auto-refresh on upload completion ────────────────────────────────────
 
@@ -159,11 +251,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         const entries = await explorerInvoke<SftpEntry[]>(transport, "list_dir", sessionId, { path });
         setEntries(sessionId, path, entries);
       } catch (err: unknown) {
-        const msg =
-          err && typeof err === "object" && "message" in err
-            ? String((err as { message: string }).message)
-            : "Failed to list directory";
-        setError(sessionId, msg);
+        setError(sessionId, errorMessage(err, "Failed to list directory"));
       }
     },
     [sessionId, transport, setLoading, setEntries, setError],
@@ -201,11 +289,10 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
       // Surface the failure (e.g. host without passwordless sudo) instead of
       // silently no-op'ing. The old session is untouched (close runs only
       // after a successful open), so the view keeps working.
-      const msg =
-        err && typeof err === "object" && "message" in err
-          ? String((err as { message: string }).message)
-          : `Failed to ${newSudoMode ? "enable" : "disable"} sudo mode`;
-      setError(sessionId, msg);
+      setError(
+        sessionId,
+        errorMessage(err, `Failed to ${newSudoMode ? "enable" : "disable"} sudo mode`),
+      );
     } finally {
       // On success the view remounts (tab id changes) and this is a no-op;
       // on failure or a closed tab it re-enables the button.
@@ -310,6 +397,58 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
     } catch (err) {
       console.error("Download failed:", err);
     }
+  }, [sessionId, transport]);
+
+  // ─── Drag-out (Explorer → OS desktop/Finder) ──────────────────────────────
+  //
+  // The whole drag-out runs in the backend `sftp_drag_out` command: it stages
+  // every selected entry to a private temp dir (files directly, folders
+  // recursively — fixing the old "only one file" bug), then drives the native
+  // OS drag with those real local paths and resolves once the drag ends. We
+  // must stage *before* the drag because the OS drag API needs concrete file
+  // handles up front — see the drag-out comment in ExplorerFileTable for why
+  // HTML5 DataTransfer can't do this in a webview.
+  //
+  // SCP has no `drag_out` command, so drag-out is wired for SFTP only (see the
+  // `onDragOut` prop below); SCP sessions keep the in-app move drag.
+  //
+  // Known limitation: staging a very large folder blocks until every byte is on
+  // disk (bounded by a backend size cap), so for big selections the drag may
+  // only begin after the mouse is released. The re-entrancy guard below stops a
+  // retry from re-downloading the same selection.
+  const handleDragOut = useCallback((entries: ExplorerEntry[]) => {
+    if (isDraggingOut.current) return; // a drag-out is already staging/dragging
+    isDraggingOut.current = true;
+    void (async () => {
+      // Staging a large selection blocks before the OS drag can attach; show a
+      // "Preparing…" toast only if it's slow enough to notice, and clear it once
+      // the drag begins/ends.
+      let prepToast: string | null = null;
+      const prepTimer = setTimeout(() => {
+        prepToast = toast.info("Preparing download…");
+      }, 400);
+      try {
+        const remotePaths = entries.map((en) => en.id);
+        const { dropped, count } = await explorerInvoke<DragOutResult>(
+          transport,
+          "drag_out",
+          sessionId,
+          { remotePaths },
+        );
+        // The OS copies asynchronously after the drop and gives no completion
+        // signal; the backend's drop result is the only success hook, so only
+        // confirm when the drag actually dropped (not when it was cancelled).
+        if (dropped && count > 0) {
+          toast.success(`Downloaded ${count} ${count === 1 ? "item" : "items"}`);
+        }
+      } catch (err) {
+        toast.error(`Download failed: ${errorMessage(err)}`);
+      } finally {
+        clearTimeout(prepTimer);
+        if (prepToast) toast.dismiss(prepToast);
+        isDraggingOut.current = false;
+      }
+    })();
   }, [sessionId, transport]);
 
   // ─── Upload (dialog) ─────────────────────────────────────────────────────
@@ -628,14 +767,57 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         onPaste={() => void handlePaste()}
         onMoveEntries={handleMoveEntries}
         onCopyEntries={handleCopyEntries}
+        onDragOut={transport === "sftp" ? handleDragOut : undefined}
         currentPath={session.currentPath}
         loading={session.loading}
         busy={busy}
       />
 
-      {isDragOver && <ExplorerDropZone path={session.currentPath} />}
+      {isDragOver && (
+        <ExplorerDropZone
+          path={dropTargetDir ?? session.currentPath}
+          intoFolder={!!dropTargetDir && dropTargetDir !== session.currentPath}
+        />
+      )}
+
+      {pendingDrop && (
+        <DropOverwriteDialog
+          conflicts={pendingDrop.conflicts}
+          targetDir={pendingDrop.remoteDir}
+          onConfirm={confirmOverwrite}
+          onCancel={cancelOverwrite}
+        />
+      )}
     </div>
   );
+}
+
+// ─── Drag-drop overwrite confirmation ────────────────────────────────────────
+
+interface PendingDrop {
+  localPaths: string[];
+  remoteDir: string;
+  conflicts: string[];
+}
+
+/** Extract a human-readable message from a Tauri/SftpError rejection. */
+function errorMessage(err: unknown, fallback = "Unexpected error"): string {
+  if (err && typeof err === "object" && "message" in err) {
+    return String((err as { message: string }).message);
+  }
+  return typeof err === "string" ? err : fallback;
+}
+
+/** Path segment of our drag-out staging dir (temp_dir/anyscp-dragout/<uuid>). */
+const DRAGOUT_STAGING_SEGMENT = "anyscp-dragout";
+
+/**
+ * Whether the webview is running on Windows. Tauri's drag-drop event position
+ * is physical pixels only on Windows; macOS/Linux report CSS pixels despite the
+ * `PhysicalPosition` label, so HiDPI hit-testing must scale only here.
+ */
+function isWindowsWebview(): boolean {
+  return typeof navigator !== "undefined" && /windows/i.test(navigator.userAgent);
 }
 
 // ─── Internal type for Tauri drag-drop event ─────────────────────────────────
