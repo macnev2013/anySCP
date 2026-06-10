@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef } from "react";
-import { AlertTriangle } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { AlertTriangle, X } from "lucide-react";
 
 interface ConfirmDangerDialogProps {
   open: boolean;
@@ -23,58 +23,99 @@ export function ConfirmDangerDialog({
   onCancel,
 }: ConfirmDangerDialogProps) {
   const titleId = useId();
+  const [visible, setVisible] = useState(false);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
 
-  // Focus the Cancel button on open — safe default prevents accidental confirm.
+  // Drive the entrance animation separately from open so the panel
+  // fades/slides in after the backdrop is painted.
   useEffect(() => {
-    if (open) cancelRef.current?.focus();
+    if (open) {
+      requestAnimationFrame(() => setVisible(true));
+    } else {
+      setVisible(false);
+    }
   }, [open]);
 
-  // Close on Escape (capture phase, consistent with GroupDeleteDialog).
+  // Focus the Cancel button once the panel is visible.
   useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) {
-        e.stopPropagation();
-        onCancel();
-      }
-    };
-    document.addEventListener("keydown", handler, true);
-    return () => document.removeEventListener("keydown", handler, true);
-  }, [open, busy, onCancel]);
+    if (visible) requestAnimationFrame(() => cancelRef.current?.focus());
+  }, [visible]);
 
   if (!open) return null;
 
+  const handleBackdropClick = (e: React.MouseEvent) => {
+    if (e.target === backdropRef.current && !busy) onCancel();
+  };
+
+  // Keyboard: Escape cancels; Enter inside the form submits (handled by onSubmit).
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape" && !busy) {
+      e.stopPropagation();
+      onCancel();
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" aria-modal="true" role="dialog" aria-labelledby={titleId}>
-      <div
-        className="absolute inset-0 bg-bg-base/70 backdrop-blur-sm"
-        onClick={() => { if (!busy) onCancel(); }}
-        aria-hidden="true"
-      />
-      <div className="relative z-10 w-full max-w-sm mx-4 p-6 rounded-xl bg-bg-surface border border-border shadow-[var(--shadow-lg)]">
-        <div className="flex items-start gap-3 mb-4">
-          <div className="flex items-center justify-center w-9 h-9 rounded-lg shrink-0 bg-status-error/10">
-            <AlertTriangle size={18} strokeWidth={1.8} className="text-status-error" aria-hidden="true" />
-          </div>
-          <div>
-            <h2 id={titleId} className="text-[length:var(--text-sm)] font-semibold text-text-primary">
+    <div
+      ref={backdropRef}
+      onClick={handleBackdropClick}
+      className={[
+        "fixed inset-0 z-50 flex items-start justify-center pt-[8vh]",
+        "transition-[background-color,backdrop-filter] duration-[var(--duration-base)]",
+        visible ? "bg-black/50 backdrop-blur-sm" : "bg-black/0 backdrop-blur-none",
+      ].join(" ")}
+    >
+      <form
+        onSubmit={(e) => { e.preventDefault(); if (!busy) onConfirm(); }}
+        onKeyDown={handleKeyDown}
+        aria-modal="true"
+        role="dialog"
+        aria-labelledby={titleId}
+        className={[
+          "w-full max-w-sm rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)]",
+          "flex flex-col",
+          "transition-[opacity,transform] duration-[var(--duration-slow)] ease-[var(--ease-expo-out)]",
+          visible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-3",
+        ].join(" ")}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div className="flex items-center justify-center w-7 h-7 rounded-md shrink-0 bg-status-error/10">
+              <AlertTriangle size={15} strokeWidth={1.8} className="text-status-error" aria-hidden="true" />
+            </div>
+            <h2 id={titleId} className="text-[length:var(--text-base)] font-semibold text-text-primary">
               {title}
             </h2>
-            <p className="text-[length:var(--text-xs)] text-text-muted mt-1">{message}</p>
           </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            aria-label="Close"
+            className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          >
+            <X size={14} strokeWidth={1.8} aria-hidden="true" />
+          </button>
         </div>
 
-        <div className="flex gap-2 justify-end">
+        {/* Body */}
+        <div className="px-6 py-4">
+          <p className="text-[length:var(--text-sm)] text-text-secondary">{message}</p>
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 pb-5 pt-3 flex items-center justify-end gap-2 border-t border-border shrink-0">
           <button
             ref={cancelRef}
+            type="button"
             onClick={onCancel}
             disabled={busy}
             className={[
-              "px-4 py-1.5 rounded-lg text-[length:var(--text-sm)] font-medium",
-              "text-text-secondary bg-bg-overlay border border-border",
-              "hover:text-text-primary hover:border-border-focus hover:bg-bg-subtle",
-              "transition-all duration-[var(--duration-fast)]",
+              "px-4 py-2 rounded-lg text-[length:var(--text-sm)] font-medium",
+              "text-text-secondary hover:text-text-primary",
+              "transition-colors duration-[var(--duration-fast)]",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               "disabled:opacity-50 disabled:pointer-events-none",
             ].join(" ")}
@@ -82,10 +123,10 @@ export function ConfirmDangerDialog({
             {cancelLabel}
           </button>
           <button
-            onClick={onConfirm}
+            type="submit"
             disabled={busy}
             className={[
-              "px-4 py-1.5 rounded-lg text-[length:var(--text-sm)] font-medium",
+              "px-4 py-2 rounded-lg text-[length:var(--text-sm)] font-medium",
               "bg-status-error text-text-inverse",
               "hover:opacity-90 active:opacity-80",
               "transition-opacity duration-[var(--duration-fast)]",
@@ -93,10 +134,10 @@ export function ConfirmDangerDialog({
               "disabled:opacity-50 disabled:pointer-events-none",
             ].join(" ")}
           >
-            {confirmLabel}
+            {busy ? "Deleting…" : confirmLabel}
           </button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }
