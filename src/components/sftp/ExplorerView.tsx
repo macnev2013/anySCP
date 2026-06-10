@@ -420,6 +420,13 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
     if (isDraggingOut.current) return; // a drag-out is already staging/dragging
     isDraggingOut.current = true;
     void (async () => {
+      // Staging a large selection blocks before the OS drag can attach; show a
+      // "Preparing…" toast only if it's slow enough to notice, and clear it once
+      // the drag begins/ends.
+      let prepToast: string | null = null;
+      const prepTimer = setTimeout(() => {
+        prepToast = toast.info("Preparing download…");
+      }, 400);
       try {
         const remotePaths = entries.map((en) => en.id);
         const { dropped, count } = await explorerInvoke<DragOutResult>(
@@ -437,6 +444,8 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
       } catch (err) {
         toast.error(`Download failed: ${errorMessage(err)}`);
       } finally {
+        clearTimeout(prepTimer);
+        if (prepToast) toast.dismiss(prepToast);
         isDraggingOut.current = false;
       }
     })();

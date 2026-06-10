@@ -445,15 +445,16 @@ export function ExplorerFileTable({
 
   const selectedEntries = sortedEntries.filter((e) => selectedIds.has(e.id));
 
-  // ─── Internal drag (pointer-based) ─────────────────────────────────────────
+  // ─── Drag (pointer-based) ──────────────────────────────────────────────────
   //
   // HTML5 drag-and-drop doesn't fire in the webview while Tauri's OS drag-drop
-  // handler is enabled (it is, for file-drop uploads), so internal move/copy is
-  // driven by pointer events. On a >5px move we either hand off to the native
-  // OS drag-out (primary modifier) or begin an in-app drag whose destination
-  // folder is hit-tested with elementFromPoint and committed on pointer-up
-  // (Alt = copy). A plain click never crosses the threshold, so selection and
-  // double-click are unaffected.
+  // handler is enabled (it is, for file-drop uploads), so all dragging is driven
+  // by pointer events. The DESTINATION decides the action (no modifier keys):
+  //   • drop on a folder row     → in-app move  (hold Alt while dropping = copy)
+  //   • drag out of the window   → native OS download (drag-out to desktop)
+  // The folder under the cursor is hit-tested with elementFromPoint; a plain
+  // click never crosses the 5px threshold, so selection and double-click are
+  // unaffected.
   const handleRowPointerDown = useCallback(
     (e: React.PointerEvent, entry: ExplorerEntry) => {
       if (e.button !== 0 || renamingId) return;
@@ -483,26 +484,54 @@ export function ExplorerFileTable({
         return target.id;
       };
 
+      // Hand off to the native OS download drag (only once).
+      let handedOff = false;
+      const dragOut = () => {
+        if (handedOff || !onDragOut) return;
+        handedOff = true;
+        teardown();
+        onDragOut(dragEntries);
+      };
+
       const onMove = (ev: PointerEvent) => {
         if (!started) {
           if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 5) return;
           started = true;
-          // Primary modifier (⌘/Ctrl) → native OS drag-out, which takes over.
-          if ((ev.metaKey || ev.ctrlKey) && onDragOut) {
-            teardown();
-            onDragOut(dragEntries);
-            return;
-          }
+          // Providers that can't move in-app (none today) can only download.
           if (!caps.canInternalDragMove) {
-            teardown();
+            dragOut();
             return;
           }
           moving = true;
         }
         if (moving) {
+          // Crossing the window edge = dragging toward the desktop/Finder →
+          // download. Otherwise it's an in-app move/copy onto a folder row.
+          if (
+            onDragOut &&
+            (ev.clientX <= 0 ||
+              ev.clientY <= 0 ||
+              ev.clientX >= window.innerWidth ||
+              ev.clientY >= window.innerHeight)
+          ) {
+            dragOut();
+            return;
+          }
           setDragOverId(folderTargetAt(ev.clientX, ev.clientY));
           setDragGhost({ x: ev.clientX, y: ev.clientY, count: dragEntries.length, copy: ev.altKey });
         }
+      };
+
+      // Backstop for the edge check: fires when the cursor actually exits the
+      // window (e.g. a fast drag onto the desktop that skips the boundary px).
+      const onWindowLeave = () => {
+        if (moving) dragOut();
+      };
+
+      // Reflect Alt (copy) the instant it's pressed/released, without waiting for
+      // the next pointer move.
+      const onKey = (ev: KeyboardEvent) => {
+        if (moving) setDragGhost((g) => (g ? { ...g, copy: ev.altKey } : g));
       };
 
       const onUp = (ev: PointerEvent) => {
@@ -522,12 +551,18 @@ export function ExplorerFileTable({
       function teardown() {
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("keydown", onKey);
+        window.removeEventListener("keyup", onKey);
+        document.removeEventListener("mouseleave", onWindowLeave);
         setDragOverId(null);
         setDragGhost(null);
       }
 
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
+      window.addEventListener("keydown", onKey);
+      window.addEventListener("keyup", onKey);
+      document.addEventListener("mouseleave", onWindowLeave);
     },
     [
       caps.canInternalDragMove,
@@ -911,9 +946,9 @@ export function ExplorerFileTable({
                       }
                     }
                   }}
-                  // Internal move/copy is pointer-driven (HTML5 DnD is suppressed
-                  // by the OS drag-drop handler). A primary-modifier drag hands
-                  // off to the native OS drag-out; plain = move, Alt = copy.
+                  // Pointer-driven drag (HTML5 DnD is suppressed by the OS
+                  // drag-drop handler). Drop on a folder = move (Alt = copy);
+                  // drag out of the window = download. See handleRowPointerDown.
                   onPointerDown={(caps.canInternalDragMove || onDragOut)
                     ? (e) => handleRowPointerDown(e, entry)
                     : undefined}
@@ -1001,13 +1036,15 @@ export function ExplorerFileTable({
         />
       )}
 
-      {/* Drag ghost for the pointer-driven internal move/copy. */}
+      {/* Drag ghost for the pointer-driven move/copy, with an Alt=copy hint. */}
       {dragGhost && (
         <div
           className="fixed z-50 pointer-events-none rounded-md bg-accent px-2 py-1 text-[length:var(--text-2xs)] font-medium text-white shadow-[var(--shadow-md)]"
           style={{ left: dragGhost.x + 12, top: dragGhost.y + 8 }}
         >
-          {`${dragGhost.copy ? "Copy" : "Move"} ${dragGhost.count} ${dragGhost.count === 1 ? "item" : "items"}`}
+          {dragGhost.copy
+            ? `Copy ${dragGhost.count} ${dragGhost.count === 1 ? "item" : "items"}`
+            : `Move ${dragGhost.count} ${dragGhost.count === 1 ? "item" : "items"} · ⌥ to copy`}
         </div>
       )}
     </>

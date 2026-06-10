@@ -14,7 +14,8 @@ export interface Toast {
 
 interface ToastState {
   toasts: Toast[];
-  show: (kind: ToastKind, message: string) => void;
+  /** Show a toast; returns its id so it can be dismissed early. */
+  show: (kind: ToastKind, message: string) => string;
   dismiss: (id: string) => void;
 }
 
@@ -28,13 +29,16 @@ export const useToastStore = create<ToastState>((set) => ({
     setTimeout(() => {
       set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
     }, AUTO_DISMISS_MS);
+    return id;
   },
   dismiss: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 }));
 
-/** Convenience facade for firing toasts from anywhere (incl. non-React code). */
+/** Convenience facade for firing toasts from anywhere (incl. non-React code).
+ *  The `show`-style methods return the toast id for early dismissal. */
 export const toast = {
   error: (message: string) => useToastStore.getState().show("error", message),
   success: (message: string) => useToastStore.getState().show("success", message),
   info: (message: string) => useToastStore.getState().show("info", message),
+  dismiss: (id: string) => useToastStore.getState().dismiss(id),
 };
