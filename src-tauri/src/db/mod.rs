@@ -501,6 +501,26 @@ impl HostDb {
             tracing::info!("migration 12→13 applied: added saved_hosts.start_directory");
         }
 
+        if version < 14 {
+            // Manual drag-and-drop ordering. Idempotent: only add the column if
+            // it doesn't already exist. Existing rows default to 0, so hosts that
+            // have never been reordered fall back to the `label ASC` tiebreaker.
+            let has_sort_order: bool = conn
+                .prepare("SELECT sort_order FROM saved_hosts LIMIT 0")
+                .is_ok();
+            if !has_sort_order {
+                conn.execute(
+                    "ALTER TABLE saved_hosts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+            conn.execute(
+                "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '14')",
+                [],
+            )?;
+            tracing::info!("migration 13→14 applied: added saved_hosts.sort_order");
+        }
+
         Ok(())
     }
 
@@ -670,7 +690,9 @@ impl HostDb {
         Ok(())
     }
 
-    /// Return all saved hosts ordered by label ascending.
+    /// Return all saved hosts ordered by their manual `sort_order` (set via
+    /// drag-and-drop), falling back to label ascending for hosts that have never
+    /// been reordered (all share the default `sort_order` of 0).
     #[instrument(skip(self))]
     pub fn list_hosts(&self) -> Result<Vec<SavedHost>, DbError> {
         let conn = self
@@ -684,7 +706,7 @@ impl HostDb {
                     font_size, last_connected_at, connection_count, proxy_jump_host_id,
                     start_directory
              FROM saved_hosts
-             ORDER BY label ASC",
+             ORDER BY sort_order ASC, label ASC",
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -730,6 +752,33 @@ impl HostDb {
         if affected == 0 {
             return Err(DbError::NotFound(id.to_string()));
         }
+        Ok(())
+    }
+
+    /// Persist a manual host ordering. Assigns `sort_order = position` for each
+    /// id in `ordered_ids` inside a single transaction, so list views render in
+    /// exactly this sequence. If any id does not match an existing host the whole
+    /// transaction rolls back (leaving the previous order intact) and
+    /// `DbError::NotFound` is returned — this guards against a stale frontend
+    /// sending ids for hosts that were deleted concurrently.
+    #[instrument(skip(self), fields(count = ordered_ids.len()))]
+    pub fn reorder_hosts(&self, ordered_ids: &[String]) -> Result<(), DbError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let tx = conn.transaction()?;
+        for (idx, id) in ordered_ids.iter().enumerate() {
+            let affected = tx.execute(
+                "UPDATE saved_hosts SET sort_order = ?2 WHERE id = ?1",
+                params![id, idx as i64],
+            )?;
+            if affected == 0 {
+                // Dropping `tx` without commit rolls back every prior UPDATE.
+                return Err(DbError::NotFound(id.clone()));
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1002,6 +1051,33 @@ impl HostDb {
         if affected == 0 {
             return Err(DbError::NotFound(group.id.clone()));
         }
+        Ok(())
+    }
+
+    /// Persist a manual group ordering. Assigns `sort_order = position` for each
+    /// id in `ordered_ids` inside a single transaction, so the dashboard renders
+    /// groups in exactly this sequence. If any id does not match an existing
+    /// group the whole transaction rolls back (leaving the previous order intact)
+    /// and `DbError::NotFound` is returned — guarding against a stale frontend
+    /// referencing a group deleted concurrently.
+    #[instrument(skip(self), fields(count = ordered_ids.len()))]
+    pub fn reorder_groups(&self, ordered_ids: &[String]) -> Result<(), DbError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let tx = conn.transaction()?;
+        for (idx, id) in ordered_ids.iter().enumerate() {
+            let affected = tx.execute(
+                "UPDATE host_groups SET sort_order = ?2 WHERE id = ?1",
+                params![id, idx as i64],
+            )?;
+            if affected == 0 {
+                // Dropping `tx` without commit rolls back every prior UPDATE.
+                return Err(DbError::NotFound(id.clone()));
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 

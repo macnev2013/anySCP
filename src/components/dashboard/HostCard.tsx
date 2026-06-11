@@ -181,7 +181,9 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
         onContextMenu={handleContextMenu}
         title={`Connect to ${displayName}`}
         className={[
-          "group relative isolate flex flex-col gap-2.5 p-3.5 rounded-xl text-left w-full cursor-pointer overflow-hidden",
+          // grab/grabbing communicates the card is draggable; the click-to-connect
+          // action still fires for a plain click (drag needs a 5px move first).
+          "group relative isolate flex flex-col gap-2.5 p-3.5 rounded-xl text-left w-full h-full cursor-grab active:cursor-grabbing overflow-hidden",
           "bg-bg-surface border border-border",
           "hover:border-border-focus hover:bg-bg-overlay",
           "transition-[background-color,border-color] duration-[var(--duration-fast)]",

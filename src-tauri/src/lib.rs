@@ -236,11 +236,13 @@ pub fn run() {
             db::commands::save_host,
             db::commands::list_hosts,
             db::commands::delete_host,
+            db::commands::reorder_hosts,
             db::commands::get_host,
             // Host groups
             db::commands::create_group,
             db::commands::update_group,
             db::commands::list_groups,
+            db::commands::reorder_groups,
             db::commands::delete_group,
             db::commands::delete_group_with_hosts,
             // Connection history

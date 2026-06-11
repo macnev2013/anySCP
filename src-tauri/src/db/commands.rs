@@ -39,6 +39,23 @@ pub async fn delete_host(id: String, state: State<'_, Arc<HostDb>>) -> Result<()
         .map_err(|e| DbError::InitError(format!("task panicked: {e}")))?
 }
 
+/// Persist a manual host ordering produced by drag-and-drop on the dashboard.
+///
+/// `ordered_ids` is the full list of host ids in their new display order; each
+/// host's `sort_order` is set to its position. Rolls back and returns
+/// `DbError::NotFound` if any id is unknown (e.g. a host deleted concurrently).
+#[tauri::command]
+#[instrument(skip(state), fields(count = ordered_ids.len()))]
+pub async fn reorder_hosts(
+    ordered_ids: Vec<String>,
+    state: State<'_, Arc<HostDb>>,
+) -> Result<(), DbError> {
+    let db = Arc::clone(&state);
+    task::spawn_blocking(move || db.reorder_hosts(&ordered_ids))
+        .await
+        .map_err(|e| DbError::InitError(format!("task panicked: {e}")))?
+}
+
 /// Look up a single host by its UUID string.  Returns `None` when not found.
 #[tauri::command]
 #[instrument(skip(state), fields(id = %id))]
@@ -68,6 +85,23 @@ pub async fn create_group(group: HostGroup, state: State<'_, Arc<HostDb>>) -> Re
 pub async fn update_group(group: HostGroup, state: State<'_, Arc<HostDb>>) -> Result<(), DbError> {
     let db = Arc::clone(&state);
     task::spawn_blocking(move || db.update_group(&group))
+        .await
+        .map_err(|e| DbError::InitError(format!("task panicked: {e}")))?
+}
+
+/// Persist a manual group ordering produced by drag-and-drop on the dashboard.
+///
+/// `ordered_ids` is the full list of group ids in their new display order; each
+/// group's `sort_order` is set to its position. Rolls back and returns
+/// `DbError::NotFound` if any id is unknown (e.g. a group deleted concurrently).
+#[tauri::command]
+#[instrument(skip(state), fields(count = ordered_ids.len()))]
+pub async fn reorder_groups(
+    ordered_ids: Vec<String>,
+    state: State<'_, Arc<HostDb>>,
+) -> Result<(), DbError> {
+    let db = Arc::clone(&state);
+    task::spawn_blocking(move || db.reorder_groups(&ordered_ids))
         .await
         .map_err(|e| DbError::InitError(format!("task panicked: {e}")))?
 }
