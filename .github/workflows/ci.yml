@@ -37,6 +37,10 @@ jobs:
       - name: Typecheck and build
         run: pnpm build
 
+      # Run the Vitest unit/component suite (`pnpm test` → `vitest run`).
+      - name: Test
+        run: pnpm test
+
   rust:
     name: Rust (fmt, clippy, test)
     runs-on: ubuntu-22.04
