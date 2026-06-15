@@ -456,28 +456,28 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
   const handleUpload = useCallback(async () => {
     if (!session) return;
     try {
-      let localPath: string | null = null;
-      try {
-        const specifier = ["@tauri-apps", "plugin-dialog"].join("/");
-        const dialog = await (Function("s", "return import(s)")(specifier) as Promise<{ open: (opts: { multiple: boolean }) => Promise<string | null> }>);
-        const result = await dialog.open({ multiple: false });
-        if (result) localPath = result;
-      } catch {
-        localPath = window.prompt("Enter local file path to upload:");
-      }
-      if (!localPath) return;
+      // A plain dynamic import is required here: the dialog plugin's `open`
+      // must run inside the module's resolution scope. (An earlier attempt at
+      // `Function("s","return import(s)")` resolved the bare specifier against
+      // the document base URL, threw, and silently fell back to a no-op
+      // `window.prompt` in the macOS webview — see issue #69.)
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selection = await open({ multiple: true, title: "Upload file" });
+      if (!selection) return;
+      const localPaths = Array.isArray(selection) ? selection : [selection];
+      if (localPaths.length === 0) return;
 
-      const fileName = localPath.split("/").pop() ?? localPath.split("\\").pop() ?? "file";
-      const remotePath = session.currentPath.endsWith("/")
-        ? `${session.currentPath}${fileName}`
-        : `${session.currentPath}/${fileName}`;
-
-      await explorerInvoke(transport, "upload", sessionId, { localPath, remotePath });
-      void loadDirectory(session.currentPath);
+      // Route through the transfer queue (same path as drag-and-drop): it
+      // walks directories, reports progress in the transfer overlay, and the
+      // completion listener above refreshes the listing once each file lands.
+      await explorerInvoke(transport, "enqueue_upload", sessionId, {
+        localPaths,
+        remoteDir: session.currentPath,
+      });
     } catch {
-      // Upload errors show in transfer overlay
+      // Upload errors surface in the transfer overlay
     }
-  }, [sessionId, transport, session, loadDirectory]);
+  }, [sessionId, transport, session]);
 
   // ─── New folder/file (inline) ─────────────────────────────────────────────
 
