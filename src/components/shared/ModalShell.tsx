@@ -62,6 +62,12 @@ export interface ModalShellProps {
   children: React.ReactNode;
   /** data-testid applied to the panel div. */
   testId?: string;
+  /**
+   * Extra `data-*` attributes spread onto the panel div. Use for state that
+   * tests or styling need to read off the dialog root (e.g. the host modal's
+   * `data-host-modal-mode`), which ModalShell otherwise has no way to expose.
+   */
+  dataAttributes?: Record<string, string>;
 }
 
 export function ModalShell({
@@ -79,6 +85,7 @@ export function ModalShell({
   footerStart,
   children,
   testId,
+  dataAttributes,
 }: ModalShellProps) {
   const titleId = useId();
   const [visible, setVisible] = useState(false);
@@ -129,6 +136,7 @@ export function ModalShell({
     >
       <div
         data-testid={testId}
+        {...dataAttributes}
         aria-modal="true"
         role="dialog"
         aria-labelledby={titleId}

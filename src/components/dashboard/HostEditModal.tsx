@@ -458,6 +458,7 @@ export function HostEditModal() {
       scrollable
       busy={isBusy}
       testId="host-modal"
+      dataAttributes={{ "data-host-modal-mode": isNewHost ? "new" : "edit" }}
       footerStart={
         !isNewHost ? (
           deleteConfirm ? (
