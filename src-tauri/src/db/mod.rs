@@ -2768,4 +2768,90 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["a", "b"], "order unchanged after rollback");
     }
+
+    #[test]
+    fn reorder_hosts_persists_order() {
+        let (db, _dir) = test_db();
+        // Labels are "My Server {id}", so the default sort_order=0 → label ASC order is a, b, c.
+        db.save_host(&sample_host("a")).expect("save a");
+        db.save_host(&sample_host("b")).expect("save b");
+        db.save_host(&sample_host("c")).expect("save c");
+
+        let ids = |db: &HostDb| {
+            db.list_hosts()
+                .expect("list")
+                .into_iter()
+                .map(|h| h.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&db), vec!["a", "b", "c"], "default order is label ASC");
+
+        db.reorder_hosts(&["c".into(), "a".into(), "b".into()])
+            .expect("reorder");
+        assert_eq!(ids(&db), vec!["c", "a", "b"], "new order persists");
+    }
+
+    #[test]
+    fn reorder_hosts_rolls_back_on_unknown_id() {
+        let (db, _dir) = test_db();
+        db.save_host(&sample_host("a")).expect("save a");
+        db.save_host(&sample_host("b")).expect("save b");
+
+        // "ghost" doesn't exist → the whole transaction must roll back, leaving the
+        // prior order (and the valid "b" update) untouched.
+        let err = db
+            .reorder_hosts(&["b".into(), "ghost".into()])
+            .expect_err("unknown id must error");
+        assert!(matches!(err, DbError::NotFound(id) if id == "ghost"));
+
+        let ids = db
+            .list_hosts()
+            .expect("list")
+            .into_iter()
+            .map(|h| h.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["a", "b"], "order unchanged after rollback");
+    }
+
+    #[test]
+    fn reorder_groups_persists_order() {
+        let (db, _dir) = test_db();
+        // Names are "Group {id}", so the default sort_order=0 → name ASC order is a, b, c.
+        db.create_group(&sample_group("a")).expect("create a");
+        db.create_group(&sample_group("b")).expect("create b");
+        db.create_group(&sample_group("c")).expect("create c");
+
+        let ids = |db: &HostDb| {
+            db.list_groups()
+                .expect("list")
+                .into_iter()
+                .map(|g| g.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&db), vec!["a", "b", "c"], "default order is name ASC");
+
+        db.reorder_groups(&["c".into(), "a".into(), "b".into()])
+            .expect("reorder");
+        assert_eq!(ids(&db), vec!["c", "a", "b"], "new order persists");
+    }
+
+    #[test]
+    fn reorder_groups_rolls_back_on_unknown_id() {
+        let (db, _dir) = test_db();
+        db.create_group(&sample_group("a")).expect("create a");
+        db.create_group(&sample_group("b")).expect("create b");
+
+        let err = db
+            .reorder_groups(&["b".into(), "ghost".into()])
+            .expect_err("unknown id must error");
+        assert!(matches!(err, DbError::NotFound(id) if id == "ghost"));
+
+        let ids = db
+            .list_groups()
+            .expect("list")
+            .into_iter()
+            .map(|g| g.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["a", "b"], "order unchanged after rollback");
+    }
 }

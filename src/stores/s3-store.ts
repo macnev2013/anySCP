@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { S3Entry, S3BucketInfo, ExplorerClipboard } from "../types";
+import type { S3Entry, S3BucketInfo, ExplorerClipboard, S3Connection } from "../types";
 
 export interface S3Session {
   sessionId: string;
@@ -18,6 +18,9 @@ interface S3State {
   sessions: Map<string, S3Session>;
   activeS3SessionId: string | null;
   clipboard: ExplorerClipboard | null;
+  connections: S3Connection[];
+  loadConnections: () => Promise<void>;
+  reorderConnections: (newOrder: S3Connection[]) => Promise<void>;
 
   openSession: (sessionId: string, label: string) => void;
   closeSession: (sessionId: string) => void;
@@ -31,8 +34,9 @@ interface S3State {
   setClipboard: (clipboard: ExplorerClipboard | null) => void;
 }
 
-export const useS3Store = create<S3State>((set) => ({
+export const useS3Store = create<S3State>((set, get) => ({
   sessions: new Map(),
+  connections: [],
   activeS3SessionId: null,
   clipboard: null,
 
@@ -122,6 +126,30 @@ export const useS3Store = create<S3State>((set) => ({
 
   setClipboard: (clipboard) =>
     set({ clipboard }),
+
+  loadConnections: async () => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const conns = await invoke<S3Connection[]>("s3_list_connections");
+      set({ connections: conns });
+    } catch { /* best-effort */ }
+  },
+
+  // Optimistically apply a drag-and-drop reordering, then persist it — mirrors
+  // hosts-store/groups-store. The UI updates instantly and the new order is
+  // sent to the backend in the background; on failure we roll back so the
+  // displayed state never diverges from what's stored.
+  reorderConnections: async (newOrder) => {
+    const previous = get().connections;
+    set({ connections: newOrder });
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("reorder_s3_connections", { orderedIds: newOrder.map((c) => c.id) });
+    } catch (err) {
+      set({ connections: previous });
+      throw err;
+    }
+  },
 }));
 
 // E2E test hooks — connection delete + transfer command wrappers so specs
@@ -129,6 +157,7 @@ export const useS3Store = create<S3State>((set) => ({
 if (typeof window !== "undefined") {
   const w = window as unknown as {
     __e2eDeleteS3Connection?: (id: string) => Promise<void>;
+    __e2eReloadS3Connections?: () => Promise<void>;
     __e2eS3Order?: () => Promise<string[]>;
     __e2eS3Upload?: (sessionId: string, localPath: string, key: string) => Promise<void>;
     __e2eS3Download?: (sessionId: string, key: string, localPath: string) => Promise<void>;
@@ -137,6 +166,11 @@ if (typeof window !== "undefined") {
   w.__e2eDeleteS3Connection = async (id) => {
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("s3_delete_connection", { id });
+  };
+  // Reload the dashboard's S3 connection list (now store-owned) after an
+  // out-of-band delete — used by the S3 delete E2E spec.
+  w.__e2eReloadS3Connections = async () => {
+    await useS3Store.getState().loadConnections();
   };
   // Persisted connection order (labels) — lets the reorder E2E spec confirm the
   // async backend write landed before relaunching to verify it survives a restart.

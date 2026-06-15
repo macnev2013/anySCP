@@ -11,6 +11,7 @@ import {
   closestCenter,
   MouseSensor,
   TouchSensor,
+  KeyboardSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -19,6 +20,7 @@ import {
   SortableContext,
   rectSortingStrategy,
   arrayMove,
+  sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
 import { ImportSshConfigModal } from "./ImportSshConfigModal";
 import { S3ConnectDialog } from "../s3/S3ConnectDialog";
@@ -30,9 +32,10 @@ import { useTabStore } from "../../stores/tab-store";
 import { useSftpStore } from "../../stores/sftp-store";
 import { useS3Store } from "../../stores/s3-store";
 import type { SavedHost, HostGroup, RecentConnection, S3Connection } from "../../types";
-import { SortableHostCard } from "./SortableHostCard";
-import { SortableGroupCard } from "./SortableGroupCard";
-import { SortableS3Card } from "./SortableS3Card";
+import { HostCard } from "./HostCard";
+import { GroupCard } from "./GroupCard";
+import { S3Card } from "./S3Card";
+import { SortableCard } from "./SortableCard";
 import { GroupDeleteDialog } from "./GroupDeleteDialog";
 import { GroupModal } from "./GroupModal";
 import { ConnectionDialog } from "./ConnectionDialog";
@@ -64,15 +67,9 @@ export function HostsDashboard() {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // S3 connections
-  const [s3Connections, setS3Connections] = useState<S3Connection[]>([]);
-
-  const loadS3Connections = async () => {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const conns = await invoke<S3Connection[]>("s3_list_connections");
-      setS3Connections(conns);
-    } catch { /* best-effort */ }
-  };
+  const s3Connections = useS3Store((s) => s.connections);
+  const loadS3Connections = useS3Store((s) => s.loadConnections);
+  const reorderS3Connections = useS3Store((s) => s.reorderConnections);
 
   const [editingS3Connection, setEditingS3Connection] = useState<S3Connection | null>(null);
 
@@ -120,7 +117,7 @@ export function HostsDashboard() {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("s3_delete_connection", { id: conn.id });
-      setS3Connections((prev) => prev.filter((c) => c.id !== conn.id));
+      await loadS3Connections();
     } catch { /* best-effort */ }
   };
 
@@ -133,21 +130,7 @@ export function HostsDashboard() {
     void loadGroups();
     void loadRecent();
     void loadS3Connections();
-  }, [loadHosts, loadGroups, loadRecent]);
-
-  // E2E test hook — lets tests trigger a reload of the local S3 connection
-  // list after invoking s3_delete_connection out-of-band. The s3-store
-  // doesn't own this list (HostsDashboard manages it in component state),
-  // so without this the dashboard wouldn't notice the deletion.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    (window as unknown as { __e2eReloadS3Connections?: () => Promise<void> })
-      .__e2eReloadS3Connections = async () => { await loadS3Connections(); };
-    return () => {
-      (window as unknown as { __e2eReloadS3Connections?: (() => Promise<void>) | null })
-        .__e2eReloadS3Connections = null;
-    };
-  }, []);
+  }, [loadHosts, loadGroups, loadRecent, loadS3Connections]);
 
 
   // ─── Derived data ─────────────────────────────────────────────────────────
@@ -348,11 +331,13 @@ export function HostsDashboard() {
 
   // The whole card is the drag surface, so a drag must only begin on a
   // deliberate gesture — otherwise every click-to-connect would be a drag.
-  // Mouse: require a 5px move. Touch: require a 250ms press (with 5px slop) so
-  // a tap connects and a scroll still scrolls.
+  // Mouse: require a 5px move. Touch: require a 250ms press (with 5px slop) so a
+  // tap connects and a scroll still scrolls. Keyboard: focus a card and use the
+  // arrow keys (Space/Enter to pick up and drop) — accessible reordering.
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
   const handleDragEnd = useCallback(
@@ -403,10 +388,9 @@ export function HostsDashboard() {
   );
 
   // Reorder the S3 connection cards. Its own DndContext over the Cloud Storage
-  // grid. S3 connections live in local component state (not a store), so the
-  // optimistic update + rollback are inline here. Like the host handler, we
-  // reorder the visible subset then splice it back into the full list so
-  // connections hidden by a group/search filter keep their positions.
+  // grid. Like the host handler, we reorder the visible subset then splice it
+  // back into the full list so connections hidden by a group/search filter keep
+  // their positions; the s3-store applies the optimistic update + rollback.
   const handleS3DragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
@@ -423,21 +407,11 @@ export function HostsDashboard() {
         visibleIds.has(c.id) ? reorderedVisible[cursor++] : c,
       );
 
-      const previous = s3Connections;
-      setS3Connections(newFullOrder); // optimistic — UI updates instantly
-      void (async () => {
-        try {
-          const { invoke } = await import("@tauri-apps/api/core");
-          await invoke("reorder_s3_connections", {
-            orderedIds: newFullOrder.map((c) => c.id),
-          });
-        } catch {
-          setS3Connections(previous); // roll back so display matches storage
-          toast.error("Couldn't save the new connection order — reverted.");
-        }
-      })();
+      void reorderS3Connections(newFullOrder).catch(() => {
+        toast.error("Couldn't save the new connection order — reverted.");
+      });
     },
-    [filteredS3, s3Connections],
+    [filteredS3, s3Connections, reorderS3Connections],
   );
 
   // ─── Group handlers ────────────────────────────────────────────────────────
@@ -629,7 +603,6 @@ export function HostsDashboard() {
               >
                 Groups
               </h2>
-              {/* TODO: keyboard reordering (accessibility) */}
               <DndContext
                 sensors={sensors}
                 collisionDetection={closestCenter}
@@ -641,14 +614,15 @@ export function HostsDashboard() {
                 >
                   <div className="grid grid-cols-3 gap-2.5">
                     {groups.map((group) => (
-                      <SortableGroupCard
-                        key={group.id}
-                        group={group}
-                        hostCount={hostCountByGroup[group.id] ?? 0}
-                        isSelected={selectedGroupId === group.id}
-                        onSelect={handleGroupSelect}
-                        onDelete={handleGroupDeleteRequest}
-                      />
+                      <SortableCard key={group.id} id={group.id}>
+                        <GroupCard
+                          group={group}
+                          hostCount={hostCountByGroup[group.id] ?? 0}
+                          isSelected={selectedGroupId === group.id}
+                          onSelect={handleGroupSelect}
+                          onDelete={handleGroupDeleteRequest}
+                        />
+                      </SortableCard>
                     ))}
                   </div>
                 </SortableContext>
@@ -685,7 +659,6 @@ export function HostsDashboard() {
 
             {/* Host grid or empty state */}
             {filteredHosts.length > 0 ? (
-              /* TODO: keyboard reordering (accessibility) */
               <DndContext
                 sensors={sensors}
                 collisionDetection={closestCenter}
@@ -697,15 +670,16 @@ export function HostsDashboard() {
                 >
                   <div className="grid grid-cols-3 gap-2.5">
                     {filteredHosts.map((host) => (
-                      <SortableHostCard
-                        key={host.id}
-                        host={host}
-                        onConnect={(h) => void connectToHost(h)}
-                        onExplore={(h) => void exploreHost(h)}
-                        onEdit={setEditingHostId}
-                        onDelete={(id) => void handleDeleteHost(id)}
-                        onDuplicate={(h) => void handleDuplicateHost(h)}
-                      />
+                      <SortableCard key={host.id} id={host.id}>
+                        <HostCard
+                          host={host}
+                          onConnect={(h) => void connectToHost(h)}
+                          onExplore={(h) => void exploreHost(h)}
+                          onEdit={setEditingHostId}
+                          onDelete={(id) => void handleDeleteHost(id)}
+                          onDuplicate={(h) => void handleDuplicateHost(h)}
+                        />
+                      </SortableCard>
                     ))}
                   </div>
                 </SortableContext>
@@ -728,7 +702,6 @@ export function HostsDashboard() {
               >
                 Cloud Storage
               </h2>
-              {/* TODO: keyboard reordering (accessibility) */}
               <DndContext
                 sensors={sensors}
                 collisionDetection={closestCenter}
@@ -740,14 +713,15 @@ export function HostsDashboard() {
                 >
                   <div className="grid grid-cols-3 gap-2.5">
                     {filteredS3.map((conn) => (
-                      <SortableS3Card
-                        key={conn.id}
-                        conn={conn}
-                        onConnect={(c) => void handleS3Connect(c)}
-                        onEdit={(c) => setEditingS3Connection(c)}
-                        onDuplicate={(c) => void handleS3Duplicate(c)}
-                        onDelete={(c) => void handleS3Delete(c)}
-                      />
+                      <SortableCard key={conn.id} id={conn.id}>
+                        <S3Card
+                          conn={conn}
+                          onConnect={(c) => void handleS3Connect(c)}
+                          onEdit={(c) => setEditingS3Connection(c)}
+                          onDuplicate={(c) => void handleS3Duplicate(c)}
+                          onDelete={(c) => void handleS3Delete(c)}
+                        />
+                      </SortableCard>
                     ))}
                   </div>
                 </SortableContext>
