@@ -55,13 +55,18 @@ describe("DropOverwriteDialog", () => {
     fireEvent.click(screen.getByTestId("explorer-overwrite-cancel"));
     expect(onCancel).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByTestId("explorer-overwrite-confirm")); // backdrop
+    // The backdrop is the panel's parent: ModalShell closes only when the click
+    // target is the backdrop itself, not the panel (testId is on the panel).
+    const backdrop = screen.getByTestId("explorer-overwrite-confirm").parentElement as HTMLElement;
+    fireEvent.click(backdrop);
     expect(onCancel).toHaveBeenCalledTimes(2);
 
-    fireEvent.keyDown(window, { key: "Escape" });
+    // ModalShell's Escape listener is on document; an event fired on window
+    // wouldn't reach it.
+    fireEvent.keyDown(document, { key: "Escape" });
     expect(onCancel).toHaveBeenCalledTimes(3);
 
-    // Keep rerender referenced (the dialog mounts a window keydown listener).
+    // Keep rerender referenced (the dialog mounts a document keydown listener).
     rerender(
       <DropOverwriteDialog conflicts={["a.txt"]} targetDir="/x" onConfirm={vi.fn()} onCancel={onCancel} />,
     );
