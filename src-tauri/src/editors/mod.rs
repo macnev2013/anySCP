@@ -501,6 +501,34 @@ pub fn resolve_default() -> Option<EditorConfig> {
         .or_else(|| detected.into_iter().next())
 }
 
+// ─── Temp staging ─────────────────────────────────────────────────────────────
+
+/// Build a collision-free local path for editing a remote file.
+///
+/// `key` uniquely identifies the remote file (e.g. session id + remote path or
+/// S3 bucket + key); `file_name` is the basename shown to the editor.
+///
+/// All edits used to land in a flat `anyscp-edit/<file_name>`, so two remote
+/// files sharing a basename — `a/compose.yml` and `b/compose.yml` — mapped to
+/// the same local file. With both open in an editor, saving one re-uploaded its
+/// contents to the *other's* remote path (#76). We namespace each download under
+/// an intermediate directory derived from a stable hash of `key`, keeping the
+/// original `file_name` inside so the editor still shows the right name and
+/// syntax highlighting.
+pub fn edit_temp_path(key: &str, file_name: &str) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    // DefaultHasher (SipHash with fixed keys) is deterministic within and across
+    // runs — we only need a stable, collision-resistant directory name, not a
+    // cryptographic digest.
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    let hash = format!("{:016x}", hasher.finish());
+    std::env::temp_dir()
+        .join("anyscp-edit")
+        .join(hash)
+        .join(file_name)
+}
+
 // ─── Launching ──────────────────────────────────────────────────────────────
 
 /// Launch `editor` against `file`. Spawns and returns immediately (the caller's
@@ -665,6 +693,19 @@ mod tests {
         assert!(none.is_empty());
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn edit_temp_path_separates_same_basename() {
+        // Same basename under different remote dirs must not collide (#76).
+        let a = edit_temp_path("sess1\0/a/compose.yml", "compose.yml");
+        let b = edit_temp_path("sess1\0/b/compose.yml", "compose.yml");
+        assert_ne!(a, b);
+        assert_eq!(a.file_name().unwrap(), "compose.yml");
+        assert_eq!(b.file_name().unwrap(), "compose.yml");
+        // Stable for the same key, and namespaced under anyscp-edit.
+        assert_eq!(a, edit_temp_path("sess1\0/a/compose.yml", "compose.yml"));
+        assert!(a.parent().unwrap().parent().unwrap().ends_with("anyscp-edit"));
     }
 
     #[test]

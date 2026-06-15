@@ -474,11 +474,15 @@ pub async fn scp_edit_external(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "file".to_string());
 
-    let temp_dir = std::env::temp_dir().join("anyscp-edit");
-    tokio::fs::create_dir_all(&temp_dir)
-        .await
-        .map_err(|e| ScpError::LocalIoError(e.to_string()))?;
-    let local_path = temp_dir.join(&file_name);
+    // Stage under a per-remote-file subdir so two files sharing a basename
+    // (e.g. a/compose.yml and b/compose.yml) don't clobber each other (#76).
+    let key = format!("{scp_session_id}\0{remote_path}");
+    let local_path = crate::editors::edit_temp_path(&key, &file_name);
+    if let Some(parent) = local_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| ScpError::LocalIoError(e.to_string()))?;
+    }
 
     // 1. Download the file.
     let token = CancellationToken::new();
@@ -567,6 +571,9 @@ pub async fn scp_edit_external(
             }
         }
         let _ = std::fs::remove_file(&local_path_bg);
+        if let Some(parent) = local_path_bg.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
     });
 
     Ok(())

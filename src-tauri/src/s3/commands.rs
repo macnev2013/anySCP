@@ -919,13 +919,15 @@ pub async fn s3_edit_external(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "file".to_string());
 
-    // Create temp directory.
-    let temp_dir = std::env::temp_dir().join("anyscp-edit");
-    tokio::fs::create_dir_all(&temp_dir)
-        .await
-        .map_err(|e| S3Error::IoError(e.to_string()))?;
-
-    let local_path = temp_dir.join(&file_name);
+    // Stage under a per-object subdir so two objects sharing a basename
+    // (e.g. a/compose.yml and b/compose.yml) don't clobber each other (#76).
+    let edit_key = format!("{s3_session_id}\0{key}");
+    let local_path = crate::editors::edit_temp_path(&edit_key, &file_name);
+    if let Some(parent) = local_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| S3Error::IoError(e.to_string()))?;
+    }
 
     // 1. Download the object from S3.
     {
@@ -1058,8 +1060,11 @@ pub async fn s3_edit_external(
             }
         }
 
-        // Cleanup temp file.
+        // Cleanup: remove the file and its now-empty per-object staging dir.
         let _ = std::fs::remove_file(&local_path_bg);
+        if let Some(parent) = local_path_bg.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
     });
 
     Ok(())
