@@ -88,7 +88,9 @@ export function S3Card({ conn, onConnect, onEdit, onDuplicate, onDelete }: S3Car
         onContextMenu={handleContextMenu}
         title={`Connect to ${displayName}`}
         className={[
-          "group relative isolate flex flex-col gap-2.5 p-3.5 rounded-xl text-left w-full cursor-pointer overflow-hidden",
+          // grab/grabbing communicates the card is draggable; a plain click still
+          // connects (drag needs a 5px move to activate first).
+          "group relative isolate flex flex-col gap-2.5 p-3.5 rounded-xl text-left w-full h-full cursor-grab active:cursor-grabbing overflow-hidden",
           "bg-bg-surface border border-border",
           "hover:border-border-focus hover:bg-bg-overlay",
           "transition-[background-color,border-color] duration-[var(--duration-fast)]",

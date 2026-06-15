@@ -239,6 +239,24 @@ pub async fn s3_list_connections(db: State<'_, Arc<HostDb>>) -> Result<Vec<S3Con
         .map_err(|e| S3Error::OperationError(e.to_string()))
 }
 
+/// Persist a manual S3-connection ordering produced by drag-and-drop on the
+/// dashboard. `ordered_ids` is the full list of connection ids in their new
+/// display order; each connection's `sort_order` is set to its position. Rolls
+/// back and returns an error if any id is unknown (e.g. a connection deleted
+/// concurrently).
+#[tauri::command]
+#[instrument(skip(db), fields(count = ordered_ids.len()))]
+pub async fn reorder_s3_connections(
+    ordered_ids: Vec<String>,
+    db: State<'_, Arc<HostDb>>,
+) -> Result<(), S3Error> {
+    let db = Arc::clone(&db);
+    tokio::task::spawn_blocking(move || db.reorder_s3_connections(&ordered_ids))
+        .await
+        .map_err(|e| S3Error::IoError(format!("task panicked: {e}")))?
+        .map_err(|e| S3Error::OperationError(e.to_string()))
+}
+
 #[tauri::command]
 #[instrument(skip(s3_manager, db))]
 pub async fn s3_delete_connection(

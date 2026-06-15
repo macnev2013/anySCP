@@ -11,11 +11,12 @@ interface HostsState {
   saveHost: (host: SavedHost) => Promise<void>;
   duplicateHost: (id: string) => Promise<void>;
   deleteHost: (id: string) => Promise<void>;
+  reorderHosts: (newOrder: SavedHost[]) => Promise<void>;
   loadRecent: () => Promise<void>;
   recordConnection: (hostId: string) => Promise<void>;
 }
 
-export const useHostsStore = create<HostsState>((set) => ({
+export const useHostsStore = create<HostsState>((set, get) => ({
   hosts: [],
   loading: false,
   error: null,
@@ -72,6 +73,22 @@ export const useHostsStore = create<HostsState>((set) => ({
     set({ hosts });
   },
 
+  // Optimistically apply a drag-and-drop reordering, then persist it. The UI
+  // updates instantly (so the drag feels immediate) and the new order is sent
+  // to the backend in the background. If the persist fails we roll back to the
+  // previous order so the displayed state never diverges from what's stored.
+  reorderHosts: async (newOrder) => {
+    const previous = get().hosts;
+    set({ hosts: newOrder });
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("reorder_hosts", { orderedIds: newOrder.map((h) => h.id) });
+    } catch (err) {
+      set({ hosts: previous });
+      throw err;
+    }
+  },
+
   loadRecent: async () => {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
@@ -111,8 +128,16 @@ if (typeof window !== "undefined") {
     __e2eBackupImport?: (password: string, path: string) => Promise<void>;
     __e2eFactoryReset?: () => Promise<void>;
     __e2eDataCounts?: () => Promise<{ hosts: number; groups: number; snippets: number }>;
+    __e2eHostOrder?: () => Promise<string[]>;
   };
   w.__e2eDuplicateHost = (id) => useHostsStore.getState().duplicateHost(id);
+  // Persisted host order (labels) — lets the reorder E2E spec confirm the async
+  // backend write landed before relaunching to verify it survives a restart.
+  w.__e2eHostOrder = async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const hosts = await invoke<SavedHost[]>("list_hosts");
+    return hosts.map((h) => h.label);
+  };
   w.__e2eBackupExport = async (password, path) => {
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("backup_export", { password, path });

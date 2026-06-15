@@ -501,6 +501,46 @@ impl HostDb {
             tracing::info!("migration 12→13 applied: added saved_hosts.start_directory");
         }
 
+        if version < 14 {
+            // Manual drag-and-drop ordering. Idempotent: only add the column if
+            // it doesn't already exist. Existing rows default to 0, so hosts that
+            // have never been reordered fall back to the `label ASC` tiebreaker.
+            let has_sort_order: bool = conn
+                .prepare("SELECT sort_order FROM saved_hosts LIMIT 0")
+                .is_ok();
+            if !has_sort_order {
+                conn.execute(
+                    "ALTER TABLE saved_hosts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+            conn.execute(
+                "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '14')",
+                [],
+            )?;
+            tracing::info!("migration 13→14 applied: added saved_hosts.sort_order");
+        }
+
+        if version < 15 {
+            // Extend manual drag-and-drop ordering to S3 connections, mirroring
+            // saved_hosts above. Idempotent column add; existing rows default to 0
+            // and fall back to the `label ASC` tiebreaker until reordered.
+            let has_sort_order: bool = conn
+                .prepare("SELECT sort_order FROM s3_connections LIMIT 0")
+                .is_ok();
+            if !has_sort_order {
+                conn.execute(
+                    "ALTER TABLE s3_connections ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+            conn.execute(
+                "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '15')",
+                [],
+            )?;
+            tracing::info!("migration 14→15 applied: added s3_connections.sort_order");
+        }
+
         Ok(())
     }
 
@@ -670,7 +710,9 @@ impl HostDb {
         Ok(())
     }
 
-    /// Return all saved hosts ordered by label ascending.
+    /// Return all saved hosts ordered by their manual `sort_order` (set via
+    /// drag-and-drop), falling back to label ascending for hosts that have never
+    /// been reordered (all share the default `sort_order` of 0).
     #[instrument(skip(self))]
     pub fn list_hosts(&self) -> Result<Vec<SavedHost>, DbError> {
         let conn = self
@@ -684,7 +726,7 @@ impl HostDb {
                     font_size, last_connected_at, connection_count, proxy_jump_host_id,
                     start_directory
              FROM saved_hosts
-             ORDER BY label ASC",
+             ORDER BY sort_order ASC, label ASC",
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -730,6 +772,33 @@ impl HostDb {
         if affected == 0 {
             return Err(DbError::NotFound(id.to_string()));
         }
+        Ok(())
+    }
+
+    /// Persist a manual host ordering. Assigns `sort_order = position` for each
+    /// id in `ordered_ids` inside a single transaction, so list views render in
+    /// exactly this sequence. If any id does not match an existing host the whole
+    /// transaction rolls back (leaving the previous order intact) and
+    /// `DbError::NotFound` is returned — this guards against a stale frontend
+    /// sending ids for hosts that were deleted concurrently.
+    #[instrument(skip(self), fields(count = ordered_ids.len()))]
+    pub fn reorder_hosts(&self, ordered_ids: &[String]) -> Result<(), DbError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let tx = conn.transaction()?;
+        for (idx, id) in ordered_ids.iter().enumerate() {
+            let affected = tx.execute(
+                "UPDATE saved_hosts SET sort_order = ?2 WHERE id = ?1",
+                params![id, idx as i64],
+            )?;
+            if affected == 0 {
+                // Dropping `tx` without commit rolls back every prior UPDATE.
+                return Err(DbError::NotFound(id.clone()));
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1002,6 +1071,33 @@ impl HostDb {
         if affected == 0 {
             return Err(DbError::NotFound(group.id.clone()));
         }
+        Ok(())
+    }
+
+    /// Persist a manual group ordering. Assigns `sort_order = position` for each
+    /// id in `ordered_ids` inside a single transaction, so the dashboard renders
+    /// groups in exactly this sequence. If any id does not match an existing
+    /// group the whole transaction rolls back (leaving the previous order intact)
+    /// and `DbError::NotFound` is returned — guarding against a stale frontend
+    /// referencing a group deleted concurrently.
+    #[instrument(skip(self), fields(count = ordered_ids.len()))]
+    pub fn reorder_groups(&self, ordered_ids: &[String]) -> Result<(), DbError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let tx = conn.transaction()?;
+        for (idx, id) in ordered_ids.iter().enumerate() {
+            let affected = tx.execute(
+                "UPDATE host_groups SET sort_order = ?2 WHERE id = ?1",
+                params![id, idx as i64],
+            )?;
+            if affected == 0 {
+                // Dropping `tx` without commit rolls back every prior UPDATE.
+                return Err(DbError::NotFound(id.clone()));
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1576,7 +1672,7 @@ impl HostDb {
             .lock()
             .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
         let mut stmt = conn.prepare(
-            "SELECT id, label, provider, region, endpoint, bucket, path_style, group_id, color, environment, notes, created_at FROM s3_connections ORDER BY label"
+            "SELECT id, label, provider, region, endpoint, bucket, path_style, group_id, color, environment, notes, created_at FROM s3_connections ORDER BY sort_order ASC, label ASC"
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(crate::s3::S3Connection {
@@ -1595,6 +1691,33 @@ impl HostDb {
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Persist a manual S3-connection ordering. Assigns `sort_order = position`
+    /// for each id in `ordered_ids` inside a single transaction, mirroring
+    /// [`reorder_hosts`](Self::reorder_hosts). If any id does not match an
+    /// existing connection the whole transaction rolls back (leaving the previous
+    /// order intact) and `DbError::NotFound` is returned — guarding against a
+    /// stale frontend referencing a connection deleted concurrently.
+    #[instrument(skip(self), fields(count = ordered_ids.len()))]
+    pub fn reorder_s3_connections(&self, ordered_ids: &[String]) -> Result<(), DbError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let tx = conn.transaction()?;
+        for (idx, id) in ordered_ids.iter().enumerate() {
+            let affected = tx.execute(
+                "UPDATE s3_connections SET sort_order = ?2 WHERE id = ?1",
+                params![id, idx as i64],
+            )?;
+            if affected == 0 {
+                // Dropping `tx` without commit rolls back every prior UPDATE.
+                return Err(DbError::NotFound(id.clone()));
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn delete_s3_connection(&self, id: &str) -> Result<(), DbError> {
@@ -2626,5 +2749,152 @@ mod tests {
             after.folder_id.is_none(),
             "snippet should be orphaned after folder deletion"
         );
+    }
+
+    fn save_s3(db: &HostDb, id: &str, label: &str) {
+        db.save_s3_connection(
+            id,
+            label,
+            "aws",
+            "us-east-1",
+            None,
+            Some("my-bucket"),
+            false,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("save s3 connection");
+    }
+
+    #[test]
+    fn reorder_s3_connections_persists_order() {
+        let (db, _dir) = test_db();
+        // Labels chosen so the default `label ASC` order is alpha, bravo, charlie.
+        save_s3(&db, "a", "alpha");
+        save_s3(&db, "b", "bravo");
+        save_s3(&db, "c", "charlie");
+
+        let ids = |db: &HostDb| {
+            db.list_s3_connections()
+                .expect("list")
+                .into_iter()
+                .map(|c| c.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&db), vec!["a", "b", "c"], "default order is label ASC");
+
+        db.reorder_s3_connections(&["c".into(), "a".into(), "b".into()])
+            .expect("reorder");
+        assert_eq!(ids(&db), vec!["c", "a", "b"], "new order persists");
+    }
+
+    #[test]
+    fn reorder_s3_connections_rolls_back_on_unknown_id() {
+        let (db, _dir) = test_db();
+        save_s3(&db, "a", "alpha");
+        save_s3(&db, "b", "bravo");
+
+        // "ghost" doesn't exist → the whole transaction must roll back, leaving
+        // the prior order (and the valid "b" update) untouched.
+        let err = db
+            .reorder_s3_connections(&["b".into(), "ghost".into()])
+            .expect_err("unknown id must error");
+        assert!(matches!(err, DbError::NotFound(id) if id == "ghost"));
+
+        let ids = db
+            .list_s3_connections()
+            .expect("list")
+            .into_iter()
+            .map(|c| c.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["a", "b"], "order unchanged after rollback");
+    }
+
+    #[test]
+    fn reorder_hosts_persists_order() {
+        let (db, _dir) = test_db();
+        // Labels are "My Server {id}", so the default sort_order=0 → label ASC order is a, b, c.
+        db.save_host(&sample_host("a")).expect("save a");
+        db.save_host(&sample_host("b")).expect("save b");
+        db.save_host(&sample_host("c")).expect("save c");
+
+        let ids = |db: &HostDb| {
+            db.list_hosts()
+                .expect("list")
+                .into_iter()
+                .map(|h| h.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&db), vec!["a", "b", "c"], "default order is label ASC");
+
+        db.reorder_hosts(&["c".into(), "a".into(), "b".into()])
+            .expect("reorder");
+        assert_eq!(ids(&db), vec!["c", "a", "b"], "new order persists");
+    }
+
+    #[test]
+    fn reorder_hosts_rolls_back_on_unknown_id() {
+        let (db, _dir) = test_db();
+        db.save_host(&sample_host("a")).expect("save a");
+        db.save_host(&sample_host("b")).expect("save b");
+
+        // "ghost" doesn't exist → the whole transaction must roll back, leaving the
+        // prior order (and the valid "b" update) untouched.
+        let err = db
+            .reorder_hosts(&["b".into(), "ghost".into()])
+            .expect_err("unknown id must error");
+        assert!(matches!(err, DbError::NotFound(id) if id == "ghost"));
+
+        let ids = db
+            .list_hosts()
+            .expect("list")
+            .into_iter()
+            .map(|h| h.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["a", "b"], "order unchanged after rollback");
+    }
+
+    #[test]
+    fn reorder_groups_persists_order() {
+        let (db, _dir) = test_db();
+        // Names are "Group {id}", so the default sort_order=0 → name ASC order is a, b, c.
+        db.create_group(&sample_group("a")).expect("create a");
+        db.create_group(&sample_group("b")).expect("create b");
+        db.create_group(&sample_group("c")).expect("create c");
+
+        let ids = |db: &HostDb| {
+            db.list_groups()
+                .expect("list")
+                .into_iter()
+                .map(|g| g.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&db), vec!["a", "b", "c"], "default order is name ASC");
+
+        db.reorder_groups(&["c".into(), "a".into(), "b".into()])
+            .expect("reorder");
+        assert_eq!(ids(&db), vec!["c", "a", "b"], "new order persists");
+    }
+
+    #[test]
+    fn reorder_groups_rolls_back_on_unknown_id() {
+        let (db, _dir) = test_db();
+        db.create_group(&sample_group("a")).expect("create a");
+        db.create_group(&sample_group("b")).expect("create b");
+
+        let err = db
+            .reorder_groups(&["b".into(), "ghost".into()])
+            .expect_err("unknown id must error");
+        assert!(matches!(err, DbError::NotFound(id) if id == "ghost"));
+
+        let ids = db
+            .list_groups()
+            .expect("list")
+            .into_iter()
+            .map(|g| g.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["a", "b"], "order unchanged after rollback");
     }
 }

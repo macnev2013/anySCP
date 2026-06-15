@@ -43,7 +43,9 @@ export function GroupCard({ group, hostCount, isSelected, onSelect, onDelete }: 
         title={group.name}
         aria-pressed={isSelected}
         className={[
-          "group relative flex flex-col gap-2.5 p-3.5 rounded-xl text-left",
+          // grab/grabbing communicates the card is draggable; a plain click still
+          // selects/filters the group (drag needs a 5px move to activate first).
+          "group relative flex flex-col gap-2.5 p-3.5 rounded-xl text-left w-full h-full cursor-grab active:cursor-grabbing",
           "bg-bg-surface border transition-all duration-[var(--duration-fast)]",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           isSelected

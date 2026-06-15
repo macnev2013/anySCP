@@ -6,6 +6,22 @@ import {
   useMemo,
 } from "react";
 import { Search, Plus, ArrowLeft, FolderPlus, Import, Cloud } from "lucide-react";
+import {
+  DndContext,
+  closestCenter,
+  MouseSensor,
+  TouchSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  rectSortingStrategy,
+  arrayMove,
+  sortableKeyboardCoordinates,
+} from "@dnd-kit/sortable";
 import { ImportSshConfigModal } from "./ImportSshConfigModal";
 import { S3ConnectDialog } from "../s3/S3ConnectDialog";
 import { useHostsStore } from "../../stores/hosts-store";
@@ -17,12 +33,14 @@ import { useSftpStore } from "../../stores/sftp-store";
 import { useS3Store } from "../../stores/s3-store";
 import type { SavedHost, HostGroup, RecentConnection, S3Connection } from "../../types";
 import { HostCard } from "./HostCard";
-import { S3Card } from "./S3Card";
 import { GroupCard } from "./GroupCard";
+import { S3Card } from "./S3Card";
+import { SortableCard } from "./SortableCard";
 import { GroupDeleteDialog } from "./GroupDeleteDialog";
 import { GroupModal } from "./GroupModal";
 import { ConnectionDialog } from "./ConnectionDialog";
 import { RecentConnections } from "./RecentConnections";
+import { toast } from "../../stores/toast-store";
 
 // Abort an in-flight SSH connection attempt on the Rust side. Best-effort:
 // the attempt may already have settled, in which case the backend reports it
@@ -39,9 +57,9 @@ async function cancelConnectAttempt(attemptId: string) {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function HostsDashboard() {
-  const { hosts, loadHosts, recentConnections, loadRecent, saveHost, deleteHost } =
+  const { hosts, loadHosts, recentConnections, loadRecent, saveHost, deleteHost, reorderHosts } =
     useHostsStore();
-  const { groups, loadGroups, createGroup, deleteGroup } = useGroupsStore();
+  const { groups, loadGroups, createGroup, deleteGroup, reorderGroups } = useGroupsStore();
   const setEditingHostId = useUiStore((s) => s.setEditingHostId);
 
   const [query, setQuery] = useState("");
@@ -61,15 +79,9 @@ export function HostsDashboard() {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // S3 connections
-  const [s3Connections, setS3Connections] = useState<S3Connection[]>([]);
-
-  const loadS3Connections = async () => {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const conns = await invoke<S3Connection[]>("s3_list_connections");
-      setS3Connections(conns);
-    } catch { /* best-effort */ }
-  };
+  const s3Connections = useS3Store((s) => s.connections);
+  const loadS3Connections = useS3Store((s) => s.loadConnections);
+  const reorderS3Connections = useS3Store((s) => s.reorderConnections);
 
   const [editingS3Connection, setEditingS3Connection] = useState<S3Connection | null>(null);
 
@@ -124,7 +136,7 @@ export function HostsDashboard() {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("s3_delete_connection", { id: conn.id });
-      setS3Connections((prev) => prev.filter((c) => c.id !== conn.id));
+      await loadS3Connections();
     } catch { /* best-effort */ }
   };
 
@@ -137,21 +149,7 @@ export function HostsDashboard() {
     void loadGroups();
     void loadRecent();
     void loadS3Connections();
-  }, [loadHosts, loadGroups, loadRecent]);
-
-  // E2E test hook — lets tests trigger a reload of the local S3 connection
-  // list after invoking s3_delete_connection out-of-band. The s3-store
-  // doesn't own this list (HostsDashboard manages it in component state),
-  // so without this the dashboard wouldn't notice the deletion.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    (window as unknown as { __e2eReloadS3Connections?: () => Promise<void> })
-      .__e2eReloadS3Connections = async () => { await loadS3Connections(); };
-    return () => {
-      (window as unknown as { __e2eReloadS3Connections?: (() => Promise<void>) | null })
-        .__e2eReloadS3Connections = null;
-    };
-  }, []);
+  }, [loadHosts, loadGroups, loadRecent, loadS3Connections]);
 
 
   // ─── Derived data ─────────────────────────────────────────────────────────
@@ -395,6 +393,93 @@ export function HostsDashboard() {
     [saveHost],
   );
 
+  // ─── Drag-and-drop reordering ────────────────────────────────────────────────
+
+  // The whole card is the drag surface, so a drag must only begin on a
+  // deliberate gesture — otherwise every click-to-connect would be a drag.
+  // Mouse: require a 5px move. Touch: require a 250ms press (with 5px slop) so a
+  // tap connects and a scroll still scrolls. Keyboard: focus a card and use the
+  // arrow keys (Space/Enter to pick up and drop) — accessible reordering.
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      const oldIndex = filteredHosts.findIndex((h) => h.id === active.id);
+      const newIndex = filteredHosts.findIndex((h) => h.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      // Reorder within the currently visible subset, then splice that new order
+      // back into the full host list — hosts hidden by a group/search filter keep
+      // their positions. This keeps the persisted global order self-consistent
+      // even when the user reorders inside a filtered view.
+      const reorderedVisible = arrayMove(filteredHosts, oldIndex, newIndex);
+      const visibleIds = new Set(filteredHosts.map((h) => h.id));
+      let cursor = 0;
+      const newFullOrder = hosts.map((h) =>
+        visibleIds.has(h.id) ? reorderedVisible[cursor++] : h,
+      );
+
+      void reorderHosts(newFullOrder).catch(() => {
+        toast.error("Couldn't save the new host order — reverted.");
+      });
+    },
+    [filteredHosts, hosts, reorderHosts],
+  );
+
+  // Reorder the group cards themselves. This is a separate DnD layer from the
+  // host reordering above (its own DndContext over the Groups grid), so the two
+  // never interfere. `groups` is never filtered, so a plain arrayMove suffices.
+  const handleGroupDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      const oldIndex = groups.findIndex((g) => g.id === active.id);
+      const newIndex = groups.findIndex((g) => g.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      const newOrder = arrayMove(groups, oldIndex, newIndex);
+      void reorderGroups(newOrder).catch(() => {
+        toast.error("Couldn't save the new group order — reverted.");
+      });
+    },
+    [groups, reorderGroups],
+  );
+
+  // Reorder the S3 connection cards. Its own DndContext over the Cloud Storage
+  // grid. Like the host handler, we reorder the visible subset then splice it
+  // back into the full list so connections hidden by a group/search filter keep
+  // their positions; the s3-store applies the optimistic update + rollback.
+  const handleS3DragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      const oldIndex = filteredS3.findIndex((c) => c.id === active.id);
+      const newIndex = filteredS3.findIndex((c) => c.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      const reorderedVisible = arrayMove(filteredS3, oldIndex, newIndex);
+      const visibleIds = new Set(filteredS3.map((c) => c.id));
+      let cursor = 0;
+      const newFullOrder = s3Connections.map((c) =>
+        visibleIds.has(c.id) ? reorderedVisible[cursor++] : c,
+      );
+
+      void reorderS3Connections(newFullOrder).catch(() => {
+        toast.error("Couldn't save the new connection order — reverted.");
+      });
+    },
+    [filteredS3, s3Connections, reorderS3Connections],
+  );
+
   // ─── Group handlers ────────────────────────────────────────────────────────
 
   const handleGroupSelect = (groupId: string) => {
@@ -584,18 +669,30 @@ export function HostsDashboard() {
               >
                 Groups
               </h2>
-              <div className="grid grid-cols-3 gap-2.5">
-                {groups.map((group) => (
-                  <GroupCard
-                    key={group.id}
-                    group={group}
-                    hostCount={hostCountByGroup[group.id] ?? 0}
-                    isSelected={selectedGroupId === group.id}
-                    onSelect={handleGroupSelect}
-                    onDelete={handleGroupDeleteRequest}
-                  />
-                ))}
-              </div>
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleGroupDragEnd}
+              >
+                <SortableContext
+                  items={groups.map((g) => g.id)}
+                  strategy={rectSortingStrategy}
+                >
+                  <div className="grid grid-cols-3 gap-2.5">
+                    {groups.map((group) => (
+                      <SortableCard key={group.id} id={group.id}>
+                        <GroupCard
+                          group={group}
+                          hostCount={hostCountByGroup[group.id] ?? 0}
+                          isSelected={selectedGroupId === group.id}
+                          onSelect={handleGroupSelect}
+                          onDelete={handleGroupDeleteRequest}
+                        />
+                      </SortableCard>
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
             </section>
           )}
 
@@ -628,19 +725,31 @@ export function HostsDashboard() {
 
             {/* Host grid or empty state */}
             {filteredHosts.length > 0 ? (
-              <div className="grid grid-cols-3 gap-2.5">
-                {filteredHosts.map((host) => (
-                  <HostCard
-                    key={host.id}
-                    host={host}
-                    onConnect={(h) => void connectToHost(h)}
-                    onExplore={(h) => void exploreHost(h)}
-                    onEdit={setEditingHostId}
-                    onDelete={(id) => void handleDeleteHost(id)}
-                    onDuplicate={(h) => void handleDuplicateHost(h)}
-                  />
-                ))}
-              </div>
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={filteredHosts.map((h) => h.id)}
+                  strategy={rectSortingStrategy}
+                >
+                  <div className="grid grid-cols-3 gap-2.5">
+                    {filteredHosts.map((host) => (
+                      <SortableCard key={host.id} id={host.id}>
+                        <HostCard
+                          host={host}
+                          onConnect={(h) => void connectToHost(h)}
+                          onExplore={(h) => void exploreHost(h)}
+                          onEdit={setEditingHostId}
+                          onDelete={(id) => void handleDeleteHost(id)}
+                          onDuplicate={(h) => void handleDuplicateHost(h)}
+                        />
+                      </SortableCard>
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
             ) : (
               <EmptyHostsState
                 query={query}
@@ -659,18 +768,30 @@ export function HostsDashboard() {
               >
                 Cloud Storage
               </h2>
-              <div className="grid grid-cols-3 gap-2.5">
-                {filteredS3.map((conn) => (
-                  <S3Card
-                    key={conn.id}
-                    conn={conn}
-                    onConnect={(c) => void handleS3Connect(c)}
-                    onEdit={(c) => setEditingS3Connection(c)}
-                    onDuplicate={(c) => void handleS3Duplicate(c)}
-                    onDelete={(c) => void handleS3Delete(c)}
-                  />
-                ))}
-              </div>
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleS3DragEnd}
+              >
+                <SortableContext
+                  items={filteredS3.map((c) => c.id)}
+                  strategy={rectSortingStrategy}
+                >
+                  <div className="grid grid-cols-3 gap-2.5">
+                    {filteredS3.map((conn) => (
+                      <SortableCard key={conn.id} id={conn.id}>
+                        <S3Card
+                          conn={conn}
+                          onConnect={(c) => void handleS3Connect(c)}
+                          onEdit={(c) => setEditingS3Connection(c)}
+                          onDuplicate={(c) => void handleS3Duplicate(c)}
+                          onDelete={(c) => void handleS3Delete(c)}
+                        />
+                      </SortableCard>
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
             </section>
           )}
         </div>
