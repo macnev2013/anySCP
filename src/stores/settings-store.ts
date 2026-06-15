@@ -4,6 +4,8 @@ export type CursorStyle = "block" | "bar" | "underline";
 export type ThemeMode = "dark" | "light";
 /** Which mouse button pastes the clipboard into the terminal (#71). */
 export type PasteButton = "none" | "right" | "middle";
+/** What double-clicking a file in the Explorer does. */
+export type DoubleClickAction = "download" | "open";
 
 /** Full custom accent colour in oklch components (lightness, chroma, hue). */
 export interface AccentCustom { l: number; c: number; h: number }
@@ -44,6 +46,9 @@ interface SettingsState {
   terminalCopyOnSelect: boolean;
   terminalPasteButton: PasteButton;
 
+  // Explorer
+  explorerDoubleClickAction: DoubleClickAction;
+
   // Transfers
   transferConcurrency: number;
 
@@ -69,6 +74,7 @@ interface SettingsState {
   setTerminalScrollback: (lines: number) => void;
   setTerminalCopyOnSelect: (enabled: boolean) => void;
   setTerminalPasteButton: (button: PasteButton) => void;
+  setExplorerDoubleClickAction: (action: DoubleClickAction) => void;
   setTransferConcurrency: (n: number) => void;
   addEditor: (editor: Omit<EditorConfig, "id">) => void;
   updateEditor: (id: string, patch: Partial<Omit<EditorConfig, "id">>) => void;
@@ -93,6 +99,7 @@ const DEFAULTS = {
   terminalScrollback: 5000,
   terminalCopyOnSelect: false,
   terminalPasteButton: "none" as PasteButton,
+  explorerDoubleClickAction: "download" as DoubleClickAction,
   transferConcurrency: 3,
   editors: [] as EditorConfig[],
   defaultEditorId: null as string | null,
@@ -268,6 +275,11 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     persist("terminal_copy_on_select", String(enabled));
   },
 
+  setExplorerDoubleClickAction: (action) => {
+    set({ explorerDoubleClickAction: action });
+    persist("explorer_double_click_action", action);
+  },
+
   setTerminalPasteButton: (button) => {
     set({ terminalPasteButton: button });
     persist("terminal_paste_button", button);
@@ -339,6 +351,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           case "terminal_scrollback": updates.terminalScrollback = Number(value) || DEFAULTS.terminalScrollback; break;
           case "terminal_copy_on_select": updates.terminalCopyOnSelect = value === "true"; break;
           case "terminal_paste_button": updates.terminalPasteButton = value === "right" || value === "middle" ? value : DEFAULTS.terminalPasteButton; break;
+          case "explorer_double_click_action": updates.explorerDoubleClickAction = value === "open" ? "open" : "download"; break;
           case "transfer_concurrency": updates.transferConcurrency = Number(value) || DEFAULTS.transferConcurrency; break;
           case "app_interface_font": updates.interfaceFont = value || DEFAULTS.interfaceFont; break;
           case "app_auto_update": updates.autoUpdate = value !== "false"; break;
