@@ -1546,11 +1546,8 @@ pub async fn sftp_edit_external(
             }
         }
 
-        // Cleanup: remove the file and its now-empty per-file staging dir.
-        let _ = std::fs::remove_file(&local_path_bg);
-        if let Some(parent) = local_path_bg.parent() {
-            let _ = std::fs::remove_dir(parent);
-        }
+        // Cleanup: remove the file and prune its now-empty per-edit staging dirs.
+        crate::editors::edit_temp_cleanup(&local_path_bg);
     });
 
     Ok(())

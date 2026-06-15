@@ -570,10 +570,8 @@ pub async fn scp_edit_external(
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        let _ = std::fs::remove_file(&local_path_bg);
-        if let Some(parent) = local_path_bg.parent() {
-            let _ = std::fs::remove_dir(parent);
-        }
+        // Cleanup: remove the file and prune its now-empty per-edit staging dirs.
+        crate::editors::edit_temp_cleanup(&local_path_bg);
     });
 
     Ok(())
