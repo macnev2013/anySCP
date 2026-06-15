@@ -6,7 +6,7 @@ import { useUpdaterStore } from "../../stores/updater-store";
 import { toast } from "../../stores/toast-store";
 import { RefreshCw, CheckCircle2, AlertCircle, Palette, SquareTerminal, ArrowUpDown, Info, ExternalLink, Check, FileCode, Plus, Trash2, FolderOpen, Star, Search, Database, Download, Upload, ShieldCheck } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { CursorStyle, ThemeMode, EditorConfig } from "../../stores/settings-store";
+import type { CursorStyle, ThemeMode, EditorConfig, PasteButton } from "../../stores/settings-store";
 
 // ─── Shared styles ───────────────────────────────────────────────────────────
 
@@ -516,6 +516,10 @@ function TerminalSettings() {
   const setScrollback = useSettingsStore((s) => s.setTerminalScrollback);
   const fontFamily = useSettingsStore((s) => s.terminalFontFamily);
   const setFontFamily = useSettingsStore((s) => s.setTerminalFontFamily);
+  const copyOnSelect = useSettingsStore((s) => s.terminalCopyOnSelect);
+  const setCopyOnSelect = useSettingsStore((s) => s.setTerminalCopyOnSelect);
+  const pasteButton = useSettingsStore((s) => s.terminalPasteButton);
+  const setPasteButton = useSettingsStore((s) => s.setTerminalPasteButton);
 
   const termFontOptions = useInstalledFontOptions(TERMINAL_FONT_CANDIDATES, fontFamily);
 
@@ -578,6 +582,33 @@ function TerminalSettings() {
             <p className={DESC_CLASS}>Animate the cursor</p>
           </div>
           <Toggle id="s-blink" checked={cursorBlink} onChange={setCursorBlink} />
+        </SettingRow>
+      </SettingsGroup>
+
+      <SettingsGroup label="Clipboard">
+        <SettingRow>
+          <div>
+            <label htmlFor="s-copyonselect" className={LABEL_CLASS}>Copy on Select</label>
+            <p className={DESC_CLASS}>Copy highlighted text to the clipboard automatically</p>
+          </div>
+          <Toggle id="s-copyonselect" checked={copyOnSelect} onChange={setCopyOnSelect} />
+        </SettingRow>
+
+        <SettingRow>
+          <div>
+            <p className={LABEL_CLASS}>Paste Button</p>
+            <p className={DESC_CLASS}>Mouse button that pastes the clipboard into the terminal</p>
+          </div>
+          <SegmentedControl<PasteButton>
+            id="s-pastebutton"
+            value={pasteButton}
+            onChange={setPasteButton}
+            options={[
+              { value: "none", label: "Off" },
+              { value: "right", label: "Right-click" },
+              { value: "middle", label: "Middle-click" },
+            ]}
+          />
         </SettingRow>
       </SettingsGroup>
 

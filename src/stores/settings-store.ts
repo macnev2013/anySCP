@@ -2,6 +2,8 @@ import { create } from "zustand";
 
 export type CursorStyle = "block" | "bar" | "underline";
 export type ThemeMode = "dark" | "light";
+/** Which mouse button pastes the clipboard into the terminal (#71). */
+export type PasteButton = "none" | "right" | "middle";
 
 /** Full custom accent colour in oklch components (lightness, chroma, hue). */
 export interface AccentCustom { l: number; c: number; h: number }
@@ -38,6 +40,10 @@ interface SettingsState {
   terminalLineHeight: number;
   terminalScrollback: number;
 
+  // Terminal clipboard
+  terminalCopyOnSelect: boolean;
+  terminalPasteButton: PasteButton;
+
   // Transfers
   transferConcurrency: number;
 
@@ -61,6 +67,8 @@ interface SettingsState {
   setTerminalCursorBlink: (blink: boolean) => void;
   setTerminalLineHeight: (height: number) => void;
   setTerminalScrollback: (lines: number) => void;
+  setTerminalCopyOnSelect: (enabled: boolean) => void;
+  setTerminalPasteButton: (button: PasteButton) => void;
   setTransferConcurrency: (n: number) => void;
   addEditor: (editor: Omit<EditorConfig, "id">) => void;
   updateEditor: (id: string, patch: Partial<Omit<EditorConfig, "id">>) => void;
@@ -83,6 +91,8 @@ const DEFAULTS = {
   terminalCursorBlink: true,
   terminalLineHeight: 1.2,
   terminalScrollback: 5000,
+  terminalCopyOnSelect: false,
+  terminalPasteButton: "none" as PasteButton,
   transferConcurrency: 3,
   editors: [] as EditorConfig[],
   defaultEditorId: null as string | null,
@@ -253,6 +263,16 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     persist("terminal_scrollback", String(clamped));
   },
 
+  setTerminalCopyOnSelect: (enabled) => {
+    set({ terminalCopyOnSelect: enabled });
+    persist("terminal_copy_on_select", String(enabled));
+  },
+
+  setTerminalPasteButton: (button) => {
+    set({ terminalPasteButton: button });
+    persist("terminal_paste_button", button);
+  },
+
   setTransferConcurrency: (n) => {
     const clamped = Math.max(1, Math.min(10, n));
     set({ transferConcurrency: clamped });
@@ -317,6 +337,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           case "terminal_cursor_blink": updates.terminalCursorBlink = value !== "false"; break;
           case "terminal_line_height": updates.terminalLineHeight = Number(value) || DEFAULTS.terminalLineHeight; break;
           case "terminal_scrollback": updates.terminalScrollback = Number(value) || DEFAULTS.terminalScrollback; break;
+          case "terminal_copy_on_select": updates.terminalCopyOnSelect = value === "true"; break;
+          case "terminal_paste_button": updates.terminalPasteButton = value === "right" || value === "middle" ? value : DEFAULTS.terminalPasteButton; break;
           case "transfer_concurrency": updates.transferConcurrency = Number(value) || DEFAULTS.transferConcurrency; break;
           case "app_interface_font": updates.interfaceFont = value || DEFAULTS.interfaceFont; break;
           case "app_auto_update": updates.autoUpdate = value !== "false"; break;
