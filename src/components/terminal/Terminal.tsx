@@ -101,6 +101,11 @@ export function Terminal({ sessionId }: TerminalProps) {
   // Clipboard behaviours (#71): copy-on-select and configurable paste button.
   // Registered once per session; the current setting values are read through
   // refs so changing them in Settings takes effect on the live terminal.
+  //
+  // Clipboard I/O goes through the Tauri clipboard plugin, not
+  // navigator.clipboard: the macOS WKWebView blocks navigator.clipboard.readText(),
+  // which would make paste silently no-op. The native plugin reads/writes
+  // through Rust and works in every webview.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -109,25 +114,30 @@ export function Terminal({ sessionId }: TerminalProps) {
     const selectionSub = term.onSelectionChange(() => {
       if (!copyOnSelectRef.current) return;
       const selection = term.getSelection();
-      if (selection) void navigator.clipboard.writeText(selection).catch(() => {});
+      if (!selection) return;
+      void (async () => {
+        try {
+          const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+          await writeText(selection);
+        } catch { /* clipboard unavailable */ }
+      })();
     });
 
     const paste = () => {
       void (async () => {
         try {
-          const text = await navigator.clipboard.readText();
+          const { readText } = await import("@tauri-apps/plugin-clipboard-manager");
+          const text = await readText();
           if (text) term.paste(text);
-        } catch { /* clipboard read unavailable or denied */ }
+        } catch { /* clipboard read unavailable */ }
       })();
     };
 
-    // Suppress the middle button's default (autoscroll) before it starts, then
-    // paste on the click. Right-click pastes on contextmenu, replacing the
-    // native menu. Both are gated on the chosen paste button.
+    // Paste on mousedown for the middle button (pasting on auxclick is unreliable
+    // in WebKit once mousedown's default is prevented), and on contextmenu for
+    // the right button — replacing the native menu. Capture phase so xterm's own
+    // mouse handling can't swallow the event first. Both gated on the setting.
     const onMouseDown = (e: MouseEvent) => {
-      if (e.button === 1 && pasteButtonRef.current === "middle") e.preventDefault();
-    };
-    const onAuxClick = (e: MouseEvent) => {
       if (e.button === 1 && pasteButtonRef.current === "middle") {
         e.preventDefault();
         paste();
@@ -140,14 +150,12 @@ export function Terminal({ sessionId }: TerminalProps) {
       }
     };
 
-    container.addEventListener("mousedown", onMouseDown);
-    container.addEventListener("auxclick", onAuxClick);
-    container.addEventListener("contextmenu", onContextMenu);
+    container.addEventListener("mousedown", onMouseDown, true);
+    container.addEventListener("contextmenu", onContextMenu, true);
     return () => {
       selectionSub.dispose();
-      container.removeEventListener("mousedown", onMouseDown);
-      container.removeEventListener("auxclick", onAuxClick);
-      container.removeEventListener("contextmenu", onContextMenu);
+      container.removeEventListener("mousedown", onMouseDown, true);
+      container.removeEventListener("contextmenu", onContextMenu, true);
     };
   }, [sessionId]);
 

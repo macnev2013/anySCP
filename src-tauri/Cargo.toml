@@ -69,6 +69,9 @@ keyring = { version = "3", features = ["apple-native", "linux-native", "windows-
 tauri-plugin-dialog = "2.6.0"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# Native clipboard read/write. The webview's navigator.clipboard.readText() is
+# blocked in the macOS WKWebView, so terminal paste (#71) reads through this.
+tauri-plugin-clipboard-manager = "2.3.2"
 # Native OS drag-out: hands real local file handles to the OS so files can be
 # dragged from the Explorer onto the desktop/Finder. The HTML5 DataTransfer API
 # cannot do this from a webview (see drag-out comment in ExplorerFileTable). We
