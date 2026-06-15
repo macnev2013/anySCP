@@ -6,7 +6,7 @@ import { useUpdaterStore } from "../../stores/updater-store";
 import { toast } from "../../stores/toast-store";
 import { RefreshCw, CheckCircle2, AlertCircle, Palette, SquareTerminal, ArrowUpDown, Info, ExternalLink, Check, FileCode, Plus, Trash2, FolderOpen, Star, Search, Database, Download, Upload, ShieldCheck } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { CursorStyle, ThemeMode, EditorConfig, PasteButton } from "../../stores/settings-store";
+import type { CursorStyle, ThemeMode, EditorConfig, PasteButton, DoubleClickAction } from "../../stores/settings-store";
 
 // ─── Shared styles ───────────────────────────────────────────────────────────
 
@@ -46,11 +46,12 @@ const REPO_URL = "https://github.com/macnev2013/anySCP";
 // Each settings category is a section here. To add a new category, add an entry
 // to SECTIONS, a description, and render its content in <SectionContent />.
 
-type SectionId = "appearance" | "terminal" | "transfers" | "editors" | "data" | "about";
+type SectionId = "appearance" | "terminal" | "explorer" | "transfers" | "editors" | "data" | "about";
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "terminal", label: "Terminal", icon: SquareTerminal },
+  { id: "explorer", label: "Explorer", icon: FolderOpen },
   { id: "transfers", label: "Transfers", icon: ArrowUpDown },
   { id: "editors", label: "Editors", icon: FileCode },
   { id: "data", label: "Data", icon: Database },
@@ -60,6 +61,7 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
 const SECTION_DESCRIPTIONS: Record<SectionId, string> = {
   appearance: "Theme and interface look.",
   terminal: "Font, cursor, and scrollback history.",
+  explorer: "How the file browser behaves.",
   transfers: "Control how files are transferred.",
   editors: "Editors used by “Edit” / “Open With” in the file browser.",
   data: "Back up, restore, and reset your data.",
@@ -147,6 +149,8 @@ function SectionContent({ section }: { section: SectionId }) {
       return <AppearanceSettings />;
     case "terminal":
       return <TerminalSettings />;
+    case "explorer":
+      return <ExplorerSettings />;
     case "transfers":
       return <TransferSettings />;
     case "editors":
@@ -625,6 +629,34 @@ function TerminalSettings() {
         </p>
       </SettingsGroup>
     </>
+  );
+}
+
+function ExplorerSettings() {
+  const doubleClickAction = useSettingsStore((s) => s.explorerDoubleClickAction);
+  const setDoubleClickAction = useSettingsStore((s) => s.setExplorerDoubleClickAction);
+
+  return (
+    <SettingsGroup>
+      <SettingRow>
+        <div>
+          <p className={LABEL_CLASS}>Double-click a File</p>
+          <p className={DESC_CLASS}>What happens when you double-click a file in the browser</p>
+        </div>
+        <SegmentedControl<DoubleClickAction>
+          id="s-doubleclick"
+          value={doubleClickAction}
+          onChange={setDoubleClickAction}
+          options={[
+            { value: "download", label: "Download" },
+            { value: "open", label: "Open in Editor" },
+          ]}
+        />
+      </SettingRow>
+      <p className="px-1 text-[length:var(--text-xs)] text-text-muted">
+        Opening falls back to downloading when no editor is configured (see Editors).
+      </p>
+    </SettingsGroup>
   );
 }
 

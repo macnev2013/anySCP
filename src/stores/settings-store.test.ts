@@ -80,3 +80,42 @@ describe("settings-store — terminal clipboard settings (#71)", () => {
     expect(useSettingsStore.getState().terminalPasteButton).toBe("none");
   });
 });
+
+describe("settings-store — explorer double-click action", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    invoke.mockResolvedValue(undefined);
+    useSettingsStore.setState({ explorerDoubleClickAction: "download" });
+  });
+
+  it("defaults to download", () => {
+    expect(useSettingsStore.getState().explorerDoubleClickAction).toBe("download");
+  });
+
+  it("sets and persists the double-click action", async () => {
+    useSettingsStore.getState().setExplorerDoubleClickAction("open");
+    expect(useSettingsStore.getState().explorerDoubleClickAction).toBe("open");
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("save_setting", {
+        key: "explorer_double_click_action",
+        value: "open",
+      }),
+    );
+  });
+
+  it("loads the action, falling back to download for an unknown value", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "load_all_settings") {
+        return [
+          ["explorer_double_click_action", "nonsense"],
+          ["editors_seeded", "true"],
+        ];
+      }
+      return undefined;
+    });
+
+    await useSettingsStore.getState().loadSettings();
+
+    expect(useSettingsStore.getState().explorerDoubleClickAction).toBe("download");
+  });
+});

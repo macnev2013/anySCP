@@ -293,6 +293,7 @@ export function ExplorerFileTable({
   const caps = provider.capabilities;
   const editors = useSettingsStore((s) => s.editors);
   const defaultEditorId = useSettingsStore((s) => s.defaultEditorId);
+  const doubleClickAction = useSettingsStore((s) => s.explorerDoubleClickAction);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<ExplorerEntry[] | null>(null);
@@ -583,6 +584,14 @@ export function ExplorerFileTable({
   const handleDoubleClick = (entry: ExplorerEntry) => {
     if (entry.entryType === "Directory") {
       onNavigate(entry.id);
+      return;
+    }
+    // For files, the action is configurable (Settings → Explorer). "Open in
+    // editor" uses the default editor, falling back to download when editing
+    // isn't possible (no editor configured, or the provider can't edit).
+    const defaultEditor = editors.find((e) => e.id === defaultEditorId) ?? editors[0];
+    if (doubleClickAction === "open" && caps.canEditInEditor && onEditInEditor && defaultEditor) {
+      onEditInEditor(entry, defaultEditor);
     } else {
       onDownload(entry);
     }
