@@ -4,7 +4,7 @@ import { useSettingsStore } from "../../stores/settings-store";
 import { CustomSelect, type SelectOption } from "../shared/CustomSelect";
 import { useUpdaterStore } from "../../stores/updater-store";
 import { toast } from "../../stores/toast-store";
-import { RefreshCw, CheckCircle2, AlertCircle, Palette, SquareTerminal, ArrowUpDown, Info, ExternalLink, Check, FileCode, Plus, Trash2, FolderOpen, Star, Search, Database, Download, Upload, ShieldCheck } from "lucide-react";
+import { RefreshCw, CheckCircle2, AlertCircle, Palette, SquareTerminal, ArrowUpDown, Info, ExternalLink, Check, FileCode, Plus, Trash2, FolderOpen, Star, Search, Database, Download, Upload, ShieldCheck, Plug } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { CursorStyle, ThemeMode, EditorConfig, PasteButton, DoubleClickAction } from "../../stores/settings-store";
 
@@ -46,12 +46,13 @@ const REPO_URL = "https://github.com/macnev2013/anySCP";
 // Each settings category is a section here. To add a new category, add an entry
 // to SECTIONS, a description, and render its content in <SectionContent />.
 
-type SectionId = "appearance" | "terminal" | "explorer" | "transfers" | "editors" | "data" | "about";
+type SectionId = "appearance" | "terminal" | "explorer" | "tunnels" | "transfers" | "editors" | "data" | "about";
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "terminal", label: "Terminal", icon: SquareTerminal },
   { id: "explorer", label: "Explorer", icon: FolderOpen },
+  { id: "tunnels", label: "Tunnels", icon: Plug },
   { id: "transfers", label: "Transfers", icon: ArrowUpDown },
   { id: "editors", label: "Editors", icon: FileCode },
   { id: "data", label: "Data", icon: Database },
@@ -62,6 +63,7 @@ const SECTION_DESCRIPTIONS: Record<SectionId, string> = {
   appearance: "Theme and interface look.",
   terminal: "Font, cursor, and scrollback history.",
   explorer: "How the file browser behaves.",
+  tunnels: "Defaults for SSH port-forwarding tunnels.",
   transfers: "Control how files are transferred.",
   editors: "Editors used by “Edit” / “Open With” in the file browser.",
   data: "Back up, restore, and reset your data.",
@@ -151,6 +153,8 @@ function SectionContent({ section }: { section: SectionId }) {
       return <TerminalSettings />;
     case "explorer":
       return <ExplorerSettings />;
+    case "tunnels":
+      return <TunnelSettings />;
     case "transfers":
       return <TransferSettings />;
     case "editors":
@@ -656,6 +660,26 @@ function ExplorerSettings() {
       <p className="px-1 text-[length:var(--text-xs)] text-text-muted">
         Opening falls back to downloading when no editor is configured (see Editors).
       </p>
+    </SettingsGroup>
+  );
+}
+
+function TunnelSettings() {
+  const autoStartDefault = useSettingsStore((s) => s.tunnelsAutoStartDefault);
+  const setAutoStartDefault = useSettingsStore((s) => s.setTunnelsAutoStartDefault);
+
+  return (
+    <SettingsGroup>
+      <SettingRow>
+        <div>
+          <p className={LABEL_CLASS}>Auto-start tunnels by default</p>
+          <p className={DESC_CLASS}>
+            New tunnels (including those imported from your SSH config) start automatically when their
+            host connects. This sets the default for newly-created tunnels; each tunnel can override it.
+          </p>
+        </div>
+        <Toggle id="s-tunnels-autostart" checked={autoStartDefault} onChange={setAutoStartDefault} />
+      </SettingRow>
     </SettingsGroup>
   );
 }
