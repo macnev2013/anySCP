@@ -24,6 +24,7 @@ import {
     createFile,
     createFolder,
     deleteEntry,
+    navigateUp,
     openEntry,
     refreshExplorer,
     waitForEntry,
@@ -108,29 +109,32 @@ describe("Explorer rename field — native clipboard (issue #87)", () => {
         const stamp = Date.now();
         const file = `rowfile-${stamp}`;
         const dest = `rowdest-${stamp}`;
+        const keep = `keep-${stamp}`;
         await createFile(file);
         await createFolder(dest);
 
+        // Seed the destination with a placeholder so it has a focusable row —
+        // the row-level Ctrl+V handler needs a focused [data-entry-row].
+        await openEntry(dest);
+        await createFile(keep);
+        await navigateUp();
+        await refreshExplorer();
+
         // focus the file ROW (not an input) and copy it
-        const row = await waitForEntry(file);
-        await row.click();
+        await (await waitForEntry(file)).click();
         await browser.keys(["Control", "c"]);
 
-        // into the destination folder, paste it
+        // into the destination folder, focus a row, then paste
         await openEntry(dest);
         await refreshExplorer();
+        await (await waitForEntry(keep)).click();
         await browser.keys(["Control", "v"]);
         await waitForEntry(file); // copied file shows up in the subfolder
 
-        // back out and clean up both
-        await browser.execute(() => {
-            const buttons = Array.from(
-                document.querySelectorAll<HTMLButtonElement>(
-                    "[aria-label='Current path'] button",
-                ),
-            );
-            buttons.at(-2)?.click();
-        });
+        // back out and clean up everything
+        await deleteEntry(file);
+        await deleteEntry(keep);
+        await navigateUp();
         await refreshExplorer();
         await deleteEntry(file);
         await deleteEntry(dest);
