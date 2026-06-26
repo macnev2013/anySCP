@@ -12,7 +12,7 @@
   <a href="#installation">Installation</a> &bull;
   <a href="#building">Building</a> &bull;
   <a href="#contributing">Contributing</a> &bull;
-  <a href="https://discord.gg/8UuzYeNVAR">Discord</a> &bull;
+  <a href="https://discord.gg/3xNRbNAmYb">Discord</a> &bull;
   <a href="https://join.slack.com/t/anyscp/shared_invite/zt-40b1jsfg4-f9rq_xRof_MVQqLXSPDE2Q">Slack</a> &bull;
   <a href="#license">License</a>
 </p>
