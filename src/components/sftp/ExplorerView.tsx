@@ -399,6 +399,30 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
     }
   }, [sessionId, transport]);
 
+  // Download several selected entries at once. Unlike the single-file path
+  // (which lets you rename via a Save dialog), this asks for a destination
+  // folder once and downloads everything into it under their original names.
+  // `enqueue_download` accepts a mix of files and folders and recurses into
+  // folders, so one call covers the whole selection.
+  const handleDownloadMany = useCallback(async (entries: ExplorerEntry[]) => {
+    if (entries.length === 0) return;
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const localDir = await open({
+        directory: true,
+        title: `Download ${entries.length} items to…`,
+      }) as string | null;
+      if (!localDir) return;
+
+      await explorerInvoke(transport, "enqueue_download", sessionId, {
+        remotePaths: entries.map((e) => e.id),
+        localDir,
+      });
+    } catch (err) {
+      console.error("Download failed:", err);
+    }
+  }, [sessionId, transport]);
+
   // ─── Drag-out (Explorer → OS desktop/Finder) ──────────────────────────────
   //
   // The whole drag-out runs in the backend `sftp_drag_out` command: it stages
@@ -754,6 +778,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         onSetClipboard={handleSetClipboard}
         onNavigate={(path) => void loadDirectory(path)}
         onDownload={(entry) => void handleDownload(entry)}
+        onDownloadMany={(entries) => void handleDownloadMany(entries)}
         onDelete={handleDelete}
         onRename={handleRename}
         onEditInEditor={handleEditInEditor}
