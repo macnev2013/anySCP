@@ -30,6 +30,25 @@ export interface TerminalEntry {
 const instances = new Map<string, TerminalEntry>();
 
 /**
+ * Open a URL clicked in the terminal via the OS default browser.
+ *
+ * xterm's built-in OSC 8 handler (and a naive WebLinksAddon) would fall back to
+ * `window.open()`, which does not work inside the Tauri webview and surfaces a
+ * browser error. Route through the Tauri opener instead. The plugin is
+ * lazy-imported per project convention (no module-level Tauri imports).
+ */
+function openTerminalLink(uri: string): void {
+  void (async () => {
+    try {
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl(uri);
+    } catch {
+      /* Opener unavailable (e.g. not running in Tauri) */
+    }
+  })();
+}
+
+/**
  * ANSI 16-color palettes. xterm.js falls back to its built-in palette when
  * these are unset, and that default green (#0DBC79) is nearly illegible on a
  * light background — so we ship palettes tuned for each background's contrast.
@@ -122,6 +141,12 @@ function createEntry(sessionId: string): TerminalEntry {
     scrollback: settings.terminalScrollback,
     theme: getTerminalTheme(),
     allowProposedApi: true,
+    // Open OSC 8 hyperlinks (emitted by ls --hyperlink, git, etc.) through the
+    // OS browser instead of xterm's window.open() fallback, which errors in the
+    // Tauri webview.
+    linkHandler: {
+      activate: (_event, uri) => openTerminalLink(uri),
+    },
   });
 
   const fitAddon = new FitAddon();
@@ -141,6 +166,17 @@ function createEntry(sessionId: string): TerminalEntry {
     })
     .catch(() => {
       /* Search unavailable */
+    });
+
+  // Load web-links addon asynchronously — makes plain-text URLs in the output
+  // clickable (OSC 8 hyperlinks are handled by the linkHandler option above).
+  import("@xterm/addon-web-links")
+    .then(({ WebLinksAddon }) => {
+      if (!instances.has(sessionId)) return;
+      term.loadAddon(new WebLinksAddon((_event, uri) => openTerminalLink(uri)));
+    })
+    .catch(() => {
+      /* Web links unavailable */
     });
 
   term.attachCustomKeyEventHandler((e) => {
