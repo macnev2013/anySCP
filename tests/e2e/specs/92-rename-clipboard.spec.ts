@@ -84,16 +84,16 @@ describe("Explorer rename field — native clipboard (issue #87)", () => {
         await input.click(); // focus the field
 
         // select-all (Ctrl+A) + copy (Ctrl+C) the current name
-        await browser.keys(["Ctrl", "a"]);
-        await browser.keys(["Ctrl", "c"]);
+        await browser.keys(["Control", "a"]);
+        await browser.keys(["Control", "c"]);
 
         // clear the field: select-all then delete
-        await browser.keys(["Ctrl", "a"]);
+        await browser.keys(["Control", "a"]);
         await browser.keys(["Backspace"]);
         await expect(input).toHaveValue("");
 
         // paste (Ctrl+V) — round-trips only if the native copy actually landed
-        await browser.keys(["Ctrl", "v"]);
+        await browser.keys(["Control", "v"]);
         await expect(input).toHaveValue(original);
 
         // cancel the rename (leave the file untouched) and clean up
@@ -114,12 +114,12 @@ describe("Explorer rename field — native clipboard (issue #87)", () => {
         // focus the file ROW (not an input) and copy it
         const row = await waitForEntry(file);
         await row.click();
-        await browser.keys(["Ctrl", "c"]);
+        await browser.keys(["Control", "c"]);
 
         // into the destination folder, paste it
         await openEntry(dest);
         await refreshExplorer();
-        await browser.keys(["Ctrl", "v"]);
+        await browser.keys(["Control", "v"]);
         await waitForEntry(file); // copied file shows up in the subfolder
 
         // back out and clean up both
