@@ -947,11 +947,11 @@ export function ExplorerFileTable({
                     if ((e.key === "Delete" || e.key === "Backspace") && caps.canDelete && !isInput) {
                       if (selectedIds.size > 0) setConfirmDelete(selectedEntries);
                     }
-                    if ((e.metaKey || e.ctrlKey) && e.key === "a") {
+                    if (!isInput && (e.metaKey || e.ctrlKey) && e.key === "a") {
                       e.preventDefault();
                       setSelectedIds(new Set(sortedEntries.map((en) => en.id)));
                     }
-                    if (caps.canCopyPaste) {
+                    if (!isInput && caps.canCopyPaste) {
                       if ((e.metaKey || e.ctrlKey) && e.key === "c" && selectedIds.size > 0) {
                         e.preventDefault();
                         onSetClipboard({ entries: selectedEntries, operation: "copy", sourceSessionId: provider.sessionId });
