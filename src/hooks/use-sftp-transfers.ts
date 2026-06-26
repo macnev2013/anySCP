@@ -176,3 +176,16 @@ export function useSftpTransfers() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [updateTransfer, setPopoverOpen, setHostLabel]);
 }
+
+// E2E test hook — emit a synthetic transfer event so specs can drive the
+// auto-open behaviour deterministically (the backend's progress events are
+// otherwise too fast/short to script). Mirrors the `__e2e*` invoke wrappers in
+// the stores; the import is bundled so it resolves inside the app context.
+if (typeof window !== "undefined") {
+  (window as unknown as {
+    __e2eEmitTransfer?: (event: string, payload: unknown) => Promise<void>;
+  }).__e2eEmitTransfer = async (event, payload) => {
+    const { emit } = await import("@tauri-apps/api/event");
+    await emit(event, payload);
+  };
+}
