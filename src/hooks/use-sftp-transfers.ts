@@ -58,6 +58,12 @@ export function useSftpTransfers() {
 
         const unsub = await listen<TransferEvent>("sftp:transfer", (event) => {
           const transfer = event.payload;
+
+          // Auto-open popover only the first time we see a transfer — checked
+          // before updateTransfer() so the id isn't in the map yet. Otherwise
+          // every progress event would reopen a popover the user just closed.
+          const isNew = !useTransferStore.getState().transfers.has(transfer.transfer_id);
+
           updateTransfer(transfer);
 
           // Cache the host label for this session
@@ -69,7 +75,7 @@ export function useSftpTransfers() {
           }
 
           // Auto-open popover when a new transfer starts
-          if (transfer.status === "InProgress" || transfer.status === "Queued") {
+          if (isNew && (transfer.status === "InProgress" || transfer.status === "Queued")) {
             if (!useTransferStore.getState().popoverOpen) {
               setPopoverOpen(true);
             }
@@ -96,6 +102,11 @@ export function useSftpTransfers() {
 
         const unsub = await listen<TransferEvent>("scp:transfer", (event) => {
           const transfer = event.payload;
+
+          // Auto-open popover only the first time we see a transfer (see the
+          // SFTP listener above for why this is checked before updateTransfer).
+          const isNew = !useTransferStore.getState().transfers.has(transfer.transfer_id);
+
           updateTransfer(transfer);
 
           // Cache the host label for this session
@@ -107,7 +118,7 @@ export function useSftpTransfers() {
           }
 
           // Auto-open popover when a new transfer starts
-          if (transfer.status === "InProgress" || transfer.status === "Queued") {
+          if (isNew && (transfer.status === "InProgress" || transfer.status === "Queued")) {
             if (!useTransferStore.getState().popoverOpen) {
               setPopoverOpen(true);
             }
@@ -134,6 +145,11 @@ export function useSftpTransfers() {
 
         const unsub = await listen<TransferEvent>("s3:transfer", (event) => {
           const transfer = event.payload;
+
+          // Auto-open popover only the first time we see a transfer (see the
+          // SFTP listener above for why this is checked before updateTransfer).
+          const isNew = !useTransferStore.getState().transfers.has(transfer.transfer_id);
+
           updateTransfer(transfer);
 
           // Cache the host label for this session
@@ -145,7 +161,7 @@ export function useSftpTransfers() {
           }
 
           // Auto-open popover when a new transfer starts
-          if (transfer.status === "InProgress" || transfer.status === "Queued") {
+          if (isNew && (transfer.status === "InProgress" || transfer.status === "Queued")) {
             if (!useTransferStore.getState().popoverOpen) {
               setPopoverOpen(true);
             }
@@ -159,4 +175,17 @@ export function useSftpTransfers() {
     return () => { aborted = true; unlisten?.(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [updateTransfer, setPopoverOpen, setHostLabel]);
+}
+
+// E2E test hook — emit a synthetic transfer event so specs can drive the
+// auto-open behaviour deterministically (the backend's progress events are
+// otherwise too fast/short to script). Mirrors the `__e2e*` invoke wrappers in
+// the stores; the import is bundled so it resolves inside the app context.
+if (typeof window !== "undefined") {
+  (window as unknown as {
+    __e2eEmitTransfer?: (event: string, payload: unknown) => Promise<void>;
+  }).__e2eEmitTransfer = async (event, payload) => {
+    const { emit } = await import("@tauri-apps/api/event");
+    await emit(event, payload);
+  };
 }
