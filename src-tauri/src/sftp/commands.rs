@@ -228,11 +228,24 @@ pub async fn sftp_close(
 
 // ─── Directory operations ─────────────────────────────────────────────────────
 
+/// Map a russh-sftp `FileType` to our `SftpEntryType`. A `Symlink` here means
+/// the link itself (lstat); for entries we resolve to a target this should
+/// already be the target's concrete type.
+fn resolve_entry_type(file_type: FileType) -> SftpEntryType {
+    match file_type {
+        FileType::Dir => SftpEntryType::Directory,
+        FileType::Symlink => SftpEntryType::Symlink,
+        FileType::File => SftpEntryType::File,
+        FileType::Other => SftpEntryType::Other,
+    }
+}
+
 /// List the contents of a remote directory.
 /// Returns entries sorted: directories first, then files, alphabetically
 /// within each group.
 #[tauri::command]
 #[instrument(skip(sftp_manager), fields(sftp_session_id = %sftp_session_id, path = %path))]
+
 pub async fn sftp_list_dir(
     sftp_session_id: String,
     path: String,
@@ -250,43 +263,55 @@ pub async fn sftp_list_dir(
         .map_err(|e| SftpError::RemoteIoError(e.to_string()))?;
 
     // ReadDir already skips "." and ".." entries internally.
-    let mut result: Vec<SftpEntry> = read_dir
-        .map(|entry| {
-            let name = entry.file_name();
-            let full_path = if path == "/" {
-                format!("/{name}")
-            } else {
-                format!("{path}/{name}")
-            };
+    //
+    // `read_dir` reports per-entry types from an lstat, so a symlink always
+    // comes back as `FileType::Symlink` regardless of what it points at. For
+    // symlinks we follow the link with `metadata()` (a stat) to resolve the
+    // *target's* type, so the UI treats a symlinked directory as a directory
+    // (navigable) instead of trying to open it as a file — which fails with a
+    // "Remote I/O error: Failure". `is_symlink` still tracks the lstat result
+    // so the link icon and read-only permission handling are preserved.
+    let mut result: Vec<SftpEntry> = Vec::new();
+    for entry in read_dir {
+        let name = entry.file_name();
+        let full_path = if path == "/" {
+            format!("/{name}")
+        } else {
+            format!("{path}/{name}")
+        };
 
-            let attrs = entry.metadata();
+        let attrs = entry.metadata();
+        let file_type = attrs.file_type();
+        let is_symlink = file_type == FileType::Symlink;
 
-            let file_type = attrs.file_type();
-            let entry_type = match file_type {
-                FileType::Dir => SftpEntryType::Directory,
-                FileType::Symlink => SftpEntryType::Symlink,
-                FileType::File => SftpEntryType::File,
-                FileType::Other => SftpEntryType::Other,
-            };
-
-            // Use only the lower 12 bits (permission + setuid/setgid/sticky).
-            let permissions = attrs.permissions.unwrap_or(0) & 0o7777;
-            // mtime is Option<u32> in FileAttributes; widen to u64 for the frontend.
-            let modified = attrs.mtime.map(|t| t as u64);
-            let is_symlink = entry_type == SftpEntryType::Symlink;
-
-            SftpEntry {
-                name,
-                path: full_path,
-                entry_type,
-                size: attrs.size.unwrap_or(0),
-                permissions,
-                permissions_display: format_permissions(permissions),
-                modified,
-                is_symlink,
+        let entry_type = if is_symlink {
+            // Follow the link. A broken/dangling symlink (or an unreadable
+            // target) leaves it typed as a symlink — double-click just won't
+            // navigate, rather than erroring.
+            match sftp.metadata(&full_path).await {
+                Ok(target) => resolve_entry_type(target.file_type()),
+                Err(_) => SftpEntryType::Symlink,
             }
-        })
-        .collect();
+        } else {
+            resolve_entry_type(file_type)
+        };
+
+        // Use only the lower 12 bits (permission + setuid/setgid/sticky).
+        let permissions = attrs.permissions.unwrap_or(0) & 0o7777;
+        // mtime is Option<u32> in FileAttributes; widen to u64 for the frontend.
+        let modified = attrs.mtime.map(|t| t as u64);
+
+        result.push(SftpEntry {
+            name,
+            path: full_path,
+            entry_type,
+            size: attrs.size.unwrap_or(0),
+            permissions,
+            permissions_display: format_permissions(permissions),
+            modified,
+            is_symlink,
+        });
+    }
 
     // Directories first, then alphabetical within each group (case-insensitive).
     result.sort_by(|a, b| {
