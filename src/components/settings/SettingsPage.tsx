@@ -201,6 +201,7 @@ const INTERFACE_FONT_CANDIDATES: { value: string; label: string; family?: string
 // terminalFontFamily so it selects correctly; JetBrains Mono is bundled.
 const TERMINAL_FONT_CANDIDATES: FontCandidate[] = [
   { value: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace", label: "JetBrains Mono (Default)" },
+  { value: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace", label: "JetBrains Nerd Font (icons)" },
   { value: "monospace", label: "System Monospace" },
   { value: "'Cascadia Code', monospace", label: "Cascadia Code", family: "Cascadia Code" },
   { value: "'Cascadia Mono', monospace", label: "Cascadia Mono", family: "Cascadia Mono" },
