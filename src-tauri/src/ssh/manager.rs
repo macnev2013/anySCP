@@ -448,16 +448,110 @@ impl SshManager {
         )))
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    async fn auth_with_agent(
+        handle: &mut client::Handle<SshClientHandler>,
+        config: &HostConfig,
+        socket_path: Option<&str>,
+    ) -> Result<(), SshError> {
+        use russh_keys::agent::client::AgentClient;
+
+        const DEFAULT_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
+        let pipe = socket_path.unwrap_or(DEFAULT_PIPE);
+
+        // ── Windows OpenSSH named pipe ─────────────────────────────────────
+        if let Ok(mut first) = AgentClient::connect_named_pipe(pipe).await {
+            let identities = first.request_identities().await.unwrap_or_default();
+            let n = identities.len();
+
+            for pubkey in identities {
+                let fingerprint = pubkey.fingerprint();
+                let ag = AgentClient::connect_named_pipe(pipe).await.map_err(|e| {
+                    SshError::ConnectionFailed(format!("SSH agent reconnect failed: {e}"))
+                })?;
+                let (_ag, result) = handle
+                    .authenticate_future(config.username.clone(), pubkey, ag)
+                    .await;
+                match result {
+                    Ok(true) => return Ok(()),
+                    Ok(false) => tracing::debug!("server rejected agent key {fingerprint}"),
+                    Err(russh::AgentAuthError::Key(e)) => {
+                        return Err(SshError::AuthenticationFailed(format!(
+                            "SSH agent failed to sign with key {fingerprint}: {e}"
+                        )));
+                    }
+                    Err(russh::AgentAuthError::Send(e)) => {
+                        return Err(SshError::ConnectionFailed(format!(
+                            "SSH connection error during agent auth: {e}"
+                        )));
+                    }
+                }
+            }
+
+            if socket_path.is_some() || n > 0 {
+                return Err(SshError::AuthenticationFailed(format!(
+                    "none of the {n} key(s) offered by the SSH agent was accepted by the server \
+                     (check that the matching public key is in ~/.ssh/authorized_keys on the remote host; \
+                     run `ssh-add -L` to list agent keys)"
+                )));
+            }
+        } else if socket_path.is_some() {
+            return Err(SshError::ConnectionFailed(format!(
+                "cannot connect to SSH agent pipe '{pipe}'"
+            )));
+        }
+
+        // ── Pageant (PuTTY / WinCryptSSHAgent / YubiKey on Windows) ───────
+        let mut first = AgentClient::connect_pageant().await;
+        let identities = first
+            .request_identities()
+            .await
+            .map_err(|e| SshError::AuthenticationFailed(format!("Pageant: {e}")))?;
+
+        if identities.is_empty() {
+            return Err(SshError::AuthenticationFailed(
+                "SSH agent holds no keys — is ssh-agent or Pageant running?".into(),
+            ));
+        }
+
+        let n = identities.len();
+        for pubkey in identities {
+            let fingerprint = pubkey.fingerprint();
+            let ag = AgentClient::connect_pageant().await;
+            let (_ag, result) = handle
+                .authenticate_future(config.username.clone(), pubkey, ag)
+                .await;
+            match result {
+                Ok(true) => return Ok(()),
+                Ok(false) => tracing::debug!("server rejected agent key {fingerprint}"),
+                Err(russh::AgentAuthError::Key(e)) => {
+                    return Err(SshError::AuthenticationFailed(format!(
+                        "SSH agent failed to sign with key {fingerprint}: {e}"
+                    )));
+                }
+                Err(russh::AgentAuthError::Send(e)) => {
+                    return Err(SshError::ConnectionFailed(format!(
+                        "SSH connection error during agent auth: {e}"
+                    )));
+                }
+            }
+        }
+
+        Err(SshError::AuthenticationFailed(format!(
+            "none of the {n} key(s) offered by the SSH agent was accepted by the server \
+             (check that the matching public key is in ~/.ssh/authorized_keys on the remote host; \
+             run `ssh-add -L` to list agent keys)"
+        )))
+    }
+
+    #[cfg(not(any(unix, windows)))]
     async fn auth_with_agent(
         _handle: &mut client::Handle<SshClientHandler>,
         _config: &HostConfig,
         _socket_path: Option<&str>,
     ) -> Result<(), SshError> {
         Err(SshError::ConnectionFailed(
-            "SSH agent authentication requires a Unix socket and is not supported on Windows; \
-             use a private key file instead"
-                .into(),
+            "SSH agent authentication is not supported on this platform".into(),
         ))
     }
 
