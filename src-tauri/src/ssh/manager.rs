@@ -305,11 +305,18 @@ impl SshManager {
         handle: &mut client::Handle<SshClientHandler>,
         config: &HostConfig,
     ) -> Result<(), SshError> {
-        let authenticated = match &config.auth_method {
-            AuthMethod::Password { password } => handle
-                .authenticate_password(&config.username, password)
-                .await
-                .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?,
+        match &config.auth_method {
+            AuthMethod::Password { password } => {
+                let ok = handle
+                    .authenticate_password(&config.username, password)
+                    .await
+                    .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
+                if !ok {
+                    return Err(SshError::AuthenticationFailed(
+                        "server rejected credentials".to_string(),
+                    ));
+                }
+            }
             AuthMethod::PrivateKey {
                 key_path,
                 passphrase,
@@ -318,7 +325,6 @@ impl SshManager {
                     .await
                     .map_err(|e| SshError::IoError(e.to_string()))?;
 
-                // Auto-convert PPK to OpenSSH if detected
                 let key_data = if super::keys::is_ppk_format(&key_data) {
                     let kp = key_path.clone();
                     let pp = passphrase.clone();
@@ -331,24 +337,128 @@ impl SshManager {
                     key_data
                 };
 
-                Self::auth_with_key_data(handle, &config.username, &key_data, passphrase.as_deref())
-                    .await?
+                let ok = Self::auth_with_key_data(
+                    handle,
+                    &config.username,
+                    &key_data,
+                    passphrase.as_deref(),
+                )
+                .await?;
+                if !ok {
+                    return Err(SshError::AuthenticationFailed(
+                        "server rejected credentials".to_string(),
+                    ));
+                }
             }
             AuthMethod::PrivateKeyData {
                 key_data,
                 passphrase,
             } => {
-                Self::auth_with_key_data(handle, &config.username, key_data, passphrase.as_deref())
-                    .await?
+                let ok = Self::auth_with_key_data(
+                    handle,
+                    &config.username,
+                    key_data,
+                    passphrase.as_deref(),
+                )
+                .await?;
+                if !ok {
+                    return Err(SshError::AuthenticationFailed(
+                        "server rejected credentials".to_string(),
+                    ));
+                }
             }
-        };
-
-        if !authenticated {
-            return Err(SshError::AuthenticationFailed(
-                "server rejected credentials".to_string(),
-            ));
+            AuthMethod::SshAgent { socket_path } => {
+                Self::auth_with_agent(handle, config, socket_path.as_deref()).await?;
+            }
         }
         Ok(())
+    }
+
+    #[cfg(unix)]
+    async fn auth_with_agent(
+        handle: &mut client::Handle<SshClientHandler>,
+        config: &HostConfig,
+        socket_path: Option<&str>,
+    ) -> Result<(), SshError> {
+        use russh_keys::agent::client::AgentClient;
+        use tokio::net::UnixStream;
+
+        let sock = socket_path
+            .map(|s| s.to_owned())
+            .or_else(|| std::env::var("SSH_AUTH_SOCK").ok())
+            .ok_or_else(|| {
+                SshError::ConnectionFailed(
+                    "SSH_AUTH_SOCK is not set — is an SSH agent running?".into(),
+                )
+            })?;
+
+        let stream = UnixStream::connect(&sock)
+            .await
+            .map_err(|e| SshError::ConnectionFailed(format!("cannot connect to SSH agent: {e}")))?;
+        let mut agent = AgentClient::connect(stream);
+
+        let identities = agent
+            .request_identities()
+            .await
+            .map_err(|e| SshError::AuthenticationFailed(format!("SSH agent: {e}")))?;
+
+        if identities.is_empty() {
+            return Err(SshError::AuthenticationFailed(
+                "SSH agent holds no keys — run `ssh-add` or check gpg-agent config".into(),
+            ));
+        }
+
+        let n = identities.len();
+
+        for pubkey in identities {
+            let fingerprint = pubkey.fingerprint();
+
+            let stream_n = UnixStream::connect(&sock).await.map_err(|e| {
+                SshError::ConnectionFailed(format!("SSH agent reconnect failed: {e}"))
+            })?;
+            let ag: AgentClient<UnixStream> = AgentClient::connect(stream_n);
+
+            let (_ag, result) = handle
+                .authenticate_future(config.username.clone(), pubkey, ag)
+                .await;
+
+            match result {
+                Ok(true) => return Ok(()),
+                Ok(false) => {
+                    tracing::debug!("server rejected agent key {fingerprint}");
+                    continue;
+                }
+                Err(russh::AgentAuthError::Key(e)) => {
+                    return Err(SshError::AuthenticationFailed(format!(
+                        "SSH agent failed to sign with key {fingerprint}: {e}"
+                    )));
+                }
+                Err(russh::AgentAuthError::Send(e)) => {
+                    return Err(SshError::ConnectionFailed(format!(
+                        "SSH connection error during agent auth: {e}"
+                    )));
+                }
+            }
+        }
+
+        Err(SshError::AuthenticationFailed(format!(
+            "none of the {n} key(s) offered by the SSH agent was accepted by the server \
+             (check that the matching public key is in ~/.ssh/authorized_keys on the remote host; \
+             run `ssh-add -L` to list agent keys)"
+        )))
+    }
+
+    #[cfg(not(unix))]
+    async fn auth_with_agent(
+        _handle: &mut client::Handle<SshClientHandler>,
+        _config: &HostConfig,
+        _socket_path: Option<&str>,
+    ) -> Result<(), SshError> {
+        Err(SshError::ConnectionFailed(
+            "SSH agent authentication requires a Unix socket and is not supported on Windows; \
+             use a private key file instead"
+                .into(),
+        ))
     }
 
     async fn auth_with_key_data(
