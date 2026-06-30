@@ -383,29 +383,55 @@ impl SshManager {
         use russh_keys::agent::client::AgentClient;
         use tokio::net::UnixStream;
 
-        let sock = socket_path
-            .map(|s| s.to_owned())
-            .or_else(|| std::env::var("SSH_AUTH_SOCK").ok())
-            .ok_or_else(|| {
-                SshError::ConnectionFailed(
-                    "SSH_AUTH_SOCK is not set — is an SSH agent running?".into(),
-                )
-            })?;
+        let candidates: Vec<String> = if let Some(p) = socket_path {
+            vec![p.to_owned()]
+        } else {
+            let mut list = Vec::new();
+            if let Ok(s) = std::env::var("SSH_AUTH_SOCK") {
+                list.push(s);
+            }
 
-        let stream = UnixStream::connect(&sock)
-            .await
-            .map_err(|e| SshError::ConnectionFailed(format!("cannot connect to SSH agent: {e}")))?;
-        let mut agent = AgentClient::connect(stream);
+            #[cfg(target_os = "macos")]
+            if let Ok(home) = std::env::var("HOME") {
+                let gpg = format!("{home}/.gnupg/S.gpg-agent.ssh");
+                if !list.contains(&gpg) {
+                    list.push(gpg);
+                }
+            }
+            list
+        };
 
-        let identities = agent
-            .request_identities()
-            .await
-            .map_err(|e| SshError::AuthenticationFailed(format!("SSH agent: {e}")))?;
+        if candidates.is_empty() {
+            return Err(SshError::ConnectionFailed(
+                "SSH_AUTH_SOCK is not set — is an SSH agent running?".into(),
+            ));
+        }
+
+        let mut sock = String::new();
+        let mut identities = Vec::new();
+        for candidate in &candidates {
+            let Ok(stream) = UnixStream::connect(candidate).await else {
+                tracing::debug!("SSH agent socket not reachable: {candidate}");
+                continue;
+            };
+            let mut agent = AgentClient::connect(stream);
+            match agent.request_identities().await {
+                Ok(ids) if !ids.is_empty() => {
+                    tracing::debug!("using SSH agent at {candidate} ({} key(s))", ids.len());
+                    sock = candidate.clone();
+                    identities = ids;
+                    break;
+                }
+                Ok(_) => tracing::debug!("SSH agent at {candidate} has no keys"),
+                Err(e) => tracing::debug!("SSH agent at {candidate}: {e}"),
+            }
+        }
 
         if identities.is_empty() {
-            return Err(SshError::AuthenticationFailed(
+            let tried = candidates.join(", ");
+            return Err(SshError::AuthenticationFailed(format!(
                 "SSH agent holds no keys — run `ssh-add` or check gpg-agent config".into(),
-            ));
+            )));
         }
 
         let n = identities.len();
