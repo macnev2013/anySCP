@@ -36,6 +36,12 @@ pub enum AuthMethod {
         key_data: String,
         passphrase: Option<String>,
     },
+    /// Delegate signing to a running SSH agent (ssh-agent / gpg-agent with
+    /// `--enable-ssh-support`). Uses `$SSH_AUTH_SOCK` unless `socket_path` overrides it.
+    #[serde(rename = "sshAgent")]
+    SshAgent {
+        socket_path: Option<String>,
+    },
 }
 
 /// Everything needed to open an SSH connection.
