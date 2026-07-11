@@ -17,6 +17,11 @@ interface CustomSelectProps {
   id?: string;
   "aria-label"?: string;
   "data-testid"?: string;
+  /** When true, each dropdown option renders in its own `value` as a CSS
+   *  font-family — a live preview for font pickers (like a text editor's font
+   *  list). Only the list items preview; the trigger keeps the UI font. Set
+   *  this only when every option's `value` is a valid font-family stack. */
+  previewOptionFont?: boolean;
 }
 
 export function CustomSelect({
@@ -29,6 +34,7 @@ export function CustomSelect({
   id,
   "aria-label": ariaLabel,
   "data-testid": testid,
+  previewOptionFont,
 }: CustomSelectProps) {
   const [open, setOpen] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(-1);
@@ -199,7 +205,12 @@ export function CustomSelect({
                 <span className="w-4 shrink-0">
                   {isSelected && <Check size={14} strokeWidth={2.5} className="text-accent" />}
                 </span>
-                <span className="truncate">{option.label}</span>
+                <span
+                  className="truncate"
+                  style={previewOptionFont ? { fontFamily: option.value } : undefined}
+                >
+                  {option.label}
+                </span>
               </button>
             );
           })}

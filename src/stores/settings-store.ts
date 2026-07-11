@@ -29,6 +29,7 @@ interface SettingsState {
   accentHue: number;
   accentCustom: AccentCustom | null;
   interfaceFont: string;
+  interfaceMonoFont: string;
 
   // Updates
   autoUpdate: boolean;
@@ -64,6 +65,7 @@ interface SettingsState {
   setAccentHue: (hue: number) => void;
   setAccentCustom: (custom: AccentCustom | null) => void;
   setInterfaceFont: (font: string) => void;
+  setInterfaceMonoFont: (font: string) => void;
   setAutoUpdate: (enabled: boolean) => void;
   setSkippedUpdateVersion: (version: string) => void;
   setTerminalFontSize: (size: number) => void;
@@ -89,6 +91,7 @@ const DEFAULTS = {
   accentHue: 250,
   accentCustom: null as AccentCustom | null,
   interfaceFont: "'Geist', system-ui, sans-serif",
+  interfaceMonoFont: "'JetBrains Mono', 'Fira Code', ui-monospace, monospace",
   autoUpdate: true,
   skippedUpdateVersion: null as string | null,
   terminalFontSize: 14,
@@ -159,6 +162,18 @@ function initialInterfaceFont(): string {
   return DEFAULTS.interfaceFont;
 }
 
+/** Seed the monospace UI font from a data attribute if present. Unlike the
+ *  sans font this isn't injected by Rust today, so it normally falls back to
+ *  the default — which already matches theme.css's `--font-mono`, so there's
+ *  no flash before the store applies it. */
+function initialInterfaceMonoFont(): string {
+  if (typeof document !== "undefined") {
+    const v = document.documentElement.dataset.interfaceMonoFont;
+    if (v) return v;
+  }
+  return DEFAULTS.interfaceMonoFont;
+}
+
 /** Persist a single setting to the backend. Fire-and-forget. */
 function persist(key: string, value: string) {
   void (async () => {
@@ -200,6 +215,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   accentHue: initialAccentHue(),
   accentCustom: initialAccentCustom(),
   interfaceFont: initialInterfaceFont(),
+  interfaceMonoFont: initialInterfaceMonoFont(),
   loaded: false,
 
   setThemeMode: (mode) => {
@@ -225,6 +241,11 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setInterfaceFont: (font) => {
     set({ interfaceFont: font });
     persist("app_interface_font", font);
+  },
+
+  setInterfaceMonoFont: (font) => {
+    set({ interfaceMonoFont: font });
+    persist("app_interface_mono_font", font);
   },
 
   setAutoUpdate: (enabled) => {
@@ -354,6 +375,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           case "explorer_double_click_action": updates.explorerDoubleClickAction = value === "open" ? "open" : "download"; break;
           case "transfer_concurrency": updates.transferConcurrency = Number(value) || DEFAULTS.transferConcurrency; break;
           case "app_interface_font": updates.interfaceFont = value || DEFAULTS.interfaceFont; break;
+          case "app_interface_mono_font": updates.interfaceMonoFont = value || DEFAULTS.interfaceMonoFont; break;
           case "app_auto_update": updates.autoUpdate = value !== "false"; break;
           case "app_skipped_update": updates.skippedUpdateVersion = value || null; break;
           case "editors_config": {

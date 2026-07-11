@@ -30,6 +30,7 @@ export function AppShell() {
   const accentHue = useSettingsStore((s) => s.accentHue);
   const accentCustom = useSettingsStore((s) => s.accentCustom);
   const interfaceFont = useSettingsStore((s) => s.interfaceFont);
+  const interfaceMonoFont = useSettingsStore((s) => s.interfaceMonoFont);
   const activeTabId = useTabStore((s) => s.activeTabId);
   const allTabs = useTabStore((s) => s.tabs);
   const activeTab = activeTabId ? allTabs.get(activeTabId) : null;
@@ -257,6 +258,11 @@ export function AppShell() {
     document.documentElement.style.setProperty("--font-sans", interfaceFont);
     document.documentElement.dataset.interfaceFont = interfaceFont;
   }, [interfaceFont]);
+
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty("--font-mono", interfaceMonoFont);
+    document.documentElement.dataset.interfaceMonoFont = interfaceMonoFont;
+  }, [interfaceMonoFont]);
 
   // A custom accent overrides the hue-based tokens directly (supports any
   // lightness/chroma, e.g. gray or darker shades). Clearing it falls back to

@@ -223,6 +223,27 @@ const TERMINAL_FONT_CANDIDATES: FontCandidate[] = [
   { value: "'Ubuntu Mono', monospace", label: "Ubuntu Mono", family: "Ubuntu Mono" },
 ];
 
+// Monospace candidates for the UI (`--font-mono`: permissions, paths, kbd,
+// snippets, addresses). JetBrains Mono (the default) is bundled; "System UI"
+// uses the OS UI monospace (`ui-monospace`). The rest are common system fonts,
+// filtered to those actually installed.
+const INTERFACE_MONO_FONT_CANDIDATES: FontCandidate[] = [
+  { value: "'JetBrains Mono', 'Fira Code', ui-monospace, monospace", label: "JetBrains Mono (Default)" },
+  { value: "ui-monospace, monospace", label: "System UI" },
+  { value: "'Cascadia Code', monospace", label: "Cascadia Code", family: "Cascadia Code" },
+  { value: "'Cascadia Mono', monospace", label: "Cascadia Mono", family: "Cascadia Mono" },
+  { value: "'Consolas', monospace", label: "Consolas", family: "Consolas" },
+  { value: "'DejaVu Sans Mono', monospace", label: "DejaVu Sans Mono", family: "DejaVu Sans Mono" },
+  { value: "'Fira Code', monospace", label: "Fira Code", family: "Fira Code" },
+  { value: "'Hack', monospace", label: "Hack", family: "Hack" },
+  { value: "'IBM Plex Mono', monospace", label: "IBM Plex Mono", family: "IBM Plex Mono" },
+  { value: "'Menlo', monospace", label: "Menlo", family: "Menlo" },
+  { value: "'Roboto Mono', monospace", label: "Roboto Mono", family: "Roboto Mono" },
+  { value: "'SF Mono', monospace", label: "SF Mono", family: "SF Mono" },
+  { value: "'Source Code Pro', monospace", label: "Source Code Pro", family: "Source Code Pro" },
+  { value: "'Ubuntu Mono', monospace", label: "Ubuntu Mono", family: "Ubuntu Mono" },
+];
+
 /**
  * Whether a named font is actually installed. document.fonts.check() is
  * unreliable (it returns true for unknown names), so measure a test string:
@@ -287,8 +308,11 @@ function AppearanceSettings() {
   const setAccentCustom = useSettingsStore((s) => s.setAccentCustom);
   const interfaceFont = useSettingsStore((s) => s.interfaceFont);
   const setInterfaceFont = useSettingsStore((s) => s.setInterfaceFont);
+  const interfaceMonoFont = useSettingsStore((s) => s.interfaceMonoFont);
+  const setInterfaceMonoFont = useSettingsStore((s) => s.setInterfaceMonoFont);
 
   const fontOptions = useInstalledFontOptions(INTERFACE_FONT_CANDIDATES, interfaceFont);
+  const monoFontOptions = useInstalledFontOptions(INTERFACE_MONO_FONT_CANDIDATES, interfaceMonoFont);
 
   const [wheelOpen, setWheelOpen] = useState(false);
   const customRef = useRef<HTMLDivElement>(null);
@@ -435,6 +459,22 @@ function AppearanceSettings() {
           onChange={setInterfaceFont}
           options={fontOptions}
           className="w-44"
+          previewOptionFont
+        />
+      </SettingRow>
+      <SettingRow>
+        <div>
+          <p className={LABEL_CLASS}>Interface Monospace Font</p>
+          <p className={DESC_CLASS}>Font for paths, permissions, and code (not the terminal)</p>
+        </div>
+        <CustomSelect
+          id="s-interface-mono-font"
+          data-testid="s-interface-mono-font"
+          value={interfaceMonoFont}
+          onChange={setInterfaceMonoFont}
+          options={monoFontOptions}
+          className="w-44"
+          previewOptionFont
         />
       </SettingRow>
     </SettingsGroup>
@@ -543,6 +583,7 @@ function TerminalSettings() {
             onChange={setFontFamily}
             options={termFontOptions}
             className="w-44"
+            previewOptionFont
           />
         </SettingRow>
 
