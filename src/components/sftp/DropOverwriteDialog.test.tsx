@@ -55,10 +55,20 @@ describe("DropOverwriteDialog", () => {
     fireEvent.click(screen.getByTestId("explorer-overwrite-cancel"));
     expect(onCancel).toHaveBeenCalledTimes(1);
 
-    // The backdrop is the panel's parent: ModalShell closes only when the click
-    // target is the backdrop itself, not the panel (testId is on the panel).
-    const backdrop = screen.getByTestId("explorer-overwrite-confirm").parentElement as HTMLElement;
-    fireEvent.click(backdrop);
+    // The backdrop is the panel's parent. It closes only when the press both
+    // starts AND ends on the backdrop itself (testId is on the panel).
+    const panel = screen.getByTestId("explorer-overwrite-confirm");
+    const backdrop = panel.parentElement as HTMLElement;
+
+    // A drag that starts on the panel and releases on the backdrop — e.g.
+    // selecting text in a field — must NOT close and discard input.
+    fireEvent.mouseDown(panel);
+    fireEvent.mouseUp(backdrop);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+
+    // A genuine press that starts and ends on the backdrop closes it.
+    fireEvent.mouseDown(backdrop);
+    fireEvent.mouseUp(backdrop);
     expect(onCancel).toHaveBeenCalledTimes(2);
 
     // ModalShell's Escape listener is on document; an event fired on window

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { ModalShell, BTN_GHOST, BTN_PRIMARY, BTN_DANGER } from "../shared/ModalShell";
+import { ModalBackdrop } from "../shared/ModalBackdrop";
 import { useSettingsStore } from "../../stores/settings-store";
 import { CustomSelect, type SelectOption } from "../shared/CustomSelect";
 import { useUpdaterStore } from "../../stores/updater-store";
@@ -1222,7 +1223,6 @@ function AddEditorModal({ open, onClose, onAdd }: {
   const [args, setArgs] = useState("{path}");
   const [visible, setVisible] = useState(false);
 
-  const backdropRef = useRef<HTMLDivElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
 
   // Reset fields and play the open transition each time it's shown.
@@ -1272,9 +1272,8 @@ function AddEditorModal({ open, onClose, onAdd }: {
   if (!open) return null;
 
   return (
-    <div
-      ref={backdropRef}
-      onClick={(e) => { if (e.target === backdropRef.current) onClose(); }}
+    <ModalBackdrop
+      onClose={onClose}
       className={[
         "fixed inset-0 z-50 flex items-start justify-center pt-[8vh]",
         "transition-[background-color,backdrop-filter] duration-[var(--duration-base)]",
@@ -1379,7 +1378,7 @@ function AddEditorModal({ open, onClose, onAdd }: {
           </button>
         </div>
       </form>
-    </div>
+    </ModalBackdrop>
   );
 }
 
