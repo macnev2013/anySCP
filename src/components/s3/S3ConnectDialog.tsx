@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { Cloud } from "lucide-react";
 import { useS3Store } from "../../stores/s3-store";
 import { ModalShell, BTN_GHOST, BTN_SECONDARY, BTN_PRIMARY } from "../shared/ModalShell";
@@ -39,22 +39,19 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Track if provider was changed by user (not initial mount / edit pre-populate)
-  const providerInitRef = useRef(true);
-
-  // Update defaults when provider changes — only for new connections or user-initiated changes
-  useEffect(() => {
-    if (providerInitRef.current) {
-      providerInitRef.current = false;
-      if (isEdit) return; // Don't overwrite pre-populated values on mount
-    }
-    const preset = S3_PROVIDERS.find((p) => p.id === provider);
+  // Applying a provider's presets is a user action, not a mount effect. Syncing
+  // it via useEffect clobbered a saved endpoint on open: StrictMode runs effects
+  // twice, so the "skip the first run" guard let the second run overwrite the
+  // pre-populated endpoint with the provider default (e.g. MinIO → localhost).
+  const handleProviderChange = (next: S3Provider) => {
+    setProvider(next);
+    const preset = S3_PROVIDERS.find((p) => p.id === next);
     if (preset) {
       setRegion(preset.regionPlaceholder);
       setEndpoint(preset.endpointPattern);
       setPathStyle(preset.pathStyle);
     }
-  }, [provider, isEdit]);
+  };
 
 
   const [groupId, setGroupId] = useState(editConnection?.group_id ?? "");
@@ -202,7 +199,7 @@ export function S3ConnectDialog({ onClose, editConnection }: S3ConnectDialogProp
             <CustomSelect
               data-testid="s3-dialog-provider"
               value={provider}
-              onChange={(v) => setProvider(v as S3Provider)}
+              onChange={(v) => handleProviderChange(v as S3Provider)}
               options={S3_PROVIDERS.map((p) => ({ value: p.id, label: p.label }))}
             />
           </div>
