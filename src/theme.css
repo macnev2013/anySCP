@@ -238,3 +238,21 @@ input, textarea, [contenteditable="true"], .xterm {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-muted);
 }
+
+/* Reserve the bold (active) width via an invisible ::after copy (fed by
+   data-label) so toggling font-weight doesn't resize the label and shift its
+   neighbours. Visible text stacks above it (flex column) and can still truncate. */
+.label-stable-bold {
+  display: inline-flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.label-stable-bold::after {
+  content: attr(data-label);
+  font-weight: 500;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  white-space: nowrap;
+  pointer-events: none;
+}

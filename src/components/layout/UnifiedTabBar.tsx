@@ -136,6 +136,8 @@ export function UnifiedTabBar() {
               data-tab-type={tab.type}
               data-tab-label={tab.label}
               onClick={() => setActiveTab(tabId)}
+              // Middle-click closes the tab, like a browser.
+              onAuxClick={(e) => { if (e.button === 1 && closeable) { e.preventDefault(); void handleClose(tabId, tab, e); } }}
               onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setActiveTab(tabId); } }}
               title={tab.label + (paneCount > 1 ? ` (${paneCount} panes)` : "")}
               className={[
@@ -162,9 +164,13 @@ export function UnifiedTabBar() {
                 aria-hidden="true"
               />
 
-              {/* Label */}
-              <span className={`truncate ${isActive ? "font-medium" : ""}`}>
-                {tab.label}
+              {/* Label — the wrapper reserves the bold (active) width so
+                  toggling font-medium on activate/deactivate doesn't resize the
+                  tab and shift its neighbours (see .label-stable-bold). */}
+              <span data-label={tab.label} className="label-stable-bold">
+                <span className={`truncate ${isActive ? "font-medium" : ""}`}>
+                  {tab.label}
+                </span>
               </span>
 
               {/* Split indicator (terminal only) */}
