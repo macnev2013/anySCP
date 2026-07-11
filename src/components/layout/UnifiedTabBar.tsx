@@ -12,6 +12,7 @@ import {
   Plug,
   History,
   Settings,
+  ArrowUpDown,
 } from "lucide-react";
 import { useTabStore, type UnifiedTab, type PageId } from "../../stores/tab-store";
 import { useSessionStore, countPanes, getTopDirection } from "../../stores/session-store";
@@ -25,6 +26,7 @@ const PAGE_ICONS: Record<PageId, React.ElementType> = {
   "port-forwarding": Plug,
   history: History,
   settings: Settings,
+  transfers: ArrowUpDown,
 };
 
 function getTabIcon(tab: UnifiedTab): React.ElementType {

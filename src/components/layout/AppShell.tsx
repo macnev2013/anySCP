@@ -21,6 +21,7 @@ import { ExplorerPage } from "../sftp";
 import { SettingsPage } from "../settings";
 import { PortForwardingPage } from "../port-forwarding";
 import { HistoryPage } from "../history";
+import { TransfersPage } from "../transfers";
 import { usePortForwardEvents } from "../../hooks/use-port-forward-events";
 import { UpdateDialog } from "../updater/UpdateDialog";
 import { Toaster } from "../shared/Toaster";
@@ -359,6 +360,8 @@ export function AppShell() {
                   <HistoryPage />
                 ) : activePageType === "settings" ? (
                   <SettingsPage />
+                ) : activePageType === "transfers" ? (
+                  <TransfersPage />
                 ) : null}
               </div>
             )}
