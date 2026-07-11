@@ -1,4 +1,4 @@
-import { Upload, FolderPlus, FilePlus, RefreshCw, ChevronRight, Home, Loader2, Shield } from "lucide-react";
+import { Upload, FolderUp, FolderPlus, FilePlus, RefreshCw, ChevronRight, Home, Loader2, Shield } from "lucide-react";
 import type { FileSystemProvider } from "../../types/explorer";
 
 interface BreadcrumbSegment {
@@ -16,6 +16,10 @@ interface ExplorerToolbarProps {
   onNewFile: () => void;
   onNavigate: (path: string) => void;
   onUpload: () => void;
+  /** Optional folder-upload action. When provided, a companion "Upload folder"
+   *  button is shown next to the file-upload button (mirrors New file/New
+   *  folder). Transports without recursive upload can leave it undefined. */
+  onUploadFolder?: () => void;
   busy?: boolean;
   sudoMode?: boolean;
   sudoBusy?: boolean;
@@ -32,6 +36,7 @@ export function ExplorerToolbar({
   onNewFile,
   onNavigate,
   onUpload,
+  onUploadFolder,
   busy,
   sudoMode,
   sudoBusy,
@@ -117,17 +122,31 @@ export function ExplorerToolbar({
       {/* Separator */}
       <span className="w-px h-4 bg-border shrink-0" aria-hidden="true" />
 
-      {/* Upload */}
+      {/* Upload file */}
       {caps.canUpload && (
         <button
           data-testid="explorer-upload"
           onClick={onUpload}
           disabled={loading}
-          title="Upload file"
-          aria-label="Upload file"
+          title="Upload files"
+          aria-label="Upload files"
           className={iconBtn}
         >
           <Upload size={15} strokeWidth={1.8} aria-hidden="true" />
+        </button>
+      )}
+
+      {/* Upload folder */}
+      {caps.canUpload && onUploadFolder && (
+        <button
+          data-testid="explorer-upload-folder"
+          onClick={onUploadFolder}
+          disabled={loading}
+          title="Upload folder"
+          aria-label="Upload folder"
+          className={iconBtn}
+        >
+          <FolderUp size={15} strokeWidth={1.8} aria-hidden="true" />
         </button>
       )}
 
