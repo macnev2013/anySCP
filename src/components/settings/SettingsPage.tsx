@@ -122,7 +122,7 @@ export function SettingsPage() {
         </nav>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto bg-bg-base">
+        <div className="flex-1 overflow-y-scroll bg-bg-base">
           <div className="max-w-4xl mx-auto px-8 py-6">
             {/* Section header */}
             <div className="mb-6">

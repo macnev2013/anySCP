@@ -134,7 +134,7 @@ export function S3Page() {
 
   return (
     <>
-      <div className="flex flex-col h-full overflow-y-auto bg-bg-base">
+      <div className="flex flex-col h-full overflow-y-scroll bg-bg-base">
         <div className="max-w-4xl w-full mx-auto px-8 py-8 flex flex-col gap-8">
 
           {/* Page title */}
