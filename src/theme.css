@@ -105,6 +105,11 @@
   --tabbar-height:     44px;
   --statusbar-height:  26px;
 
+  /* Custom scrollbar width — kept as a token so layouts that reserve the
+     scrollbar gutter (e.g. a header aligned to a scrollable table) stay in
+     sync with the ::-webkit-scrollbar rule below. */
+  --scrollbar-size: 6px;
+
   /* Elevation */
   --shadow-sm:  0 1px 2px oklch(0 0 0 / 0.3);
   --shadow-md:  0 2px 8px oklch(0 0 0 / 0.3), 0 1px 2px oklch(0 0 0 / 0.2);
@@ -217,8 +222,8 @@ input, textarea, [contenteditable="true"], .xterm {
 
 /* Scrollbar styling */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
 }
 
 ::-webkit-scrollbar-track {

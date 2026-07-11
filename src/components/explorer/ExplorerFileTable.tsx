@@ -84,15 +84,22 @@ interface ContextMenuState {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+// Fixed-width timestamp so rows never wrap: zero-pad day/hour, and format the
+// date and time separately to drop the locale's "at" joiner. `undefined` locale
+// keeps month/day order and 12h/24h OS-aware.
 function formatModified(unix: number | null): string {
   if (unix === null) return "—";
-  return new Date(unix * 1000).toLocaleString(undefined, {
+  const date = new Date(unix * 1000);
+  const day = date.toLocaleDateString(undefined, {
     year: "numeric",
     month: "short",
-    day: "numeric",
-    hour: "numeric",
+    day: "2-digit",
+  });
+  const time = date.toLocaleTimeString(undefined, {
+    hour: "2-digit",
     minute: "2-digit",
   });
+  return `${day} ${time}`;
 }
 
 function EntryIcon({ entry }: { entry: ExplorerEntry }) {
@@ -779,15 +786,27 @@ export function ExplorerFileTable({
 
   // ─── Sort indicator ───────────────────────────────────────────────────────
 
-  const SortIcon = ({ col }: { col: "name" | "size" | "modified" }) => {
-    if (sortBy !== col) return null;
-    return sortAsc
-      ? <ChevronUp size={12} strokeWidth={2.5} className="inline ml-0.5" aria-hidden="true" />
-      : <ChevronDown size={12} strokeWidth={2.5} className="inline ml-0.5" aria-hidden="true" />;
+  // The chevron is always rendered (just `invisible` when inactive) so it
+  // reserves a constant width and position — sorting never shifts the header. It
+  // sits on the side away from the label's alignment edge; a centered label gets
+  // a `col={null}` reserving-only copy on the far side to stay centered.
+  const SortArrow = ({ col, gap }: { col: "name" | "size" | "modified" | null; gap: "ml-0.5" | "mr-0.5" }) => {
+    const active = col !== null && sortBy === col;
+    const Icon = active && !sortAsc ? ChevronDown : ChevronUp;
+    return (
+      <Icon
+        size={12}
+        strokeWidth={2.5}
+        aria-hidden="true"
+        className={`inline ${gap} ${active ? "" : "invisible"}`}
+      />
+    );
   };
 
   const thClass = (col: "name" | "size" | "modified") => [
-    "text-left text-[length:var(--text-xs)] font-semibold uppercase tracking-wide text-text-muted",
+    // No text-align here — each header sets its own (buttons default to center).
+    // A hardcoded one would beat the columns' text-center in the CSS cascade.
+    "text-[length:var(--text-xs)] font-semibold uppercase tracking-wide text-text-muted",
     "cursor-pointer select-none hover:text-text-secondary transition-colors duration-[var(--duration-fast)]",
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm",
     sortBy === col ? "text-text-secondary" : "",
@@ -825,6 +844,46 @@ export function ExplorerFileTable({
 
   return (
     <>
+      {/* Column header — a fixed row above the list, a sibling of the scroller
+          rather than a child, so the scroller stays a direct flex child of the
+          pane column and scrolls. The right padding reserves the scrollbar
+          gutter so the columns line up with the rows beneath. */}
+      <div className="shrink-0 bg-bg-surface border-b border-border flex items-center gap-2 py-2 pl-3 pr-[calc(0.75rem+var(--scrollbar-size))]">
+        <span className="w-5 shrink-0" />
+
+        <button
+          data-testid="explorer-sort-name"
+          className={`flex-1 text-left ${thClass("name")}`}
+          onClick={() => handleSortClick("name")}
+          aria-sort={sortBy === "name" ? (sortAsc ? "ascending" : "descending") : "none"}
+        >
+          Name <SortArrow col="name" gap="ml-0.5" />
+        </button>
+
+        <button
+          data-testid="explorer-sort-size"
+          className={`w-20 text-right ${thClass("size")}`}
+          onClick={() => handleSortClick("size")}
+          aria-sort={sortBy === "size" ? (sortAsc ? "ascending" : "descending") : "none"}
+        >
+          <SortArrow col="size" gap="mr-0.5" /> Size
+        </button>
+
+        <button
+          data-testid="explorer-sort-modified"
+          className={`w-44 text-center ${thClass("modified")}`}
+          onClick={() => handleSortClick("modified")}
+          aria-sort={sortBy === "modified" ? (sortAsc ? "ascending" : "descending") : "none"}
+        >
+          <SortArrow col="modified" gap="mr-0.5" /> Modified <SortArrow col={null} gap="ml-0.5" />
+        </button>
+
+        {/* Last column: Permissions for SFTP, Class for S3 */}
+        <span className="w-24 text-[length:var(--text-xs)] font-semibold uppercase tracking-wide text-text-muted select-none">
+          {caps.hasPermissions ? "Permissions" : caps.hasStorageClass ? "Class" : ""}
+        </span>
+      </div>
+
       <div
         ref={tableRef}
         className={`flex-1 overflow-y-auto${dragGhost ? " select-none" : ""}`}
@@ -840,43 +899,6 @@ export function ExplorerFileTable({
           }
         }}
       >
-        {/* Table header */}
-        <div className="sticky top-0 z-10 bg-bg-surface border-b border-border px-3 py-2 flex items-center gap-2">
-          <span className="w-5 shrink-0" />
-
-          <button
-            data-testid="explorer-sort-name"
-            className={`flex-1 ${thClass("name")}`}
-            onClick={() => handleSortClick("name")}
-            aria-sort={sortBy === "name" ? (sortAsc ? "ascending" : "descending") : "none"}
-          >
-            Name <SortIcon col="name" />
-          </button>
-
-          <button
-            data-testid="explorer-sort-size"
-            className={`w-20 text-right ${thClass("size")}`}
-            onClick={() => handleSortClick("size")}
-            aria-sort={sortBy === "size" ? (sortAsc ? "ascending" : "descending") : "none"}
-          >
-            Size <SortIcon col="size" />
-          </button>
-
-          <button
-            data-testid="explorer-sort-modified"
-            className={`w-44 ${thClass("modified")}`}
-            onClick={() => handleSortClick("modified")}
-            aria-sort={sortBy === "modified" ? (sortAsc ? "ascending" : "descending") : "none"}
-          >
-            Modified <SortIcon col="modified" />
-          </button>
-
-          {/* Last column: Permissions for SFTP, Class for S3 */}
-          <span className="w-24 text-[length:var(--text-xs)] font-semibold uppercase tracking-wide text-text-muted select-none">
-            {caps.hasPermissions ? "Permissions" : caps.hasStorageClass ? "Class" : ""}
-          </span>
-        </div>
-
         {/* New file/folder rows */}
         {creatingFile && (
           <NewFileRow
@@ -1012,19 +1034,21 @@ export function ExplorerFileTable({
                   </span>
 
                   {/* Size */}
-                  <span className="w-20 text-right text-[length:var(--text-sm)] text-text-muted shrink-0 tabular-nums">
+                  <span className="w-20 text-right text-[length:var(--text-xs)] text-text-muted shrink-0 font-mono tabular-nums whitespace-nowrap">
                     {entry.entryType === "Directory" ? "—" : formatBytes(entry.size)}
                   </span>
 
-                  {/* Modified */}
-                  <span className="w-44 text-[length:var(--text-sm)] text-text-muted shrink-0 tabular-nums">
+                  {/* Modified — centered so it doesn't crowd the right-aligned
+                      Size on its left or leave dead space before Permissions;
+                      12px because mono reads visually larger than the 14px sans. */}
+                  <span className="w-44 text-center text-[length:var(--text-xs)] text-text-muted shrink-0 font-mono tracking-tight whitespace-nowrap">
                     {formatModified(entry.modified)}
                   </span>
 
                   {/* Permissions / Storage Class */}
                   <span
                     data-entry-perms={caps.hasPermissions ? entry.permissionsDisplay ?? "" : undefined}
-                    className="w-24 font-mono text-[length:var(--text-xs)] text-text-muted shrink-0 tracking-tight"
+                    className="w-24 font-mono text-[length:var(--text-xs)] text-text-muted shrink-0 tracking-tight whitespace-nowrap"
                   >
                     {caps.hasPermissions
                       ? entry.permissionsDisplay ?? ""
