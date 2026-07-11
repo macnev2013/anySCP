@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Activity, Pencil, TerminalSquare, Copy, Trash2, FolderOpen, Waypoints } from "lucide-react";
 import type { SavedHost } from "../../types";
+import { CardActionButton, CardActionStrip } from "./CardActionButton";
 import { relativeTime } from "../../utils/time";
 import { ContextMenu } from "../shared/ContextMenu";
 import { ConfirmDangerDialog } from "../shared/ConfirmDangerDialog";
@@ -152,11 +153,6 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
     }
   };
 
-  const stopAnd = (fn: () => void) => (e: React.MouseEvent) => {
-    e.stopPropagation();
-    fn();
-  };
-
   const healthLabel = (() => {
     if (health.status === "idle") return null;
     if (health.status === "checking") return "Pinging...";
@@ -201,89 +197,35 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
         />
 
         {/* Action buttons (top-right) */}
-        <div className="absolute top-2 right-2 flex items-center gap-0.5">
-          <button
-            type="button"
-            data-testid={`host-card-${host.id}-health`}
-            onClick={stopAnd(() => void checkHealth(host.id))}
-            disabled={health.status === "checking"}
-            aria-busy={health.status === "checking"}
+        <CardActionStrip>
+          <CardActionButton
+            icon={Activity}
+            label="Ping"
+            onClick={() => void checkHealth(host.id)}
+            ariaLabel={`Ping ${displayName}`}
             title={health.message ?? "Ping host"}
-            aria-label={`Ping ${displayName}`}
-            className={[
-              "group/btn flex items-center h-8 px-2 rounded-md",
-              statusColor(health.status),
-              "hover:text-text-primary hover:bg-bg-overlay",
-              "transition-[background-color,color] duration-[var(--duration-fast)]",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              "disabled:cursor-not-allowed",
-            ].join(" ")}
-          >
-            <Activity
-              size={16}
-              strokeWidth={2}
-              aria-hidden="true"
-              className={health.status === "checking" ? "shrink-0 motion-safe:animate-pulse" : "shrink-0"}
-            />
-            <span
-              className={[
-                "overflow-hidden whitespace-nowrap text-[length:var(--text-xs)] font-medium",
-                "max-w-0 ml-0 group-hover/btn:max-w-[70px] group-hover/btn:ml-1",
-                "transition-[max-width,margin-left] duration-200 ease-out",
-              ].join(" ")}
-            >
-              Ping
-            </span>
-          </button>
-          <button
-            type="button"
-            data-testid={`host-card-${host.id}-terminal`}
-            onClick={stopAnd(() => onConnect(host))}
+            testId={`host-card-${host.id}-health`}
+            disabled={health.status === "checking"}
+            busy={health.status === "checking"}
+            colorClass={statusColor(health.status)}
+          />
+          <CardActionButton
+            icon={TerminalSquare}
+            label="Terminal"
+            onClick={() => onConnect(host)}
+            ariaLabel={`Open terminal for ${displayName}`}
             title="Open Terminal"
-            aria-label={`Open terminal for ${displayName}`}
-            className={[
-              "group/btn flex items-center h-8 px-2 rounded-md",
-              "text-text-muted hover:text-text-primary hover:bg-bg-overlay",
-              "transition-[background-color,color] duration-[var(--duration-fast)]",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            ].join(" ")}
-          >
-            <TerminalSquare size={16} strokeWidth={2} aria-hidden="true" className="shrink-0" />
-            <span
-              className={[
-                "overflow-hidden whitespace-nowrap text-[length:var(--text-xs)] font-medium",
-                "max-w-0 ml-0 group-hover/btn:max-w-[70px] group-hover/btn:ml-1",
-                "transition-[max-width,margin-left] duration-200 ease-out",
-              ].join(" ")}
-            >
-              Terminal
-            </span>
-          </button>
-          <button
-            type="button"
-            data-testid={`host-card-${host.id}-explorer`}
-            onClick={stopAnd(() => onExplore(host))}
+            testId={`host-card-${host.id}-terminal`}
+          />
+          <CardActionButton
+            icon={FolderOpen}
+            label="Explorer"
+            onClick={() => onExplore(host)}
+            ariaLabel={`Open explorer for ${displayName}`}
             title="Open Explorer"
-            aria-label={`Open explorer for ${displayName}`}
-            className={[
-              "group/btn flex items-center h-8 px-2 rounded-md",
-              "text-text-muted hover:text-text-primary hover:bg-bg-overlay",
-              "transition-[background-color,color] duration-[var(--duration-fast)]",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            ].join(" ")}
-          >
-            <FolderOpen size={16} strokeWidth={2} aria-hidden="true" className="shrink-0" />
-            <span
-              className={[
-                "overflow-hidden whitespace-nowrap text-[length:var(--text-xs)] font-medium",
-                "max-w-0 ml-0 group-hover/btn:max-w-[70px] group-hover/btn:ml-1",
-                "transition-[max-width,margin-left] duration-200 ease-out",
-              ].join(" ")}
-            >
-              Explorer
-            </span>
-          </button>
-        </div>
+            testId={`host-card-${host.id}-explorer`}
+          />
+        </CardActionStrip>
 
         {/* Avatar circle */}
         <div
