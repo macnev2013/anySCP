@@ -17,8 +17,16 @@ import {
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
-import { useTabStore, type UnifiedTab, type PageId } from "../../stores/tab-store";
-import { useSessionStore, countPanes, getTopDirection } from "../../stores/session-store";
+import {
+  useTabStore,
+  type UnifiedTab,
+  type PageId,
+} from "../../stores/tab-store";
+import {
+  useSessionStore,
+  countPanes,
+  getTopDirection,
+} from "../../stores/session-store";
 import { useUiStore } from "../../stores/ui-store";
 
 // ─── Icon mapping ───────────────────────────────────────────────────────────
@@ -112,10 +120,15 @@ export function UnifiedTabBar() {
 
   const scrollTabs = (dir: -1 | 1) => {
     const el = scrollRef.current;
-    if (el) el.scrollBy({ left: dir * el.clientWidth * 0.75, behavior: "smooth" });
+    if (el)
+      el.scrollBy({ left: dir * el.clientWidth * 0.75, behavior: "smooth" });
   };
 
-  const handleClose = async (tabId: string, tab: UnifiedTab, e: React.MouseEvent) => {
+  const handleClose = async (
+    tabId: string,
+    tab: UnifiedTab,
+    e: React.MouseEvent,
+  ) => {
     e.stopPropagation();
     const { invoke } = await import("@tauri-apps/api/core");
 
@@ -125,16 +138,28 @@ export function UnifiedTabBar() {
       if (termTab) {
         const sessionIds = collectLayoutIds(termTab.layout);
         for (const sid of sessionIds) {
-          try { await invoke("ssh_disconnect", { sessionId: sid }); } catch { /* ok */ }
+          try {
+            await invoke("ssh_disconnect", { sessionId: sid });
+          } catch {
+            /* ok */
+          }
           useSessionStore.getState().removeSession(sid);
         }
       }
     } else if (tab.type === "sftp") {
-      try { await invoke("sftp_close", { sftpSessionId: tabId }); } catch { /* ok */ }
+      try {
+        await invoke("sftp_close", { sftpSessionId: tabId });
+      } catch {
+        /* ok */
+      }
       const { useSftpStore } = await import("../../stores/sftp-store");
       useSftpStore.getState().closeSession(tabId);
     } else if (tab.type === "s3") {
-      try { await invoke("s3_disconnect", { s3SessionId: tabId }); } catch { /* ok */ }
+      try {
+        await invoke("s3_disconnect", { s3SessionId: tabId });
+      } catch {
+        /* ok */
+      }
       const { useS3Store } = await import("../../stores/s3-store");
       useS3Store.getState().closeSession(tabId);
     }
@@ -147,15 +172,26 @@ export function UnifiedTabBar() {
   return (
     <div className="flex items-center h-[var(--tabbar-height)] no-select px-2 pt-2">
       {overflow && (
-        <button
-          type="button"
-          onClick={() => scrollTabs(-1)}
-          disabled={!canLeft}
-          aria-label="Scroll tabs left"
-          className={`${CHEVRON_BTN} mr-1`}
-        >
-          <ChevronLeft size={16} strokeWidth={2} aria-hidden="true" />
-        </button>
+        <div className="flex items-center gap-0.5 mr-1 shrink-0">
+          <button
+            type="button"
+            onClick={() => scrollTabs(-1)}
+            disabled={!canLeft}
+            aria-label="Scroll tabs left"
+            className={CHEVRON_BTN}
+          >
+            <ChevronLeft size={16} strokeWidth={2} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={() => scrollTabs(1)}
+            disabled={!canRight}
+            aria-label="Scroll tabs right"
+            className={CHEVRON_BTN}
+          >
+            <ChevronRight size={16} strokeWidth={2} aria-hidden="true" />
+          </button>
+        </div>
       )}
       <div
         ref={scrollRef}
@@ -184,13 +220,18 @@ export function UnifiedTabBar() {
             }
             // Status from first session in layout
             const firstSessionId = getFirstSessionIdFromTab(tabId);
-            const firstSession = firstSessionId ? sessions.get(firstSessionId) : null;
+            const firstSession = firstSessionId
+              ? sessions.get(firstSessionId)
+              : null;
             const status = firstSession?.status ?? "Disconnected";
             statusDot =
-              status === "Connected"    ? "bg-status-connected" :
-              status === "Connecting"   ? "bg-status-connecting motion-safe:animate-pulse" :
-              status === "Error"        ? "bg-status-error" :
-                                          "bg-status-disconnected";
+              status === "Connected"
+                ? "bg-status-connected"
+                : status === "Connecting"
+                  ? "bg-status-connecting motion-safe:animate-pulse"
+                  : status === "Error"
+                    ? "bg-status-error"
+                    : "bg-status-disconnected";
             isZoomed = isActive && zoomedPaneId !== null;
           }
 
@@ -207,8 +248,18 @@ export function UnifiedTabBar() {
               data-tab-label={tab.label}
               onClick={() => setActiveTab(tabId)}
               // Middle-click closes the tab, like a browser.
-              onAuxClick={(e) => { if (e.button === 1 && closeable) { e.preventDefault(); void handleClose(tabId, tab, e); } }}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setActiveTab(tabId); } }}
+              onAuxClick={(e) => {
+                if (e.button === 1 && closeable) {
+                  e.preventDefault();
+                  void handleClose(tabId, tab, e);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setActiveTab(tabId);
+                }
+              }}
               title={tab.label + (paneCount > 1 ? ` (${paneCount} panes)` : "")}
               className={[
                 "group relative flex items-center gap-2 px-3.5 h-[32px] shrink-0 max-w-[220px]",
@@ -226,8 +277,12 @@ export function UnifiedTabBar() {
                 strokeWidth={1.8}
                 className={[
                   "shrink-0",
-                  tab.type === "terminal" && statusDot ? statusDot.replace("bg-", "text-") : "",
-                  tab.type === "sftp" || tab.type === "s3" ? "text-status-connected" : "",
+                  tab.type === "terminal" && statusDot
+                    ? statusDot.replace("bg-", "text-")
+                    : "",
+                  tab.type === "sftp" || tab.type === "s3"
+                    ? "text-status-connected"
+                    : "",
                   tab.type === "page" && isActive ? "text-accent" : "",
                   tab.type === "page" && !isActive ? "text-text-muted" : "",
                 ].join(" ")}
@@ -261,7 +316,11 @@ export function UnifiedTabBar() {
 
               {/* Zoom indicator */}
               {isZoomed && (
-                <span className="shrink-0 text-accent" aria-hidden="true" title="Zoomed pane">
+                <span
+                  className="shrink-0 text-accent"
+                  aria-hidden="true"
+                  title="Zoomed pane"
+                >
                   <Maximize2 size={11} strokeWidth={2} />
                 </span>
               )}
@@ -289,20 +348,7 @@ export function UnifiedTabBar() {
             </div>
           );
         })}
-
       </div>
-
-      {overflow && (
-        <button
-          type="button"
-          onClick={() => scrollTabs(1)}
-          disabled={!canRight}
-          aria-label="Scroll tabs right"
-          className={`${CHEVRON_BTN} ml-1`}
-        >
-          <ChevronRight size={16} strokeWidth={2} aria-hidden="true" />
-        </button>
-      )}
 
       {/* Right actions — only show snippet button when a terminal tab is active.
           A labelled button (with the ⌘K hint) reads as a control instead of a
@@ -337,7 +383,10 @@ export function UnifiedTabBar() {
 
 function collectLayoutIds(node: import("../../types").LayoutNode): string[] {
   if (node.type === "pane") return [node.sessionId];
-  return [...collectLayoutIds(node.children[0]), ...collectLayoutIds(node.children[1])];
+  return [
+    ...collectLayoutIds(node.children[0]),
+    ...collectLayoutIds(node.children[1]),
+  ];
 }
 
 function getFirstSessionIdFromTab(tabId: string): string | null {
