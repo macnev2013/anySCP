@@ -46,12 +46,14 @@ export function useTransfers(): TransfersModel {
     return { list: items, activeCount: active, queuedCount: queued, finishedCount: finished };
   }, [transfers]);
 
+  // Read the map at call time — depending on `transfers` would mint new
+  // callback identities on every progress tick and defeat TransferRow's memo.
   const protocolOf = useCallback((id: string): "s3" | "scp" | "sftp" => {
-    const t = transfers.get(id);
+    const t = useTransferStore.getState().transfers.get(id);
     if (t?.s3_session_id) return "s3";
     if (t?.scp_session_id) return "scp";
     return "sftp";
-  }, [transfers]);
+  }, []);
 
   const onCancel = useCallback((id: string) => {
     void (async () => {
