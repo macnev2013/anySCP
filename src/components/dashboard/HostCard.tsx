@@ -203,7 +203,7 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
             label="Ping"
             onClick={() => void checkHealth(host.id)}
             ariaLabel={`Ping ${displayName}`}
-            title={health.message ?? "Ping host"}
+            detail={health.message ?? undefined}
             testId={`host-card-${host.id}-health`}
             disabled={health.status === "checking"}
             busy={health.status === "checking"}
@@ -214,7 +214,6 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
             label="Terminal"
             onClick={() => onConnect(host)}
             ariaLabel={`Open terminal for ${displayName}`}
-            title="Open Terminal"
             testId={`host-card-${host.id}-terminal`}
           />
           <CardActionButton
@@ -222,7 +221,6 @@ export function HostCard({ host, onConnect, onExplore, onEdit, onDelete, onDupli
             label="Explorer"
             onClick={() => onExplore(host)}
             ariaLabel={`Open explorer for ${displayName}`}
-            title="Open Explorer"
             testId={`host-card-${host.id}-explorer`}
           />
         </CardActionStrip>

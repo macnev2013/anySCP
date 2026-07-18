@@ -110,7 +110,6 @@ export function S3Card({ conn, onConnect, onEdit, onDuplicate, onDelete }: S3Car
             label="Explore"
             onClick={() => onConnect(conn)}
             ariaLabel={`Open explorer for ${displayName}`}
-            title="Open Explorer"
             testId={`s3-card-${conn.id}-explorer`}
           />
         </CardActionStrip>

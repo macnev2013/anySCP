@@ -4,7 +4,9 @@ export interface CardActionButtonProps {
   /** Invoked on click; the button stops propagation so the card doesn't also fire. */
   onClick: () => void;
   ariaLabel: string;
-  title?: string;
+  /** Replaces `label` in the tooltip pill (e.g. a ping result). No native
+   *  `title` — it would double up with the pill. */
+  detail?: string;
   testId?: string;
   disabled?: boolean;
   /** Adds aria-busy and pulses the icon (e.g. an in-flight ping). */
@@ -24,7 +26,7 @@ export function CardActionButton({
   label,
   onClick,
   ariaLabel,
-  title,
+  detail,
   testId,
   disabled = false,
   busy = false,
@@ -37,7 +39,6 @@ export function CardActionButton({
       onClick={(e) => { e.stopPropagation(); onClick(); }}
       disabled={disabled}
       aria-busy={busy || undefined}
-      title={title}
       aria-label={ariaLabel}
       className={[
         "group/btn relative flex items-center justify-center h-8 w-8 rounded-md",
@@ -59,10 +60,10 @@ export function CardActionButton({
           "absolute top-full right-0 mt-1 z-10 pointer-events-none",
           "px-1.5 py-0.5 rounded-md bg-bg-overlay border border-border shadow-[var(--shadow-md)]",
           "whitespace-nowrap text-[length:var(--text-xs)] font-medium text-text-primary",
-          "opacity-0 group-hover/btn:opacity-100 transition-opacity duration-[var(--duration-fast)]",
+          "opacity-0 group-hover/btn:opacity-100 group-focus-visible/btn:opacity-100 transition-opacity duration-[var(--duration-fast)]",
         ].join(" ")}
       >
-        {label}
+        {detail ?? label}
       </span>
     </button>
   );
