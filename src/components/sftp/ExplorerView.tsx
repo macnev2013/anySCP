@@ -498,8 +498,10 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         localPaths,
         remoteDir: session.currentPath,
       });
-    } catch {
-      // Upload errors surface in the transfer overlay
+    } catch (err) {
+      // Transfer errors surface in the overlay, but a rejected enqueue (e.g.
+      // unreadable local path) never creates a job there — toast it.
+      toast.error(`Upload failed: ${errorMessage(err)}`);
     }
   }, [sessionId, transport, session]);
 
@@ -520,8 +522,10 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         localPaths,
         remoteDir: session.currentPath,
       });
-    } catch {
-      // Upload errors surface in the transfer overlay
+    } catch (err) {
+      // Transfer errors surface in the overlay, but a rejected enqueue (e.g.
+      // unreadable picked folder) never creates a job there — toast it.
+      toast.error(`Upload failed: ${errorMessage(err)}`);
     }
   }, [sessionId, transport, session]);
 
