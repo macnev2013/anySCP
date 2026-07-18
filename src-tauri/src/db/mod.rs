@@ -888,16 +888,18 @@ impl HostDb {
     /// it never exceeds 500 rows total.
     #[instrument(skip(self), fields(host_id = %host_id))]
     pub fn record_connection(&self, host_id: &str) -> Result<(), DbError> {
-        let conn = self
+        let mut conn = self
             .conn
             .lock()
             .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
-        conn.execute(
+        let tx = conn.transaction()?;
+
+        tx.execute(
             "INSERT INTO connection_history (host_id) VALUES (?1)",
             params![host_id],
         )?;
         // Update per-host usage statistics.
-        conn.execute(
+        tx.execute(
             "UPDATE saved_hosts
              SET last_connected_at = datetime('now'),
                  connection_count  = COALESCE(connection_count, 0) + 1
@@ -905,13 +907,14 @@ impl HostDb {
             params![host_id],
         )?;
         // Prune: keep only the 500 most-recent rows by autoincrement id.
-        conn.execute(
+        tx.execute(
             "DELETE FROM connection_history
              WHERE id NOT IN (
                  SELECT id FROM connection_history ORDER BY id DESC LIMIT 500
              )",
             [],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
