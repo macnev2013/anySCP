@@ -88,7 +88,6 @@ export function UnifiedTabBar() {
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    updateArrows();
     el.addEventListener("scroll", updateArrows, { passive: true });
     const ro = new ResizeObserver(updateArrows);
     ro.observe(el);
@@ -96,7 +95,20 @@ export function UnifiedTabBar() {
       el.removeEventListener("scroll", updateArrows);
       ro.disconnect();
     };
-  }, [updateArrows, tabOrder.length]);
+  }, [updateArrows]);
+
+  // Re-measure after every render: content width changes without a container
+  // resize or count change (pane-split indicator, label rename) still flow
+  // through a render of this component. The setters bail when unchanged.
+  useEffect(updateArrows);
+
+  // Keep the active tab visible — a newly opened tab is appended off-screen
+  // right, and with the scrollbar hidden there'd be no hint it exists.
+  useEffect(() => {
+    scrollRef.current
+      ?.querySelector('[role="tab"][aria-selected="true"]')
+      ?.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }, [activeTabId]);
 
   const scrollTabs = (dir: -1 | 1) => {
     const el = scrollRef.current;
