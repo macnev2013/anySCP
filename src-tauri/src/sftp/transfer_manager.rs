@@ -326,10 +326,7 @@ impl TransferManager {
             let (kind, total_bytes, files_total) =
                 if attrs.file_type() == russh_sftp::protocol::FileType::Dir {
                     let local_dest = local_dir.join(&name);
-                    let (bytes, count) = {
-                        let sftp = sftp_arc.lock().await;
-                        walk_remote_dir_stats(&sftp, &remote_path).await
-                    };
+                    let (bytes, count) = walk_remote_dir_stats(&sftp_arc, &remote_path).await;
                     (
                         TransferJobKind::DownloadDir {
                             remote_path: remote_path.clone(),
@@ -492,13 +489,16 @@ impl TransferManager {
 
 /// Recursively walk a remote directory and return (total_bytes, file_count).
 /// Tracks visited paths to prevent infinite loops from symlink cycles.
-async fn walk_remote_dir_stats(sftp: &russh_sftp::client::SftpSession, path: &str) -> (u64, u32) {
+async fn walk_remote_dir_stats(
+    sftp_arc: &Arc<tokio::sync::Mutex<russh_sftp::client::SftpSession>>,
+    path: &str,
+) -> (u64, u32) {
     let mut visited = HashSet::new();
-    Box::pin(walk_remote_dir_inner(sftp, path, &mut visited)).await
+    Box::pin(walk_remote_dir_inner(sftp_arc, path, &mut visited)).await
 }
 
 async fn walk_remote_dir_inner(
-    sftp: &russh_sftp::client::SftpSession,
+    sftp_arc: &Arc<tokio::sync::Mutex<russh_sftp::client::SftpSession>>,
     path: &str,
     visited: &mut HashSet<String>,
 ) -> (u64, u32) {
@@ -506,9 +506,12 @@ async fn walk_remote_dir_inner(
         return (0, 0); // cycle detected
     }
 
-    let entries = match sftp.read_dir(path).await {
-        Ok(e) => e,
-        Err(_) => return (0, 0),
+    let entries = {
+        let sftp = sftp_arc.lock().await;
+        match sftp.read_dir(path).await {
+            Ok(e) => e,
+            Err(_) => return (0, 0),
+        }
     };
 
     let mut total_bytes: u64 = 0;
@@ -528,7 +531,7 @@ async fn walk_remote_dir_inner(
 
         let attrs = entry.metadata();
         if attrs.file_type() == russh_sftp::protocol::FileType::Dir {
-            let (b, c) = Box::pin(walk_remote_dir_inner(sftp, &full_path, visited)).await;
+            let (b, c) = Box::pin(walk_remote_dir_inner(sftp_arc, &full_path, visited)).await;
             total_bytes += b;
             file_count += c;
         } else {
