@@ -103,20 +103,22 @@ interface ContextMenuState {
 
 // Fixed-width timestamp so rows never wrap: zero-pad day/hour, and format the
 // date and time separately to drop the locale's "at" joiner. `undefined` locale
-// keeps month/day order and 12h/24h OS-aware.
+// keeps month/day order and 12h/24h OS-aware. Formatters are hoisted — each
+// toLocale* call constructs an Intl.DateTimeFormat, and this runs twice per
+// row (title + text) on every render of large directories.
+const MODIFIED_DATE_FMT = new Intl.DateTimeFormat(undefined, {
+  year: "numeric",
+  month: "short",
+  day: "2-digit",
+});
+const MODIFIED_TIME_FMT = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+});
 function formatModified(unix: number | null): string {
   if (unix === null) return "—";
   const date = new Date(unix * 1000);
-  const day = date.toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-  });
-  const time = date.toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  return `${day} ${time}`;
+  return `${MODIFIED_DATE_FMT.format(date)} ${MODIFIED_TIME_FMT.format(date)}`;
 }
 
 function EntryIcon({ entry }: { entry: ExplorerEntry }) {
