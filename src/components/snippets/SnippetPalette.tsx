@@ -5,6 +5,7 @@ import { useSnippetsStore } from "../../stores/snippets-store";
 import { useSessionStore } from "../../stores/session-store";
 import { useUiStore } from "../../stores/ui-store";
 import { CustomSelect } from "../shared/CustomSelect";
+import { ModalBackdrop } from "../shared/ModalBackdrop";
 import {
   extractVariables,
   parseVariables,
@@ -173,18 +174,14 @@ export function SnippetPalette() {
   let varInputIndex = 0;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
-      onClick={toggle}
+    <ModalBackdrop
+      onClose={toggle}
+      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh] bg-bg-base/60 backdrop-blur-sm"
     >
-      {/* Backdrop */}
-      <div className="absolute inset-0 bg-bg-base/60 backdrop-blur-sm" />
-
       {/* Palette */}
       <div
         data-testid="snippet-palette"
         className="relative z-10 w-full max-w-[480px] mx-4 rounded-xl bg-bg-overlay border border-border shadow-[var(--shadow-lg)] overflow-hidden animate-[paletteIn_150ms_var(--ease-expo-out)_both]"
-        onClick={(e) => e.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
         {phase === "browse" ? (
@@ -357,6 +354,6 @@ export function SnippetPalette() {
           to   { opacity: 1; transform: translateY(0) scale(1); }
         }
       `}</style>
-    </div>
+    </ModalBackdrop>
   );
 }

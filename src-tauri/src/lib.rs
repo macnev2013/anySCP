@@ -116,8 +116,17 @@ pub fn run() {
                 _ => String::new(),
             };
 
+            // Interface monospace font: same pre-paint treatment, else every
+            // font-mono surface flashes the default until settings load.
+            let mono_font_script = match host_db.get_setting("app_interface_mono_font") {
+                Ok(Some(f)) if !f.is_empty() => format!(
+                    "document.documentElement.style.setProperty('--font-mono', {f:?});document.documentElement.dataset.interfaceMonoFont={f:?};"
+                ),
+                _ => String::new(),
+            };
+
             let theme_script = format!(
-                "document.documentElement.dataset.theme = {theme:?}; document.documentElement.style.setProperty('--accent-hue', '{accent_hue}');{custom_accent_script}{font_script}"
+                "document.documentElement.dataset.theme = {theme:?}; document.documentElement.style.setProperty('--accent-hue', '{accent_hue}');{custom_accent_script}{font_script}{mono_font_script}"
             );
 
             WebviewWindowBuilder::new(app.handle(), "main", WebviewUrl::App("index.html".into()))

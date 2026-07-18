@@ -1,75 +1,45 @@
-import { useEffect, useRef, useMemo, useCallback } from "react";
-import { X } from "lucide-react";
-import { useTransferStore } from "../../stores/transfer-store";
-import type { TransferEvent, TransferStatusValue } from "../../types";
-import { getStatusString } from "../../utils/format";
-import { TransferRow } from "./TransferRow";
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function sortPriority(status: TransferStatusValue): number {
-  const s = getStatusString(status);
-  if (s === "InProgress") return 0;
-  if (s === "Queued") return 1;
-  return 2;
-}
-
-interface Stats {
-  list: TransferEvent[];
-  activeCount: number;
-  queuedCount: number;
-  finishedCount: number;
-}
-
-function computeStats(transfers: Map<string, TransferEvent>): Stats {
-  let activeCount = 0;
-  let queuedCount = 0;
-  let finishedCount = 0;
-  const list: TransferEvent[] = [];
-
-  for (const t of transfers.values()) {
-    list.push(t);
-    const s = getStatusString(t.status);
-    if (s === "InProgress") activeCount++;
-    if (s === "Queued") queuedCount++;
-    if (s === "Completed" || s === "Failed" || s === "Cancelled") finishedCount++;
-  }
-
-  list.sort((a, b) => sortPriority(a.status) - sortPriority(b.status));
-  return { list, activeCount, queuedCount, finishedCount };
-}
+import { useEffect, useRef } from "react";
+import { X, ExternalLink } from "lucide-react";
+import { useTabStore } from "../../stores/tab-store";
+import { useTransfers } from "../../hooks/use-transfers";
+import { TransferList } from "./TransferList";
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
 interface TransferPopoverProps {
   /** Rect of the trigger button — used to anchor the popover */
   anchorRect: DOMRect | null;
+  /** The trigger button, excluded from outside-click so its own toggle owns
+   *  the close (otherwise re-clicking it closes then instantly reopens). */
+  triggerRef?: React.RefObject<HTMLElement | null>;
   onClose: () => void;
 }
 
-export function TransferPopover({ anchorRect, onClose }: TransferPopoverProps) {
-  const transfers = useTransferStore((s) => s.transfers);
-  const removeTransfer = useTransferStore((s) => s.removeTransfer);
-  const clearFinished = useTransferStore((s) => s.clearFinished);
+export function TransferPopover({ anchorRect, triggerRef, onClose }: TransferPopoverProps) {
+  const { list, activeCount, queuedCount, finishedCount, onCancel, onRetry, onDismiss, onClearFinished } =
+    useTransfers();
+  const openPageTab = useTabStore((s) => s.openPageTab);
   const popoverRef = useRef<HTMLDivElement>(null);
 
-  const stats = useMemo(() => computeStats(transfers), [transfers]);
-  const { list, activeCount, queuedCount, finishedCount } = stats;
+  const handlePopOut = () => {
+    openPageTab("transfers", "Transfers");
+    onClose();
+  };
 
   // Close on outside click
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        popoverRef.current && !popoverRef.current.contains(target) &&
+        !triggerRef?.current?.contains(target)
+      ) {
         onClose();
       }
     };
-    // Delay attachment to avoid the triggering click from immediately closing
-    const timer = setTimeout(() => document.addEventListener("mousedown", handleClick), 0);
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener("mousedown", handleClick);
-    };
-  }, [onClose]);
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [onClose, triggerRef]);
 
   // Close on Escape
   useEffect(() => {
@@ -79,52 +49,6 @@ export function TransferPopover({ anchorRect, onClose }: TransferPopoverProps) {
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
   }, [onClose]);
-
-  // ─── Actions ────────────────────────────────────────────────────────────────
-
-  /** Which backend owns a transfer, inferred from its session-id field. */
-  const protocolOf = useCallback((id: string): "s3" | "scp" | "sftp" => {
-    const t = transfers.get(id);
-    if (t?.s3_session_id) return "s3";
-    if (t?.scp_session_id) return "scp";
-    return "sftp";
-  }, [transfers]);
-
-  const handleCancel = useCallback((id: string) => {
-    void (async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke(`${protocolOf(id)}_cancel_transfer`, { transferId: id });
-      } catch {
-        removeTransfer(id);
-      }
-    })();
-  }, [removeTransfer, protocolOf]);
-
-  const handleRetry = useCallback((id: string) => {
-    void (async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke(`${protocolOf(id)}_retry_transfer`, { transferId: id });
-      } catch { /* best-effort */ }
-    })();
-  }, [protocolOf]);
-
-  const handleDismiss = useCallback((id: string) => {
-    removeTransfer(id);
-  }, [removeTransfer]);
-
-  const handleClearFinished = useCallback(() => {
-    clearFinished();
-    void (async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("sftp_clear_finished_transfers");
-        await invoke("scp_clear_finished_transfers");
-        await invoke("s3_clear_finished_transfers");
-      } catch { /* best-effort */ }
-    })();
-  }, [clearFinished]);
 
   // ─── Positioning ────────────────────────────────────────────────────────────
 
@@ -176,7 +100,7 @@ export function TransferPopover({ anchorRect, onClose }: TransferPopoverProps) {
         {/* Clear finished */}
         {finishedCount > 0 && (
           <button
-            onClick={handleClearFinished}
+            onClick={onClearFinished}
             title="Clear completed transfers"
             aria-label="Clear completed transfers"
             className={[
@@ -190,6 +114,21 @@ export function TransferPopover({ anchorRect, onClose }: TransferPopoverProps) {
             Clear
           </button>
         )}
+
+        {/* Open the full-page view */}
+        <button
+          onClick={handlePopOut}
+          title="Open in a tab"
+          aria-label="Open transfers in a tab"
+          className={[
+            "flex items-center justify-center w-7 h-7 rounded-md",
+            "text-text-muted hover:text-text-primary hover:bg-bg-subtle",
+            "transition-colors duration-[var(--duration-fast)]",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          ].join(" ")}
+        >
+          <ExternalLink size={14} strokeWidth={2} aria-hidden="true" />
+        </button>
 
         {/* Close */}
         <button
@@ -208,33 +147,13 @@ export function TransferPopover({ anchorRect, onClose }: TransferPopoverProps) {
       </div>
 
       {/* Transfer list */}
-      {list.length > 0 ? (
-        <div
-          className="overflow-y-auto flex-1"
-          style={{ maxHeight: "min(400px, 50vh)" }}
-          role="list"
-          aria-label="Transfer items"
-        >
-          {list.map((t) => (
-            <TransferRow
-              key={t.transfer_id}
-              transfer={t}
-              onCancel={handleCancel}
-              onRetry={handleRetry}
-              onDismiss={handleDismiss}
-            />
-          ))}
-        </div>
-      ) : (
-        <div className="flex flex-col items-center justify-center py-10 gap-2">
-          <p className="text-[length:var(--text-xs)] text-text-muted">
-            No transfers
-          </p>
-          <p className="text-[length:var(--text-2xs)] text-text-muted/60">
-            Drag files onto the explorer to upload
-          </p>
-        </div>
-      )}
+      <TransferList
+        list={list}
+        onCancel={onCancel}
+        onRetry={onRetry}
+        onDismiss={onDismiss}
+        maxHeight="min(400px, 50vh)"
+      />
     </div>
   );
 }

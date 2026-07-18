@@ -4,6 +4,7 @@ import type { S3Connection } from "../../types";
 import { ContextMenu } from "../shared/ContextMenu";
 import { ConfirmDangerDialog } from "../shared/ConfirmDangerDialog";
 import { getHostColor } from "./HostCard";
+import { CardActionButton, CardActionStrip } from "./CardActionButton";
 
 interface S3CardProps {
   conn: S3Connection;
@@ -63,11 +64,6 @@ export function S3Card({ conn, onConnect, onEdit, onDuplicate, onDelete }: S3Car
     }
   };
 
-  const stopAnd = (fn: () => void) => (e: React.MouseEvent) => {
-    e.stopPropagation();
-    fn();
-  };
-
   const contextItems = [
     { label: "Explore", icon: FolderOpen, onClick: () => onConnect(conn) },
     { label: "Edit", icon: Pencil, onClick: () => onEdit(conn) },
@@ -108,32 +104,15 @@ export function S3Card({ conn, onConnect, onEdit, onDuplicate, onDelete }: S3Car
         />
 
         {/* Action buttons (top-right) */}
-        <div className="absolute top-2 right-2 flex items-center gap-0.5">
-          <button
-            type="button"
-            data-testid={`s3-card-${conn.id}-explorer`}
-            onClick={stopAnd(() => onConnect(conn))}
-            title="Open Explorer"
-            aria-label={`Open explorer for ${displayName}`}
-            className={[
-              "group/btn flex items-center h-8 px-2 rounded-md",
-              "text-text-muted hover:text-text-primary hover:bg-bg-overlay",
-              "transition-[background-color,color] duration-[var(--duration-fast)]",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            ].join(" ")}
-          >
-            <FolderOpen size={16} strokeWidth={2} aria-hidden="true" className="shrink-0" />
-            <span
-              className={[
-                "overflow-hidden whitespace-nowrap text-[length:var(--text-xs)] font-medium",
-                "max-w-0 ml-0 group-hover/btn:max-w-[70px] group-hover/btn:ml-1",
-                "transition-[max-width,margin-left] duration-200 ease-out",
-              ].join(" ")}
-            >
-              Explore
-            </span>
-          </button>
-        </div>
+        <CardActionStrip>
+          <CardActionButton
+            icon={FolderOpen}
+            label="Explore"
+            onClick={() => onConnect(conn)}
+            ariaLabel={`Open explorer for ${displayName}`}
+            testId={`s3-card-${conn.id}-explorer`}
+          />
+        </CardActionStrip>
 
         {/* Avatar circle */}
         <div

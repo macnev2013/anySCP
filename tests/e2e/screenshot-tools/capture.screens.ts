@@ -206,11 +206,20 @@ async function openRowMenu(name: string): Promise<void> {
     await browser.pause(700); // hold so the menu is clearly visible in the gif
 }
 
-/** Ripple + click a context-menu item by its visible label. */
+/** Ripple + click a context-menu item by its visible label.
+ *
+ *  The label is read page-side (innerText) rather than via WebDriver getText:
+ *  WebKitWebDriver's text extraction returns "" for text inside overflow-
+ *  clipped elements, and menu labels sit in `truncate` spans. The main suite
+ *  established the same workaround (see specs/65-multi-download-menu). */
 async function clickMenuItem(label: string): Promise<void> {
     const items = await $$("[role='menu'] [role='menuitem']");
     for (const it of items) {
-        if ((await it.getText()).trim() === label) {
+        const text = await browser.execute(
+            (el: HTMLElement) => el.innerText,
+            (await it.getElement()) as unknown as HTMLElement,
+        );
+        if ((text ?? "").trim() === label) {
             await rippleEl(it);
             await it.click();
             return;

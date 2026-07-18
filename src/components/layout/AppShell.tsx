@@ -22,6 +22,7 @@ import { ExplorerPage } from "../sftp";
 import { SettingsPage } from "../settings";
 import { PortForwardingPage } from "../port-forwarding";
 import { HistoryPage } from "../history";
+import { TransfersPage } from "../transfers";
 import { usePortForwardEvents } from "../../hooks/use-port-forward-events";
 import { UpdateDialog } from "../updater/UpdateDialog";
 import { Toaster } from "../shared/Toaster";
@@ -31,6 +32,7 @@ export function AppShell() {
   const accentHue = useSettingsStore((s) => s.accentHue);
   const accentCustom = useSettingsStore((s) => s.accentCustom);
   const interfaceFont = useSettingsStore((s) => s.interfaceFont);
+  const interfaceMonoFont = useSettingsStore((s) => s.interfaceMonoFont);
   const activeTabId = useTabStore((s) => s.activeTabId);
   const allTabs = useTabStore((s) => s.tabs);
   const activeTab = activeTabId ? allTabs.get(activeTabId) : null;
@@ -307,6 +309,11 @@ export function AppShell() {
     document.documentElement.dataset.interfaceFont = interfaceFont;
   }, [interfaceFont]);
 
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty("--font-mono", interfaceMonoFont);
+    document.documentElement.dataset.interfaceMonoFont = interfaceMonoFont;
+  }, [interfaceMonoFont]);
+
   // A custom accent overrides the hue-based tokens directly (supports any
   // lightness/chroma, e.g. gray or darker shades). Clearing it falls back to
   // the theme's hue-driven accent.
@@ -410,6 +417,8 @@ export function AppShell() {
                   <HistoryPage />
                 ) : activePageType === "settings" ? (
                   <SettingsPage />
+                ) : activePageType === "transfers" ? (
+                  <TransfersPage />
                 ) : null}
               </div>
             )}
