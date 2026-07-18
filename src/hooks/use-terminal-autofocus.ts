@@ -16,9 +16,14 @@ export function useTerminalAutoFocus() {
 
   useEffect(() => {
     if (!activeTab || activeTab.type !== "terminal" || !activeSessionId) return;
-    // Don't steal focus while the search bar is open for this session —
-    // misdirected keys would go into the live shell
-    if (useTerminalSearchStore.getState().openSessions.has(activeSessionId))
+    // Yield to the search bar when it was the last-focused element for this
+    // session — it restores its own focus, and misdirected keys would go
+    // into the live shell
+    const search = useTerminalSearchStore.getState();
+    if (
+      search.openSessions.has(activeSessionId) &&
+      search.focusedSessionId === activeSessionId
+    )
       return;
     const raf = requestAnimationFrame(() => {
       getTerminal(activeSessionId)?.term.focus();

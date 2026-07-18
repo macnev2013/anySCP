@@ -38,7 +38,10 @@ describe("useTerminalAutoFocus", () => {
     vi.stubGlobal("cancelAnimationFrame", () => {});
     setTabs([termTab, sftpTab], termTab.id);
     useSessionStore.setState({ activeSessionId: "sess-1" });
-    useTerminalSearchStore.setState({ openSessions: new Set() });
+    useTerminalSearchStore.setState({
+      openSessions: new Set(),
+      focusedSessionId: null,
+    });
   });
 
   afterEach(() => {
@@ -65,10 +68,22 @@ describe("useTerminalAutoFocus", () => {
     expect(focus).not.toHaveBeenCalled();
   });
 
-  it("does not steal focus while the search bar is open for the session", () => {
-    useTerminalSearchStore.setState({ openSessions: new Set(["sess-1"]) });
+  it("yields to the search bar when it was the last-focused element", () => {
+    useTerminalSearchStore.setState({
+      openSessions: new Set(["sess-1"]),
+      focusedSessionId: "sess-1",
+    });
     renderHook(() => useTerminalAutoFocus());
     expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("focuses the terminal when search is open but the terminal was last focused", () => {
+    useTerminalSearchStore.setState({
+      openSessions: new Set(["sess-1"]),
+      focusedSessionId: null,
+    });
+    renderHook(() => useTerminalAutoFocus());
+    expect(focus).toHaveBeenCalledTimes(1);
   });
 
   it("refocuses when switching back to the terminal tab", () => {

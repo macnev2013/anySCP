@@ -4,6 +4,7 @@ import { useTerminalSearchStore } from "../../stores/terminal-search-store";
 import { useTabStore } from "../../stores/tab-store";
 import { useSessionStore } from "../../stores/session-store";
 import { getSearchAddon } from "../../stores/terminal-registry";
+import { getTerminal } from "../../stores/terminal-instances";
 
 interface TerminalSearchBarProps {
   sessionId: string;
@@ -69,14 +70,37 @@ export function TerminalSearchBar({ sessionId }: TerminalSearchBarProps) {
   const toggleRegex = useTerminalSearchStore((s) => s.toggleRegex);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const addonRef = useRef(getSearchAddon(sessionId));
 
   const activeTabId = useTabStore((s) => s.activeTabId);
 
+  // Track whether the search bar or the terminal was focused last, so tab
+  // switches restore whichever the user actually left focused. Hiding a tab
+  // fires no focusin, so the flag survives visits to other tabs.
+  useEffect(() => {
+    const onFocusIn = (e: FocusEvent) => {
+      const target = e.target as Node;
+      const st = useTerminalSearchStore.getState();
+      if (containerRef.current?.contains(target)) {
+        st.setSearchFocus(sessionId);
+      } else if (
+        st.focusedSessionId === sessionId &&
+        target === getTerminal(sessionId)?.term.textarea
+      ) {
+        st.setSearchFocus(null);
+      }
+    };
+    document.addEventListener("focusin", onFocusIn);
+    return () => document.removeEventListener("focusin", onFocusIn);
+  }, [sessionId]);
+
   // Focus input on mount, and re-focus when the containing tab becomes
-  // active again — hiding the tab drops focus to <body>
+  // active again (hiding the tab drops focus to <body>) — but only if the
+  // search bar, not the terminal, was the last-focused element here
   useEffect(() => {
     if (useSessionStore.getState().activeSessionId !== sessionId) return;
+    if (useTerminalSearchStore.getState().focusedSessionId !== sessionId) return;
     const raf = requestAnimationFrame(() => inputRef.current?.focus());
     return () => cancelAnimationFrame(raf);
   }, [activeTabId, sessionId]);
@@ -145,6 +169,8 @@ export function TerminalSearchBar({ sessionId }: TerminalSearchBarProps) {
     const addon = addonRef.current ?? getSearchAddon(sessionId);
     addon?.clearDecorations();
     closeSearch(sessionId);
+    // Hand focus back to the terminal instead of dropping it on <body>
+    getTerminal(sessionId)?.term.focus();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -171,6 +197,7 @@ export function TerminalSearchBar({ sessionId }: TerminalSearchBarProps) {
 
   return (
     <div
+      ref={containerRef}
       data-testid="terminal-search"
       data-match-text={matchText}
       className={[
