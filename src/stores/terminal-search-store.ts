@@ -8,7 +8,7 @@ interface SearchResults {
 interface TerminalSearchState {
   /** Sessions that currently have search bar open */
   openSessions: Set<string>;
-  /** Which session's search bar has input focus */
+  /** Which session's search bar was the last-focused element (vs the terminal) */
   focusedSessionId: string | null;
   /** Query per session */
   queries: Map<string, string>;
@@ -20,6 +20,8 @@ interface TerminalSearchState {
 
   openSearch: (sessionId: string) => void;
   closeSearch: (sessionId: string) => void;
+  /** Record whether a session's search bar (vs its terminal) holds focus. */
+  setSearchFocus: (sessionId: string | null) => void;
   setQuery: (sessionId: string, query: string) => void;
   setResults: (sessionId: string, index: number, count: number) => void;
   toggleCaseSensitive: () => void;
@@ -56,6 +58,8 @@ export const useTerminalSearchStore = create<TerminalSearchState>((set) => ({
         focusedSessionId: state.focusedSessionId === sessionId ? null : state.focusedSessionId,
       };
     }),
+
+  setSearchFocus: (sessionId) => set({ focusedSessionId: sessionId }),
 
   setQuery: (sessionId, query) =>
     set((state) => {

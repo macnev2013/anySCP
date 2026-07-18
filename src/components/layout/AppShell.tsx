@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useTabStore } from "../../stores/tab-store";
 import { useSessionStore } from "../../stores/session-store";
 import { useTerminalSearchStore } from "../../stores/terminal-search-store";
+import { useTerminalAutoFocus } from "../../hooks/use-terminal-autofocus";
 import { useSettingsStore } from "../../stores/settings-store";
 import { useUpdaterStore } from "../../stores/updater-store";
 import { useUiStore } from "../../stores/ui-store";
@@ -45,6 +46,9 @@ export function AppShell() {
     }
   }, [activeTabId, allTabs]);
 
+  // Focus the terminal when its tab or pane becomes active
+  useTerminalAutoFocus();
+
   const openNewHost = () => setEditingHostId(NEW_HOST_ID);
 
   const shortcuts = useMemo<ShortcutDef[]>(
@@ -72,7 +76,13 @@ export function AppShell() {
           if (tab.type === "page" && tab.page === "hosts") return;
 
           if (tab.type === "terminal") {
-            const { activeSessionId, tabs: termTabs, zoomedPaneId, unsplitPane, removeSession } = useSessionStore.getState();
+            const {
+              activeSessionId,
+              tabs: termTabs,
+              zoomedPaneId,
+              unsplitPane,
+              removeSession,
+            } = useSessionStore.getState();
             if (!activeSessionId) return;
 
             // If zoomed, just unzoom
@@ -88,7 +98,9 @@ export function AppShell() {
               try {
                 const { invoke } = await import("@tauri-apps/api/core");
                 await invoke("ssh_disconnect", { sessionId: activeSessionId });
-              } catch { /* already disconnected */ }
+              } catch {
+                /* already disconnected */
+              }
 
               if (isInSplit) {
                 unsplitPane(activeSessionId);
@@ -96,7 +108,9 @@ export function AppShell() {
               removeSession(activeSessionId);
 
               // If that was the last pane, remove the unified tab
-              const remaining = useSessionStore.getState().tabs.get(activeTabId);
+              const remaining = useSessionStore
+                .getState()
+                .tabs.get(activeTabId);
               if (!remaining) {
                 removeTab(activeTabId);
               }
@@ -107,11 +121,20 @@ export function AppShell() {
             void (async () => {
               const { invoke } = await import("@tauri-apps/api/core");
               if (tab.type === "sftp") {
-                try { await invoke("sftp_close", { sftpSessionId: activeTabId }); } catch { /* ok */ }
-                const { useSftpStore } = await import("../../stores/sftp-store");
+                try {
+                  await invoke("sftp_close", { sftpSessionId: activeTabId });
+                } catch {
+                  /* ok */
+                }
+                const { useSftpStore } =
+                  await import("../../stores/sftp-store");
                 useSftpStore.getState().closeSession(activeTabId);
               } else if (tab.type === "s3") {
-                try { await invoke("s3_disconnect", { s3SessionId: activeTabId }); } catch { /* ok */ }
+                try {
+                  await invoke("s3_disconnect", { s3SessionId: activeTabId });
+                } catch {
+                  /* ok */
+                }
                 const { useS3Store } = await import("../../stores/s3-store");
                 useS3Store.getState().closeSession(activeTabId);
               }
@@ -133,17 +156,20 @@ export function AppShell() {
         key: "[",
         meta: true,
         action: () => {
-          const { tabOrder, activeTabId, setActiveTab } = useTabStore.getState();
+          const { tabOrder, activeTabId, setActiveTab } =
+            useTabStore.getState();
           const idx = tabOrder.indexOf(activeTabId ?? "");
           if (idx > 0) setActiveTab(tabOrder[idx - 1]);
-          else if (tabOrder.length > 0) setActiveTab(tabOrder[tabOrder.length - 1]);
+          else if (tabOrder.length > 0)
+            setActiveTab(tabOrder[tabOrder.length - 1]);
         },
       },
       {
         key: "]",
         meta: true,
         action: () => {
-          const { tabOrder, activeTabId, setActiveTab } = useTabStore.getState();
+          const { tabOrder, activeTabId, setActiveTab } =
+            useTabStore.getState();
           const idx = tabOrder.indexOf(activeTabId ?? "");
           if (idx < tabOrder.length - 1) setActiveTab(tabOrder[idx + 1]);
           else if (tabOrder.length > 0) setActiveTab(tabOrder[0]);
@@ -162,13 +188,19 @@ export function AppShell() {
               const newId = await invoke<string>("ssh_split_session", {
                 sourceSessionId: activeSessionId,
               });
-              useSessionStore.getState().splitPane("horizontal", activeSessionId, newId);
+              useSessionStore
+                .getState()
+                .splitPane("horizontal", activeSessionId, newId);
             } catch (err) {
               console.error("Split failed:", err);
             }
           })();
         },
-        when: () => useTabStore.getState().tabs.get(useTabStore.getState().activeTabId ?? "")?.type === "terminal",
+        when: () =>
+          useTabStore
+            .getState()
+            .tabs.get(useTabStore.getState().activeTabId ?? "")?.type ===
+          "terminal",
       },
       {
         key: "d",
@@ -183,13 +215,19 @@ export function AppShell() {
               const newId = await invoke<string>("ssh_split_session", {
                 sourceSessionId: activeSessionId,
               });
-              useSessionStore.getState().splitPane("vertical", activeSessionId, newId);
+              useSessionStore
+                .getState()
+                .splitPane("vertical", activeSessionId, newId);
             } catch (err) {
               console.error("Split failed:", err);
             }
           })();
         },
-        when: () => useTabStore.getState().tabs.get(useTabStore.getState().activeTabId ?? "")?.type === "terminal",
+        when: () =>
+          useTabStore
+            .getState()
+            .tabs.get(useTabStore.getState().activeTabId ?? "")?.type ===
+          "terminal",
       },
       {
         key: "enter",
@@ -199,7 +237,11 @@ export function AppShell() {
           const { activeSessionId, toggleZoom } = useSessionStore.getState();
           if (activeSessionId) toggleZoom(activeSessionId);
         },
-        when: () => useTabStore.getState().tabs.get(useTabStore.getState().activeTabId ?? "")?.type === "terminal",
+        when: () =>
+          useTabStore
+            .getState()
+            .tabs.get(useTabStore.getState().activeTabId ?? "")?.type ===
+          "terminal",
       },
       // ─── Terminal search ──────────────────────────────────────────
       {
@@ -210,7 +252,11 @@ export function AppShell() {
           if (!activeSessionId) return;
           useTerminalSearchStore.getState().openSearch(activeSessionId);
         },
-        when: () => useTabStore.getState().tabs.get(useTabStore.getState().activeTabId ?? "")?.type === "terminal",
+        when: () =>
+          useTabStore
+            .getState()
+            .tabs.get(useTabStore.getState().activeTabId ?? "")?.type ===
+          "terminal",
       },
       // ─── Snippet palette ─────────────────────────────────────────
       {
@@ -250,7 +296,10 @@ export function AppShell() {
   }, [themeMode]);
 
   useLayoutEffect(() => {
-    document.documentElement.style.setProperty("--accent-hue", String(accentHue));
+    document.documentElement.style.setProperty(
+      "--accent-hue",
+      String(accentHue),
+    );
   }, [accentHue]);
 
   useLayoutEffect(() => {
@@ -263,7 +312,13 @@ export function AppShell() {
   // the theme's hue-driven accent.
   useLayoutEffect(() => {
     const st = document.documentElement.style;
-    const props = ["--color-accent", "--color-accent-hover", "--color-accent-muted", "--color-border-focus", "--color-ring"];
+    const props = [
+      "--color-accent",
+      "--color-accent-hover",
+      "--color-accent-muted",
+      "--color-border-focus",
+      "--color-ring",
+    ];
     if (!accentCustom) {
       props.forEach((prop) => st.removeProperty(prop));
       delete document.documentElement.dataset.accentCustom;
@@ -271,7 +326,10 @@ export function AppShell() {
     }
     const { l, c, h } = accentCustom;
     st.setProperty("--color-accent", `oklch(${l} ${c} ${h})`);
-    st.setProperty("--color-accent-hover", `oklch(${Math.max(0, l - 0.05)} ${c} ${h})`);
+    st.setProperty(
+      "--color-accent-hover",
+      `oklch(${Math.max(0, l - 0.05)} ${c} ${h})`,
+    );
     st.setProperty("--color-accent-muted", `oklch(${l} ${c} ${h} / 0.15)`);
     st.setProperty("--color-border-focus", `oklch(${l} ${c} ${h})`);
     st.setProperty("--color-ring", `oklch(${l} ${c} ${h} / 0.40)`);
@@ -313,7 +371,6 @@ export function AppShell() {
                   </div>
                 );
               })}
-
 
             {/* Explorer (SFTP/S3) tabs — render ALL and toggle visibility, like
                 terminals, so the open directory and selection survive switching
@@ -357,9 +414,7 @@ export function AppShell() {
               </div>
             )}
           </div>
-
         </div>
-
       </div>
 
       {/* Host modal (new + edit) */}
