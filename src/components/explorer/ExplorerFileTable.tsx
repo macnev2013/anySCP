@@ -1280,7 +1280,7 @@ export function ExplorerFileTable({
 
                   {/* Modified */}
                   <span
-                    className="w-44 text-(length:--text-sm) text-text-muted shrink-0 tabular-nums truncate"
+                    className="w-44 text-[length:var(--text-sm)] text-text-muted shrink-0 tabular-nums truncate"
                     title={formatModified(entry.modified)}
                   >
                     {formatModified(entry.modified)}
