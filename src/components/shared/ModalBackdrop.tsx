@@ -26,9 +26,13 @@ export function ModalBackdrop({ onClose, closeDisabled = false, className, child
   return (
     <div
       ref={backdropRef}
-      onMouseDown={(e) => { pressedOnBackdrop.current = e.target === backdropRef.current; }}
+      onMouseDown={(e) => {
+        // Primary button only — a right-click would otherwise close the modal
+        // at the same moment the native context menu opens.
+        pressedOnBackdrop.current = e.button === 0 && e.target === backdropRef.current;
+      }}
       onMouseUp={(e) => {
-        if (e.target === backdropRef.current && pressedOnBackdrop.current && !closeDisabled) onClose();
+        if (e.button === 0 && e.target === backdropRef.current && pressedOnBackdrop.current && !closeDisabled) onClose();
         pressedOnBackdrop.current = false;
       }}
       className={className}
