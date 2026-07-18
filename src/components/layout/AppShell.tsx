@@ -50,11 +50,15 @@ export function AppShell() {
   // Focus the terminal
   useEffect(() => {
     if (!activeTab || activeTab.type !== "terminal" || !activeSessionId) return;
+    // Don't steal focus while the search bar is open for this session —
+    // misdirected keys would go into the live shell
+    if (useTerminalSearchStore.getState().openSessions.has(activeSessionId))
+      return;
     const raf = requestAnimationFrame(() => {
       getTerminal(activeSessionId)?.term.focus();
     });
     return () => cancelAnimationFrame(raf);
-  }, [activeTabId, activeTab, activeSessionId]);
+  }, [activeTab, activeSessionId]);
 
   const openNewHost = () => setEditingHostId(NEW_HOST_ID);
 
