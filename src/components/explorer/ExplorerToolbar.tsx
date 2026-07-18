@@ -62,7 +62,11 @@ const SEGMENT_BTN_LINK_CLASS =
   "text-text-muted hover:text-text-secondary hover:bg-bg-subtle/70 cursor-pointer";
 
 /**
- * Normalize a hand-typed path to the provider's convention
+ * Normalize a hand-typed path to the provider's convention: SFTP paths are
+ * absolute with no trailing slash; S3 prefixes have no leading slash and a
+ * trailing one ("a/b/"), matching how the breadcrumb segments are built —
+ * listing uses the "/" delimiter, so a prefix without it would show the
+ * folder itself instead of its contents.
  */
 function normalizePath(
   providerType: FileSystemProvider["type"],
@@ -70,9 +74,12 @@ function normalizePath(
 ): string {
   const trimmed = raw.trim();
   if (providerType === "sftp") {
-    return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+    const stripped = trimmed.replace(/\/+$/, "");
+    if (stripped === "") return "/";
+    return stripped.startsWith("/") ? stripped : `/${stripped}`;
   }
-  return trimmed.replace(/^\/+/, "");
+  const prefix = trimmed.replace(/^\/+/, "");
+  return prefix && !prefix.endsWith("/") ? `${prefix}/` : prefix;
 }
 
 export const ExplorerToolbar = memo(function ExplorerToolbar({
@@ -98,14 +105,18 @@ export const ExplorerToolbar = memo(function ExplorerToolbar({
   const [draftPath, setDraftPath] = useState(currentPath);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Keep the draft in sync with the real path
+  // Focus + select only when editing begins — re-running on a currentPath
+  // change mid-edit would stomp the user's cursor/selection
   useEffect(() => {
     if (isEditing) {
       inputRef.current?.focus();
       inputRef.current?.select();
-    } else {
-      setDraftPath(currentPath);
     }
+  }, [isEditing]);
+
+  // Keep the draft in sync with the real path while not editing
+  useEffect(() => {
+    if (!isEditing) setDraftPath(currentPath);
   }, [isEditing, currentPath]);
   const beginEdit = useCallback(() => {
     if (loading) return;
@@ -176,9 +187,20 @@ export const ExplorerToolbar = memo(function ExplorerToolbar({
       ) : (
         <div
           onClick={beginEdit}
+          // Keyboard path to edit mode: the bar itself is focusable and Enter
+          // begins editing (segment buttons keep their own click behavior).
+          // No role="button" — it contains real buttons, and nesting
+          // interactive roles is an ARIA violation.
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && e.target === e.currentTarget) {
+              e.preventDefault();
+              beginEdit();
+            }
+          }}
           title="Click to type a path"
-          aria-label="Current path"
-          className={BREADCRUMB_BAR_CLASS}
+          aria-label="Edit current path"
+          className={`${BREADCRUMB_BAR_CLASS} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
         >
           {segments.map((seg, index) => {
             const isLast = index === segments.length - 1;
