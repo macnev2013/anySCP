@@ -323,31 +323,32 @@ impl TransferManager {
                     .map_err(|e| SftpError::RemoteIoError(e.to_string()))?
             };
 
-            let (kind, total_bytes, files_total) =
-                if attrs.file_type() == russh_sftp::protocol::FileType::Dir {
-                    let local_dest = local_dir.join(&name);
-                    let (bytes, count) = walk_remote_dir_stats(&sftp_arc, &remote_path).await;
-                    (
-                        TransferJobKind::DownloadDir {
-                            remote_path: remote_path.clone(),
-                            local_dir: local_dest,
-                        },
-                        bytes,
-                        count,
-                    )
-                } else {
-                    let local_dest = local_dir.join(&name);
-                    let size = attrs.size.unwrap_or(0);
-                    (
-                        TransferJobKind::DownloadFile {
-                            remote_path: remote_path.clone(),
-                            local_path: local_dest,
-                            size,
-                        },
+            let is_dir = attrs.file_type() == russh_sftp::protocol::FileType::Dir;
+            let (kind, total_bytes, files_total) = if is_dir {
+                let local_dest = local_dir.join(&name);
+                // Total are unknown until the background stat walk
+                // start at 0 so the job appears in the UI immediately
+                (
+                    TransferJobKind::DownloadDir {
+                        remote_path: remote_path.clone(),
+                        local_dir: local_dest,
+                    },
+                    0u64,
+                    0u32,
+                )
+            } else {
+                let local_dest = local_dir.join(&name);
+                let size = attrs.size.unwrap_or(0);
+                (
+                    TransferJobKind::DownloadFile {
+                        remote_path: remote_path.clone(),
+                        local_path: local_dest,
                         size,
-                        1u32,
-                    )
-                };
+                    },
+                    size,
+                    1u32,
+                )
+            };
 
             let job = TransferJobState {
                 transfer_id: transfer_id.clone(),
@@ -374,6 +375,25 @@ impl TransferManager {
             self.queue_tx
                 .send(transfer_id.clone())
                 .map_err(|e| SftpError::ChannelError(e.to_string()))?;
+
+            if is_dir {
+                let jobs = self.jobs.clone();
+                let app_handle = self.app_handle.clone();
+                let sftp_arc = sftp_arc.clone();
+                let stat_remote_path = remote_path.clone();
+                let stat_transfer_id = transfer_id.clone();
+                tokio::spawn(async move {
+                    let (byte, count) = walk_remote_dir_stats(&sftp_arc, &stat_remote_path).await;
+                    if let Some(mut job) = jobs.get_mut(&stat_transfer_id) {
+                        // never report a total below what's already transferred
+                        job.total_bytes = byte.max(job.bytes_transferred);
+                        job.files_total = count.max(job.files_done);
+                        let event = job.to_event();
+                        drop(job);
+                        app_handle.emit("sftp:transfer", event).ok();
+                    }
+                });
+            }
 
             ids.push(transfer_id);
         }
@@ -510,7 +530,11 @@ async fn walk_remote_dir_inner(
         let sftp = sftp_arc.lock().await;
         match sftp.read_dir(path).await {
             Ok(e) => e,
-            Err(_) => return (0, 0),
+            Err(e) => {
+                // Treated as empty so the walk can proceed (don't stay silent)
+                tracing::warn!(path, error = %e, "read_dir failed during stat walk; subtree size will be undercounted");
+                return (0, 0);
+            }
         }
     };
 
