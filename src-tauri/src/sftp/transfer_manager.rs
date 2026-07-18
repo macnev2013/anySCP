@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use dashmap::DashMap;
 use russh_sftp::protocol::OpenFlags;
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
@@ -19,7 +19,7 @@ use super::{
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const CHUNK_SIZE: usize = 32 * 1024; // 32 KB
+const CHUNK_SIZE: usize = 256 * 1024; // 256 KB
 /// Minimum duration between consecutive progress events per transfer.
 const EMIT_THROTTLE: Duration = Duration::from_millis(100);
 /// Window over which bytes are accumulated to compute speed.
@@ -880,87 +880,277 @@ fn update_progress(
 
 // ─── Upload: single file ──────────────────────────────────────────────────────
 
+/// Maximum number of concurrent region writers per file. Each writer keeps one
+/// SFTP write request in flight, so this bounds the pipeline depth over the
+/// session.
+const PIPELINE_DEPTH: u64 = 4;
+
+/// Split a file of `file_size` bytes into up to [`PIPELINE_DEPTH`] contiguous
+/// `[start, end)` regions. Files smaller than two chunks aren't worth the
+/// extra open/close round-trips and get a single region; an empty file gets
+/// none.
+fn plan_upload_regions(file_size: u64) -> Vec<(u64, u64)> {
+    if file_size == 0 {
+        return Vec::new();
+    }
+    let depth = if file_size < CHUNK_SIZE as u64 * 2 {
+        1
+    } else {
+        PIPELINE_DEPTH.min(file_size / CHUNK_SIZE as u64 + 1)
+    };
+    let region_size = file_size.div_ceil(depth);
+    (0..depth)
+        .map(|i| (i * region_size, ((i + 1) * region_size).min(file_size)))
+        .filter(|(start, end)| start < end)
+        .collect()
+}
+
+/// A failed region upload, tagged with whether every byte of the region had
+/// already been written and acked when the failure happened. Distinguishes a
+/// partial remote file (must be removed) from a complete one whose handle
+/// merely failed to close (must NOT be removed — that would be data loss).
+struct RegionError {
+    err: SftpError,
+    write_complete: bool,
+}
+
+/// State shared by the concurrent region writers of one file upload.
+struct UploadFileCtx {
+    jobs: Arc<DashMap<String, TransferJobState>>,
+    job_id: String,
+    sftp_arc: Arc<tokio::sync::Mutex<russh_sftp::client::SftpSession>>,
+    local_path: PathBuf,
+    remote_path: String,
+    /// WRITE-only when the file was pre-created empty; CREATE|TRUNCATE|WRITE
+    /// when a single region owns the file end-to-end.
+    open_flags: OpenFlags,
+    cancel_token: CancellationToken,
+    app_handle: AppHandle,
+}
+
+/// Fold per-region outcomes into the first error to surface and whether the
+/// remote file must be removed. Removal happens only when bytes are actually
+/// missing: if every region wrote fully and only a close failed, the file is
+/// complete and deleting it would be data loss.
+fn fold_region_results(results: Vec<Result<(), RegionError>>) -> (Option<SftpError>, bool) {
+    let mut first_err = None;
+    let mut remove_partial = false;
+    for r in results {
+        if let Err(RegionError {
+            err,
+            write_complete,
+        }) = r
+        {
+            remove_partial |= !write_complete;
+            first_err.get_or_insert(err);
+        }
+    }
+    (first_err, remove_partial)
+}
+
 async fn run_upload_file(
     jobs: &Arc<DashMap<String, TransferJobState>>,
     job_id: &str,
     sftp_arc: &Arc<tokio::sync::Mutex<russh_sftp::client::SftpSession>>,
-    local_path: &PathBuf,
+    local_path: &Path,
     remote_path: &str,
     cancel_token: &CancellationToken,
     app_handle: &AppHandle,
 ) -> Result<(), SftpError> {
-    let mut local_file = tokio::fs::File::open(local_path).await.map_err(|e| {
-        SftpError::LocalIoError(format!("Cannot read {}: {e}", local_path.display()))
-    })?;
-
-    let mut remote_file = {
-        let sftp = sftp_arc.lock().await;
-        sftp.open_with_flags(
-            remote_path,
-            OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
-        )
+    let file_size = tokio::fs::metadata(local_path)
         .await
-        .map_err(|e| SftpError::RemoteIoError(format!("Cannot write to {remote_path}: {e}")))?
+        .map_err(|e| SftpError::LocalIoError(format!("Cannot read {}: {e}", local_path.display())))?
+        .len();
+
+    let regions = plan_upload_regions(file_size);
+
+    // With multiple concurrent writers the truncation must happen exactly once
+    // before any of them opens the file (a TRUNCATE racing other regions'
+    // writes would clobber their data), so the file is pre-created empty and
+    // regions open it WRITE-only. A single writer truncates via its own handle
+    // and skips the extra round-trip; an empty file has no writer at all and
+    // relies on the pre-create alone.
+    let open_flags = if regions.len() == 1 {
+        OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE
+    } else {
+        let sftp = sftp_arc.lock().await;
+        let mut f = sftp
+            .open_with_flags(
+                remote_path,
+                OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+            )
+            .await
+            .map_err(|e| SftpError::RemoteIoError(format!("Cannot write to {remote_path}: {e}")))?;
+        f.shutdown()
+            .await
+            .map_err(|e| SftpError::RemoteIoError(format!("Cannot write to {remote_path}: {e}")))?;
+        OpenFlags::WRITE
     };
 
-    // Stream the bytes. A failure *here* (cancellation, a dropped connection
-    // mid-write, a local read error) leaves a truncated/partial file on the
-    // remote, so the result is inspected below and the partial removed
-    // best-effort. The closing `shutdown()` is deliberately kept OUT of this
-    // block: once every byte is written the remote file is complete, and a
-    // failure to cleanly close the handle must NOT delete a fully-uploaded
-    // file (that would be data loss).
-    let stream_result = async {
-        let mut buf = vec![0u8; CHUNK_SIZE];
-        loop {
-            if cancel_token.is_cancelled() {
-                return Err(SftpError::TransferCancelled);
-            }
+    let ctx = Arc::new(UploadFileCtx {
+        jobs: jobs.clone(),
+        job_id: job_id.to_string(),
+        sftp_arc: sftp_arc.clone(),
+        local_path: local_path.to_path_buf(),
+        remote_path: remote_path.to_string(),
+        open_flags,
+        cancel_token: cancel_token.clone(),
+        app_handle: app_handle.clone(),
+    });
 
-            let n = local_file
-                .read(&mut buf)
-                .await
-                .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
-            if n == 0 {
-                break;
-            }
+    let tasks: Vec<_> = regions
+        .into_iter()
+        .map(|(start, end)| tokio::spawn(upload_region(ctx.clone(), start, end)))
+        .collect();
 
-            remote_file
-                .write_all(&buf[..n])
-                .await
-                .map_err(|e| SftpError::RemoteIoError(e.to_string()))?;
-
-            update_progress(jobs, job_id, n as u64, cancel_token, app_handle)?;
+    let mut results = Vec::with_capacity(tasks.len());
+    for t in tasks {
+        let r = match t.await {
+            Ok(r) => r,
+            // Task panicked/aborted mid-write — assume the file is partial.
+            Err(join_err) => Err(RegionError {
+                err: SftpError::RemoteIoError(join_err.to_string()),
+                write_complete: false,
+            }),
+        };
+        // Abort the remaining regions as soon as bytes are known to be
+        // missing. A close-only failure lets them finish: the file may still
+        // come out complete, and it must then be kept.
+        if matches!(&r, Err(re) if !re.write_complete) {
+            cancel_token.cancel();
         }
-        Ok(())
+        results.push(r);
     }
-    .await;
 
-    if let Err(e) = stream_result {
-        // The transfer failed mid-stream. Best-effort cleanup of the partial
-        // remote file (this open handle is closed first so servers that reject
-        // remove-while-open still succeed). On a dropped connection the remove
-        // itself fails, which is fine. Note: when overwriting an existing file
-        // the original was already truncated by OPEN(TRUNCATE), so removing the
-        // partial is the better of two lossy outcomes.
-        let _ = remote_file.shutdown().await;
-        let sftp = sftp_arc.lock().await;
-        let _ = sftp.remove_file(remote_path).await;
+    let (first_err, remove_partial) = fold_region_results(results);
+    if let Some(e) = first_err {
+        // Best-effort cleanup of the partial remote file; on a dropped
+        // connection the remove itself fails, which is fine. When overwriting
+        // an existing file the original was already truncated at open, so
+        // removing the partial is the better of two lossy outcomes.
+        if remove_partial {
+            let sftp = sftp_arc.lock().await;
+            let _ = sftp.remove_file(remote_path).await;
+        }
         return Err(e);
     }
 
-    // Stream succeeded — close the handle. A close error is surfaced but does
-    // NOT trigger deletion: the bytes are all there.
-    remote_file
-        .shutdown()
-        .await
-        .map_err(|e| SftpError::RemoteIoError(e.to_string()))?;
-
-    // Mark this file done.
     if let Some(mut job) = jobs.get_mut(job_id) {
         job.files_done += 1;
     }
+    Ok(())
+}
 
+/// Upload bytes `[start, end)` of the local file through its own remote
+/// handle. On failure, reports whether the region's writes had all completed
+/// (see [`RegionError`]).
+async fn upload_region(ctx: Arc<UploadFileCtx>, start: u64, end: u64) -> Result<(), RegionError> {
+    use tokio::io::AsyncSeekExt;
+
+    let incomplete = |err: SftpError| RegionError {
+        err,
+        write_complete: false,
+    };
+    let local_ctx = |e: &dyn std::fmt::Display| {
+        SftpError::LocalIoError(format!("Cannot read {}: {e}", ctx.local_path.display()))
+    };
+    let remote_ctx = |e: &dyn std::fmt::Display| {
+        SftpError::RemoteIoError(format!("Cannot write to {}: {e}", ctx.remote_path))
+    };
+
+    let mut local_file = tokio::fs::File::open(&ctx.local_path)
+        .await
+        .map_err(|e| incomplete(local_ctx(&e)))?;
+    local_file
+        .seek(std::io::SeekFrom::Start(start))
+        .await
+        .map_err(|e| incomplete(local_ctx(&e)))?;
+
+    let mut remote_file = {
+        let sftp = ctx.sftp_arc.lock().await;
+        sftp.open_with_flags(&ctx.remote_path, ctx.open_flags)
+            .await
+            .map_err(|e| incomplete(remote_ctx(&e)))?
+    };
+    remote_file
+        .seek(std::io::SeekFrom::Start(start))
+        .await
+        .map_err(|e| incomplete(remote_ctx(&e)))?;
+
+    copy_region(
+        &mut local_file,
+        &mut remote_file,
+        end - start,
+        &ctx.cancel_token,
+        |n| {
+            update_progress(
+                &ctx.jobs,
+                &ctx.job_id,
+                n,
+                &ctx.cancel_token,
+                &ctx.app_handle,
+            )
+        },
+    )
+    .await
+    .map_err(|err| {
+        incomplete(match err {
+            SftpError::LocalIoError(msg) => local_ctx(&msg),
+            SftpError::RemoteIoError(msg) => remote_ctx(&msg),
+            other => other,
+        })
+    })?;
+
+    // Every byte is written and acked past this point: a close failure is
+    // surfaced but must not count as a partial upload.
+    remote_file.shutdown().await.map_err(|e| RegionError {
+        err: remote_ctx(&e),
+        write_complete: true,
+    })
+}
+
+/// Pump `len` bytes from `local` into `remote` in `CHUNK_SIZE` chunks,
+/// reporting progress after every chunk. Generic over the endpoints so the
+/// copy loop is unit-testable without an SFTP session.
+///
+/// A source that runs dry before `len` bytes is an error, not EOF: regions
+/// are planned from the file size up front, and a silently short region would
+/// leave a hole of stale or zero bytes in the assembled remote file.
+async fn copy_region<R, W, F>(
+    local: &mut R,
+    remote: &mut W,
+    len: u64,
+    cancel_token: &CancellationToken,
+    mut on_progress: F,
+) -> Result<(), SftpError>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+    F: FnMut(u64) -> Result<(), SftpError>,
+{
+    let mut buf = vec![0u8; CHUNK_SIZE];
+    let mut remaining = len;
+    while remaining > 0 {
+        if cancel_token.is_cancelled() {
+            return Err(SftpError::TransferCancelled);
+        }
+        let want = buf.len().min(remaining as usize);
+        let n = local
+            .read(&mut buf[..want])
+            .await
+            .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
+        if n == 0 {
+            return Err(SftpError::LocalIoError(format!(
+                "file shrank during upload ({remaining} bytes missing)"
+            )));
+        }
+        remote
+            .write_all(&buf[..n])
+            .await
+            .map_err(|e| SftpError::RemoteIoError(e.to_string()))?;
+        remaining -= n as u64;
+        on_progress(n as u64)?;
+    }
     Ok(())
 }
 
@@ -1349,5 +1539,318 @@ mod tests {
         let info = job.to_info();
         // Speed is 0 => cannot compute ETA
         assert_eq!(info.eta_secs, None);
+    }
+
+    // ─── plan_upload_regions ──────────────────────────────────────────────
+
+    const C: u64 = CHUNK_SIZE as u64;
+
+    #[test]
+    fn plan_regions_empty_file_has_no_regions() {
+        assert!(plan_upload_regions(0).is_empty());
+    }
+
+    #[test]
+    fn plan_regions_small_files_get_a_single_region() {
+        for size in [1, C - 1, C, 2 * C - 1] {
+            assert_eq!(plan_upload_regions(size), vec![(0, size)], "size {size}");
+        }
+    }
+
+    #[test]
+    fn plan_regions_depth_scales_with_size_up_to_pipeline_depth() {
+        // 2 chunks => 2C/C + 1 = 3 regions; large files cap at PIPELINE_DEPTH.
+        assert_eq!(plan_upload_regions(2 * C).len(), 3);
+        assert_eq!(plan_upload_regions(100 * C).len(), PIPELINE_DEPTH as usize);
+    }
+
+    #[test]
+    fn plan_regions_cover_the_file_exactly_without_overlap() {
+        let sizes = [
+            1,
+            2,
+            C - 1,
+            C,
+            C + 1,
+            2 * C,
+            2 * C + 1,
+            3 * C,
+            4 * C,
+            10 * C + 7,
+            1_000_000_007,
+        ];
+        for size in sizes {
+            let regions = plan_upload_regions(size);
+            assert!(!regions.is_empty(), "size {size}");
+            assert!(regions.len() <= PIPELINE_DEPTH as usize, "size {size}");
+            assert_eq!(regions.first().unwrap().0, 0, "size {size}");
+            assert_eq!(regions.last().unwrap().1, size, "size {size}");
+            for (start, end) in &regions {
+                assert!(start < end, "empty region at size {size}");
+            }
+            for pair in regions.windows(2) {
+                assert_eq!(pair[0].1, pair[1].0, "gap/overlap at size {size}");
+            }
+        }
+    }
+
+    // ─── copy_region ──────────────────────────────────────────────────────
+
+    use std::io::Cursor;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    /// Deterministic non-repeating-ish payload so region mixups show up as
+    /// content mismatches, not just length mismatches.
+    fn test_data(len: usize) -> Vec<u8> {
+        (0..len).map(|i| (i % 251) as u8).collect()
+    }
+
+    /// Reader that serves at most `max` bytes per read call, to exercise the
+    /// short-read accounting of the copy loop.
+    struct TrickleReader {
+        inner: Cursor<Vec<u8>>,
+        max: usize,
+    }
+
+    impl AsyncRead for TrickleReader {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let cap = self.max.min(buf.remaining());
+            let mut tmp = vec![0u8; cap];
+            let n = std::io::Read::read(&mut self.inner, &mut tmp).unwrap();
+            buf.put_slice(&tmp[..n]);
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// Writer that accepts `accept` bytes and then fails, to simulate a
+    /// connection dropped mid-region.
+    struct FailingWriter {
+        written: usize,
+        accept: usize,
+    }
+
+    impl AsyncWrite for FailingWriter {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            if self.written + buf.len() > self.accept {
+                return Poll::Ready(Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "connection lost",
+                )));
+            }
+            self.written += buf.len();
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn copy_region_copies_exact_bytes_and_reports_progress() {
+        let data = test_data(3 * CHUNK_SIZE + 17);
+        let mut src = Cursor::new(data.clone());
+        let mut dst = Cursor::new(Vec::new());
+        let token = CancellationToken::new();
+        let mut progressed = 0u64;
+
+        copy_region(&mut src, &mut dst, data.len() as u64, &token, |n| {
+            progressed += n;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(dst.into_inner(), data);
+        assert_eq!(progressed, data.len() as u64);
+    }
+
+    #[tokio::test]
+    async fn copy_region_handles_short_reads() {
+        // 10_000 bytes served 337 bytes at a time: the loop must keep reading
+        // until the region is complete, not treat a short read as EOF.
+        let data = test_data(10_000);
+        let mut src = TrickleReader {
+            inner: Cursor::new(data.clone()),
+            max: 337,
+        };
+        let mut dst = Cursor::new(Vec::new());
+        let token = CancellationToken::new();
+
+        copy_region(&mut src, &mut dst, data.len() as u64, &token, |_| Ok(()))
+            .await
+            .unwrap();
+
+        assert_eq!(dst.into_inner(), data);
+    }
+
+    #[tokio::test]
+    async fn copy_region_errors_when_source_runs_dry() {
+        // Region planned for 1000 bytes but the file only has 400 left — a
+        // silent break would leave a hole in the assembled remote file.
+        let mut src = Cursor::new(test_data(400));
+        let mut dst = Cursor::new(Vec::new());
+        let token = CancellationToken::new();
+
+        let err = copy_region(&mut src, &mut dst, 1000, &token, |_| Ok(()))
+            .await
+            .unwrap_err();
+
+        match err {
+            SftpError::LocalIoError(msg) => assert!(msg.contains("shrank"), "got: {msg}"),
+            other => panic!("expected LocalIoError, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn copy_region_stops_immediately_when_already_cancelled() {
+        let mut src = Cursor::new(test_data(1000));
+        let mut dst = Cursor::new(Vec::new());
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let err = copy_region(&mut src, &mut dst, 1000, &token, |_| Ok(()))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, SftpError::TransferCancelled));
+        assert!(dst.into_inner().is_empty());
+    }
+
+    #[tokio::test]
+    async fn copy_region_stops_at_next_chunk_after_cancellation() {
+        // Trickle 100 bytes per read out of 1000 and cancel from the first
+        // progress callback: exactly one chunk may land, never the rest.
+        let mut src = TrickleReader {
+            inner: Cursor::new(test_data(1000)),
+            max: 100,
+        };
+        let mut dst = Cursor::new(Vec::new());
+        let token = CancellationToken::new();
+        let cancel_from_progress = token.clone();
+
+        let err = copy_region(&mut src, &mut dst, 1000, &token, |_| {
+            cancel_from_progress.cancel();
+            Ok(())
+        })
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, SftpError::TransferCancelled));
+        assert_eq!(dst.into_inner().len(), 100);
+    }
+
+    #[tokio::test]
+    async fn copy_region_surfaces_write_failures() {
+        let data = test_data(2 * CHUNK_SIZE);
+        let mut src = Cursor::new(data);
+        let mut dst = FailingWriter {
+            written: 0,
+            accept: CHUNK_SIZE,
+        };
+        let token = CancellationToken::new();
+
+        let err = copy_region(&mut src, &mut dst, (2 * CHUNK_SIZE) as u64, &token, |_| {
+            Ok(())
+        })
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, SftpError::RemoteIoError(_)));
+    }
+
+    #[tokio::test]
+    async fn copy_region_propagates_progress_errors() {
+        let mut src = Cursor::new(test_data(100));
+        let mut dst = Cursor::new(Vec::new());
+        let token = CancellationToken::new();
+
+        let err = copy_region(&mut src, &mut dst, 100, &token, |_| {
+            Err(SftpError::ChannelError("progress sink gone".into()))
+        })
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, SftpError::ChannelError(_)));
+    }
+
+    #[tokio::test]
+    async fn planned_regions_reassemble_into_identical_file() {
+        // End-to-end over the pure pieces: plan regions for a multi-region
+        // file, copy each independently, reassemble by offset, compare.
+        let data = test_data(3 * CHUNK_SIZE + 1234);
+        let regions = plan_upload_regions(data.len() as u64);
+        assert!(regions.len() > 1);
+
+        let token = CancellationToken::new();
+        let mut assembled = vec![0u8; data.len()];
+        for &(start, end) in &regions {
+            let mut src = Cursor::new(data[start as usize..end as usize].to_vec());
+            let mut dst = Cursor::new(Vec::new());
+            copy_region(&mut src, &mut dst, end - start, &token, |_| Ok(()))
+                .await
+                .unwrap();
+            assembled[start as usize..end as usize].copy_from_slice(&dst.into_inner());
+        }
+
+        assert_eq!(assembled, data);
+    }
+
+    // ─── fold_region_results ──────────────────────────────────────────────
+
+    fn region_err(msg: &str, write_complete: bool) -> Result<(), RegionError> {
+        Err(RegionError {
+            err: SftpError::RemoteIoError(msg.into()),
+            write_complete,
+        })
+    }
+
+    #[test]
+    fn fold_all_ok_keeps_file_and_no_error() {
+        let (err, remove) = fold_region_results(vec![Ok(()), Ok(()), Ok(())]);
+        assert!(err.is_none());
+        assert!(!remove);
+    }
+
+    #[test]
+    fn fold_close_only_failure_surfaces_error_but_keeps_file() {
+        // Every byte was written and acked; only a handle close failed. The
+        // remote file is complete — deleting it would be data loss.
+        let (err, remove) = fold_region_results(vec![Ok(()), region_err("close failed", true)]);
+        assert!(err.is_some());
+        assert!(!remove);
+    }
+
+    #[test]
+    fn fold_write_failure_removes_partial_file() {
+        let (err, remove) = fold_region_results(vec![Ok(()), region_err("dropped", false)]);
+        assert!(err.is_some());
+        assert!(remove);
+    }
+
+    #[test]
+    fn fold_mixed_failures_remove_file_and_report_first_error() {
+        let (err, remove) = fold_region_results(vec![
+            region_err("close failed", true),
+            region_err("dropped", false),
+        ]);
+        assert!(remove, "any incomplete region must trigger removal");
+        match err {
+            Some(SftpError::RemoteIoError(msg)) => assert_eq!(msg, "close failed"),
+            other => panic!("expected first error, got {other:?}"),
+        }
     }
 }
