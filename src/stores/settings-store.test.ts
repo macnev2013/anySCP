@@ -119,3 +119,50 @@ describe("settings-store — explorer double-click action", () => {
     expect(useSettingsStore.getState().explorerDoubleClickAction).toBe("download");
   });
 });
+
+describe("settings-store — interface monospace font", () => {
+  const DEFAULT_MONO = "'JetBrains Mono', 'Fira Code', ui-monospace, monospace";
+
+  beforeEach(() => {
+    invoke.mockReset();
+    invoke.mockResolvedValue(undefined);
+    useSettingsStore.setState({ interfaceMonoFont: DEFAULT_MONO });
+  });
+
+  it("persists a chosen mono font under its settings key", async () => {
+    useSettingsStore.getState().setInterfaceMonoFont("'Fira Code', monospace");
+    expect(useSettingsStore.getState().interfaceMonoFont).toBe("'Fira Code', monospace");
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("save_setting", {
+        key: "app_interface_mono_font",
+        value: "'Fira Code', monospace",
+      }),
+    );
+  });
+
+  it("loads a persisted mono font and defaults when the value is empty", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "load_all_settings") {
+        return [
+          ["app_interface_mono_font", "'Hack', monospace"],
+          ["editors_seeded", "true"],
+        ];
+      }
+      return undefined;
+    });
+    await useSettingsStore.getState().loadSettings();
+    expect(useSettingsStore.getState().interfaceMonoFont).toBe("'Hack', monospace");
+
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "load_all_settings") {
+        return [
+          ["app_interface_mono_font", ""],
+          ["editors_seeded", "true"],
+        ];
+      }
+      return undefined;
+    });
+    await useSettingsStore.getState().loadSettings();
+    expect(useSettingsStore.getState().interfaceMonoFont).toBe(DEFAULT_MONO);
+  });
+});
