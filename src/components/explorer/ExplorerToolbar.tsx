@@ -199,7 +199,7 @@ export const ExplorerToolbar = memo(function ExplorerToolbar({
             }
           }}
           title="Click to type a path"
-          aria-label="Edit current path"
+          aria-label="Current path"
           className={`${BREADCRUMB_BAR_CLASS} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
         >
           {segments.map((seg, index) => {

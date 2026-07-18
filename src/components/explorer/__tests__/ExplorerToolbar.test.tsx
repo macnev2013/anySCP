@@ -35,7 +35,7 @@ function renderToolbar(over: {
   return { onNavigate };
 }
 
-const pathBar = () => screen.getByLabelText("Edit current path");
+const pathBar = () => screen.getByLabelText("Current path");
 const pathInput = () => screen.getByTestId("explorer-path-input") as HTMLInputElement;
 
 function commitPath(value: string) {
