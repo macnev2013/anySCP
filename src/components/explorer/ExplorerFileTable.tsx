@@ -1067,7 +1067,9 @@ export function ExplorerFileTable({
 
       <div
         ref={tableRef}
-        className={`flex-1 overflow-y-auto${dragGhost ? " select-none" : ""}`}
+        // -scroll, not -auto: the header above reserves the scrollbar gutter,
+        // so short listings would otherwise sit 6px left of their headers.
+        className={`flex-1 overflow-y-scroll${dragGhost ? " select-none" : ""}`}
         onClick={(e) => {
           const target = e.target as Element;
           if (!target.closest("[data-entry-row]")) setSelectedIds(new Set());
