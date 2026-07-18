@@ -42,7 +42,12 @@ function MenuRow({ item, onClose }: { item: ContextMenuItem; onClose: () => void
     if (!open || !ref.current || !subRef.current) return;
     const rowRect = ref.current.getBoundingClientRect();
     const subRect = subRef.current.getBoundingClientRect();
-    setFlip(rowRect.right + subRect.width > window.innerWidth - VIEWPORT_MARGIN);
+    // Flip left only when the flyout actually fits there; when neither side
+    // fits (narrow window, wide submenu) stay right so the near edge — where
+    // the cursor is — remains on-screen.
+    const fitsRight = rowRect.right + subRect.width <= window.innerWidth - VIEWPORT_MARGIN;
+    const fitsLeft = rowRect.left - subRect.width >= VIEWPORT_MARGIN;
+    setFlip(!fitsRight && fitsLeft);
     const overflowY = rowRect.top + subRect.height - (window.innerHeight - VIEWPORT_MARGIN);
     setSubShiftY(overflowY > 0 ? -overflowY : 0);
   }, [open]);
