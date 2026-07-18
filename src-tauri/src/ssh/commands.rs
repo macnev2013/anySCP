@@ -37,7 +37,9 @@ pub async fn ssh_connect(
     state: State<'_, SshManager>,
     app_handle: AppHandle,
 ) -> Result<SessionId, SshError> {
-    state.connect(host_config, app_handle, attempt_id).await
+    state
+        .connect(host_config, app_handle, attempt_id, None)
+        .await
 }
 
 /// Abort an in-flight connection attempt identified by the frontend-supplied
@@ -553,7 +555,14 @@ pub async fn connect_saved_host(
     .map_err(|e| SshError::IoError(format!("task panicked: {e}")))??;
 
     let auth_type = auth_method_label(&config.auth_method).to_string();
-    let session_id = state.connect(config, app_handle, attempt_id).await?;
+    let session_id = state
+        .connect(
+            config,
+            app_handle.clone(),
+            attempt_id,
+            Some(host_id.clone()),
+        )
+        .await?;
 
     crate::telemetry::capture(
         "ssh_connected",
@@ -561,6 +570,16 @@ pub async fn connect_saved_host(
             "auth_type": auth_type,
         }),
     );
+
+    // Auto-start tunnels flagged `auto_start` for this host, once the SSH
+    // session is established. Runs in the background so it never delays (or
+    // fails) the connection; per-tunnel failures surface via `pf:status`.
+    {
+        let app = app_handle.clone();
+        tokio::spawn(async move {
+            crate::portforward::commands::start_auto_tunnels_for_host(app, host_id).await;
+        });
+    }
 
     Ok(session_id)
 }
@@ -608,7 +627,7 @@ fn resolve_auth_method(host_id: &str, auth_type: &str, key_path: Option<String>)
 ///
 /// A missing jump host surfaces as a clear `"tunnel host ... not found"` error
 /// rather than the generic not-found message used for the top-level host.
-fn build_host_config_blocking(
+pub(crate) fn build_host_config_blocking(
     host_id: &str,
     db: &HostDb,
     visited: &mut Vec<String>,
@@ -677,5 +696,7 @@ pub async fn connect_saved_host_no_pty(
     .await
     .map_err(|e| SshError::IoError(format!("task panicked: {e}")))??;
 
-    state.connect_no_pty(config, attempt_id).await
+    state
+        .connect_no_pty(config, attempt_id, Some(host_id))
+        .await
 }

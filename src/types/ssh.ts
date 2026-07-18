@@ -122,6 +122,15 @@ export interface HostHealthCheckResult {
 
 // ─── SSH Config Import ────────────────────────────────────────────────────────
 
+/** A port-forwarding directive parsed from an ssh_config host block. */
+export interface SshForward {
+  forward_type: "local" | "remote" | "dynamic";
+  bind_address: string;
+  listen_port: number;
+  dest_host: string;
+  dest_port: number;
+}
+
 export interface SshConfigEntry {
   host_alias: string;
   hostname: string | null;
@@ -130,6 +139,7 @@ export interface SshConfigEntry {
   identity_file: string | null;
   proxy_jump: string | null;
   keep_alive_interval: number | null;
+  forwards: SshForward[];
   is_pattern: boolean;
   already_exists: boolean;
 }

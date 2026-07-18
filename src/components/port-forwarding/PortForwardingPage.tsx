@@ -3,11 +3,12 @@ import { Plus, Trash2, ArrowRight, Search, Wifi, Pencil, Copy, Clock, Plug } fro
 import { CustomSelect } from "../shared/CustomSelect";
 import { usePortForwardStore } from "../../stores/port-forward-store";
 import { useHostsStore } from "../../stores/hosts-store";
+import { useSettingsStore } from "../../stores/settings-store";
 import { ContextMenu } from "../shared/ContextMenu";
 import { ConfirmDangerDialog } from "../shared/ConfirmDangerDialog";
 import { ModalShell, BTN_GHOST, BTN_PRIMARY } from "../shared/ModalShell";
 import type { ContextMenuItem } from "../shared/ContextMenu";
-import type { PortForwardRule, SavedHost } from "../../types";
+import type { ForwardType, PortForwardRule, SavedHost } from "../../types";
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -251,8 +252,14 @@ export function PortForwardingPage() {
                           <div className="flex items-center gap-1.5">
                             <span className="flex items-center gap-1.5 text-[length:var(--text-2xs)] font-mono text-text-muted">
                               <span>:{tunnel?.local_port ?? rule.local_port}</span>
-                              <ArrowRight size={10} strokeWidth={2} className="text-text-muted/40" />
-                              <span>:{rule.remote_port}</span>
+                              {rule.forward_type === "Dynamic" ? (
+                                <span className="text-text-muted/60">SOCKS</span>
+                              ) : (
+                                <>
+                                  <ArrowRight size={10} strokeWidth={2} className="text-text-muted/40" />
+                                  <span>:{rule.remote_port}</span>
+                                </>
+                              )}
                             </span>
                             <button
                               onClick={(e) => {
@@ -276,6 +283,11 @@ export function PortForwardingPage() {
                               <span className="flex items-center gap-1">
                                 <Clock size={10} strokeWidth={2} />
                                 {new Date(rule.last_used_at).toLocaleDateString()}
+                              </span>
+                            )}
+                            {rule.forward_type !== "Local" && (
+                              <span className="px-1 py-px rounded bg-bg-subtle text-[9px] uppercase tracking-wide font-semibold">
+                                {rule.forward_type === "Remote" ? "remote" : "socks"}
                               </span>
                             )}
                             {rule.auto_start && (
@@ -407,15 +419,25 @@ function RuleDialog({
   onCancel: () => void;
 }) {
   const isEdit = !!rule;
+  // New tunnels inherit the global "auto-start by default" preference.
+  const autoStartDefault = useSettingsStore((s) => s.tunnelsAutoStartDefault);
   const [hostId, setHostId] = useState(rule?.host_id ?? hosts[0]?.id ?? "");
+  const [forwardType, setForwardType] = useState<ForwardType>(rule?.forward_type ?? "Local");
   const [label, setLabel] = useState(rule?.label ?? "");
   const [description, setDescription] = useState(rule?.description ?? "");
   const [localPort, setLocalPort] = useState(rule ? String(rule.local_port) : "");
   const [remotePort, setRemotePort] = useState(rule ? String(rule.remote_port) : "");
   const [bindAddress, setBindAddress] = useState(rule?.bind_address ?? "127.0.0.1");
-  const [autoStart, setAutoStart] = useState(rule?.auto_start ?? false);
+  const [autoStart, setAutoStart] = useState(rule?.auto_start ?? autoStartDefault);
 
-  const canSubmit = hostId && localPort && remotePort && Number(localPort) > 0 && Number(remotePort) > 0;
+  // Dynamic (SOCKS) tunnels have no fixed destination, so the remote port is
+  // not required for them.
+  const isDynamic = forwardType === "Dynamic";
+  const canSubmit =
+    !!hostId &&
+    !!localPort &&
+    Number(localPort) > 0 &&
+    (isDynamic || (!!remotePort && Number(remotePort) > 0));
 
   const applyPreset = (port: number, presetLabel: string) => {
     setLocalPort(String(port));
@@ -430,16 +452,21 @@ function RuleDialog({
       host_id: hostId || null,
       label: label.trim() || null,
       description: description.trim() || null,
-      forward_type: "Local",
+      forward_type: forwardType,
       bind_address: bindAddress,
       local_port: Number(localPort),
-      remote_host: "localhost",
-      remote_port: Number(remotePort),
+      remote_host: isDynamic ? "" : "localhost",
+      remote_port: isDynamic ? 0 : Number(remotePort),
       auto_start: autoStart,
       last_used_at: rule?.last_used_at ?? null,
       total_bytes: rule?.total_bytes ?? 0,
     });
   };
+
+  // Per-type labels for the two port fields.
+  const localPortLabel =
+    forwardType === "Remote" ? "Remote Listen Port" : isDynamic ? "Local SOCKS Port" : "Local Port";
+  const remotePortLabel = forwardType === "Remote" ? "Local Dest Port" : "Remote Port";
 
 
   const inputClass =
@@ -486,6 +513,27 @@ function RuleDialog({
             ) : (
               <p className="text-[length:var(--text-xs)] text-text-muted py-1.5">
                 No saved hosts. Add a host first.
+              </p>
+            )}
+          </div>
+
+          {/* Forward type */}
+          <div>
+            <label htmlFor="pf-type" className={labelClass}>Type</label>
+            <CustomSelect
+              id="pf-type"
+              value={forwardType}
+              onChange={(v) => setForwardType(v as ForwardType)}
+              disabled={isEdit}
+              options={[
+                { value: "Local", label: "Local (-L) — forward a local port to a remote service" },
+                { value: "Remote", label: "Remote (-R) — forward a remote port back to this machine" },
+                { value: "Dynamic", label: "Dynamic (-D) — local SOCKS5 proxy" },
+              ]}
+            />
+            {isEdit && (
+              <p className="text-[length:var(--text-2xs)] text-text-muted mt-1">
+                Type can't be changed after creation.
               </p>
             )}
           </div>
@@ -550,7 +598,7 @@ function RuleDialog({
           {/* Port inputs */}
           <div className="flex gap-3 items-end">
             <div className="flex-1">
-              <label htmlFor="pf-local-port" className={labelClass}>Local Port</label>
+              <label htmlFor="pf-local-port" className={labelClass}>{localPortLabel}</label>
               <input
                 id="pf-local-port"
                 data-testid="rule-local-port"
@@ -564,22 +612,26 @@ function RuleDialog({
               />
             </div>
 
-            <ArrowRight size={15} strokeWidth={2} className="text-text-muted/40 mb-3 shrink-0" />
+            {!isDynamic && (
+              <>
+                <ArrowRight size={15} strokeWidth={2} className="text-text-muted/40 mb-3 shrink-0" />
 
-            <div className="flex-1">
-              <label htmlFor="pf-remote-port" className={labelClass}>Remote Port</label>
-              <input
-                id="pf-remote-port"
-                data-testid="rule-remote-port"
-                type="number"
-                value={remotePort}
-                onChange={(e) => setRemotePort(e.target.value)}
-                placeholder="5432"
-                min={1}
-                max={65535}
-                className={`${inputClass} font-mono`}
-              />
-            </div>
+                <div className="flex-1">
+                  <label htmlFor="pf-remote-port" className={labelClass}>{remotePortLabel}</label>
+                  <input
+                    id="pf-remote-port"
+                    data-testid="rule-remote-port"
+                    type="number"
+                    value={remotePort}
+                    onChange={(e) => setRemotePort(e.target.value)}
+                    placeholder="5432"
+                    min={1}
+                    max={65535}
+                    className={`${inputClass} font-mono`}
+                  />
+                </div>
+              </>
+            )}
           </div>
 
           <SectionHeader>Options</SectionHeader>
