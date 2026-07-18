@@ -39,9 +39,6 @@ pub enum TransferJobKind {
     DownloadFile {
         remote_path: String,
         local_path: PathBuf,
-        /// Cached file size captured at enqueue time; used to populate `total_bytes`.
-        #[allow(dead_code)]
-        size: u64,
     },
     DownloadDir {
         remote_path: String,
@@ -343,7 +340,6 @@ impl TransferManager {
                     TransferJobKind::DownloadFile {
                         remote_path: remote_path.clone(),
                         local_path: local_dest,
-                        size,
                     },
                     size,
                     1u32,
@@ -1513,7 +1509,6 @@ mod tests {
             kind: TransferJobKind::DownloadFile {
                 remote_path: "/remote/file.txt".to_string(),
                 local_path: PathBuf::from("/tmp/file.txt"),
-                size: 1000,
             },
             status: TransferStatus::Completed,
             bytes_transferred: 1000,
