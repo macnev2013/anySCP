@@ -5,9 +5,9 @@ import type { Update } from "@tauri-apps/plugin-updater";
 export type UpdaterStatus =
   | "idle"
   | "checking"
-  | "available"   // found, awaiting user decision (auto-update off)
+  | "available" // found, awaiting user decision (auto-update off)
   | "downloading"
-  | "ready"       // downloaded + installed, pending restart
+  | "ready" // downloaded + installed, pending restart
   | "up-to-date"
   | "error";
 
@@ -87,7 +87,9 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
     try {
       const { getVersion } = await import("@tauri-apps/api/app");
       set({ appVersion: await getVersion() });
-    } catch { /* best-effort */ }
+    } catch {
+      /* best-effort */
+    }
   },
 
   // Runs once on launch. With auto-update on, silently downloads + installs the
@@ -99,7 +101,10 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
     try {
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
-      if (!update) { set({ status: "up-to-date" }); return; }
+      if (!update) {
+        set({ status: "up-to-date" });
+        return;
+      }
 
       set({ version: update.version });
       const { autoUpdate, skippedUpdateVersion } = useSettingsStore.getState();
@@ -108,13 +113,21 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
         // downloadInstall self-guards: on a debug/dev binary it just surfaces
         // that an update exists instead of overwriting the running executable.
         await downloadInstall(update, set);
+        // Relaunch straight into the new binary
+        if (get().status === "ready") {
+          const { relaunch } = await import("@tauri-apps/plugin-process");
+          await relaunch();
+        }
       } else if (skippedUpdateVersion === update.version) {
         set({ status: "idle" });
       } else {
         set({ status: "available", dialogOpen: true });
       }
     } catch (err) {
-      set({ status: "error", error: message(err, "Failed to check for updates") });
+      set({
+        status: "error",
+        error: message(err, "Failed to check for updates"),
+      });
     }
   },
 
@@ -126,7 +139,10 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
     try {
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
-      if (!update) { set({ status: "up-to-date" }); return; }
+      if (!update) {
+        set({ status: "up-to-date" });
+        return;
+      }
 
       set({ version: update.version });
       if (useSettingsStore.getState().autoUpdate) {
@@ -135,7 +151,10 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
         set({ status: "available", dialogOpen: true });
       }
     } catch (err) {
-      set({ status: "error", error: message(err, "Failed to check for updates") });
+      set({
+        status: "error",
+        error: message(err, "Failed to check for updates"),
+      });
     }
   },
 
@@ -145,7 +164,10 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
     try {
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
-      if (!update) { set({ status: "up-to-date" }); return; }
+      if (!update) {
+        set({ status: "up-to-date" });
+        return;
+      }
       await downloadInstall(update, set);
       // downloadInstall no-ops on a non-release build (status stays
       // "available"); only relaunch once an update is actually installed.
@@ -162,7 +184,13 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
       const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
     } catch (err) {
-      set({ status: "error", error: message(err, "Couldn't restart automatically — please reopen the app") });
+      set({
+        status: "error",
+        error: message(
+          err,
+          "Couldn't restart automatically — please reopen the app",
+        ),
+      });
     }
   },
 
