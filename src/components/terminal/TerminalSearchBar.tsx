@@ -1,6 +1,8 @@
 import { useEffect, useRef, useCallback } from "react";
 import { X, ChevronUp, ChevronDown, CaseSensitive, Regex } from "lucide-react";
 import { useTerminalSearchStore } from "../../stores/terminal-search-store";
+import { useTabStore } from "../../stores/tab-store";
+import { useSessionStore } from "../../stores/session-store";
 import { getSearchAddon } from "../../stores/terminal-registry";
 
 interface TerminalSearchBarProps {
@@ -69,10 +71,15 @@ export function TerminalSearchBar({ sessionId }: TerminalSearchBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const addonRef = useRef(getSearchAddon(sessionId));
 
-  // Focus input on mount
+  const activeTabId = useTabStore((s) => s.activeTabId);
+
+  // Focus input on mount, and re-focus when the containing tab becomes
+  // active again — hiding the tab drops focus to <body>
   useEffect(() => {
-    requestAnimationFrame(() => inputRef.current?.focus());
-  }, []);
+    if (useSessionStore.getState().activeSessionId !== sessionId) return;
+    const raf = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(raf);
+  }, [activeTabId, sessionId]);
 
   // Re-resolve addon (it may load async after first render)
   useEffect(() => {
