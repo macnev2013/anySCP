@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useTabStore } from "../../stores/tab-store";
 import { useSessionStore } from "../../stores/session-store";
-import { getTerminal } from "../../stores/terminal-instances";
 import { useTerminalSearchStore } from "../../stores/terminal-search-store";
+import { useTerminalAutoFocus } from "../../hooks/use-terminal-autofocus";
 import { useSettingsStore } from "../../stores/settings-store";
 import { useUpdaterStore } from "../../stores/updater-store";
 import { useUiStore } from "../../stores/ui-store";
@@ -36,7 +36,6 @@ export function AppShell() {
   const activeTab = activeTabId ? allTabs.get(activeTabId) : null;
 
   const terminalTabs = useSessionStore((s) => s.tabs);
-  const activeSessionId = useSessionStore((s) => s.activeSessionId);
 
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
   const setEditingHostId = useUiStore((s) => s.setEditingHostId);
@@ -47,18 +46,8 @@ export function AppShell() {
     }
   }, [activeTabId, allTabs]);
 
-  // Focus the terminal
-  useEffect(() => {
-    if (!activeTab || activeTab.type !== "terminal" || !activeSessionId) return;
-    // Don't steal focus while the search bar is open for this session —
-    // misdirected keys would go into the live shell
-    if (useTerminalSearchStore.getState().openSessions.has(activeSessionId))
-      return;
-    const raf = requestAnimationFrame(() => {
-      getTerminal(activeSessionId)?.term.focus();
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [activeTab, activeSessionId]);
+  // Focus the terminal when its tab or pane becomes active
+  useTerminalAutoFocus();
 
   const openNewHost = () => setEditingHostId(NEW_HOST_ID);
 
