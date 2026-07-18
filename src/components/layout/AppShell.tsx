@@ -52,6 +52,7 @@ export function AppShell() {
   useTerminalAutoFocus();
 
   const openNewHost = () => setEditingHostId(NEW_HOST_ID);
+  const preZoomFontSizeRef = useRef<number | null>(null);
 
   const shortcuts = useMemo<ShortcutDef[]>(
     () => [
@@ -268,6 +269,55 @@ export function AppShell() {
           useUiStore.getState().toggleSnippetPanel();
         },
       },
+      // Terminal font zoom
+      {
+        key: "=",
+        meta: true,
+        action: () => {
+          const { terminalFontSize, setTerminalFontSize } =
+            useSettingsStore.getState();
+          if (preZoomFontSizeRef.current === null) {
+            preZoomFontSizeRef.current = terminalFontSize;
+          }
+          setTerminalFontSize(terminalFontSize + 1);
+        },
+        when: () =>
+          useTabStore
+            .getState()
+            .tabs.get(useTabStore.getState().activeTabId ?? "")?.type ===
+          "terminal",
+      },
+      {
+        key: "-",
+        meta: true,
+        action: () => {
+          const { terminalFontSize, setTerminalFontSize } =
+            useSettingsStore.getState();
+          if (preZoomFontSizeRef.current === null) {
+            preZoomFontSizeRef.current = terminalFontSize;
+          }
+          setTerminalFontSize(terminalFontSize - 1);
+        },
+        when: () =>
+          useTabStore
+            .getState()
+            .tabs.get(useTabStore.getState().activeTabId ?? "")?.type ===
+          "terminal",
+      },
+      {
+        key: "0",
+        meta: true,
+        action: () => {
+          const target = preZoomFontSizeRef.current ?? 14; // TODO: export DEFAULT
+          useSettingsStore.getState().setTerminalFontSize(target);
+          preZoomFontSizeRef.current = null;
+        },
+        when: () =>
+          useTabStore
+            .getState()
+            .tabs.get(useTabStore.getState().activeTabId ?? "")?.type ===
+          "terminal",
+      },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [toggleSidebar, setEditingHostId],
@@ -310,7 +360,10 @@ export function AppShell() {
   }, [interfaceFont]);
 
   useLayoutEffect(() => {
-    document.documentElement.style.setProperty("--font-mono", interfaceMonoFont);
+    document.documentElement.style.setProperty(
+      "--font-mono",
+      interfaceMonoFont,
+    );
     document.documentElement.dataset.interfaceMonoFont = interfaceMonoFont;
   }, [interfaceMonoFont]);
 
