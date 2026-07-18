@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { X, Copy, Folder, FileText, Link as LinkIcon, Loader2, AlertCircle } from "lucide-react";
 import type { ExplorerEntry, ProviderCapabilities, ChmodResult } from "../../types/explorer";
+import { ModalBackdrop } from "../shared/ModalBackdrop";
 import { formatBytes } from "../../utils/format";
 import {
   permissionsStringToOctal,
@@ -192,9 +193,10 @@ export function FilePropertiesDialog({
   const valueClass = "text-[length:var(--text-xs)] text-text-primary truncate min-w-0 flex-1";
 
   return (
-    <div
+    <ModalBackdrop
+      onClose={onClose}
+      closeDisabled={applying}
       className="fixed inset-0 z-50 flex items-center justify-center bg-bg-base/60 backdrop-blur-sm"
-      onClick={(e) => e.target === e.currentTarget && !applying && onClose()}
     >
       <div
         role="dialog"
@@ -406,6 +408,6 @@ export function FilePropertiesDialog({
           )}
         </div>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }

@@ -94,4 +94,36 @@ describe("ExplorerView — upload button", () => {
     await Promise.resolve();
     expect(enqueueCall()).toBeUndefined();
   });
+
+  it("opens the folder picker in directory mode and enqueues the selected folders", async () => {
+    dialogOpen.mockResolvedValue(["/local/projects", "/local/assets"]);
+
+    render(<ExplorerView sessionId={SESSION_ID} />);
+    fireEvent.click(await screen.findByTestId("explorer-upload-folder"));
+
+    await waitFor(() => expect(dialogOpen).toHaveBeenCalledTimes(1));
+    expect(dialogOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ directory: true, multiple: true }),
+    );
+
+    // A picked folder is handed to the same enqueue path as files; the backend
+    // recreates it remotely and walks it recursively.
+    await waitFor(() => expect(enqueueCall()).toBeDefined());
+    expect(enqueueCall()?.[1]).toEqual({
+      sftpSessionId: SESSION_ID,
+      localPaths: ["/local/projects", "/local/assets"],
+      remoteDir: CURRENT_PATH,
+    });
+  });
+
+  it("enqueues nothing when the folder picker is cancelled", async () => {
+    dialogOpen.mockResolvedValue(null);
+
+    render(<ExplorerView sessionId={SESSION_ID} />);
+    fireEvent.click(await screen.findByTestId("explorer-upload-folder"));
+
+    await waitFor(() => expect(dialogOpen).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(enqueueCall()).toBeUndefined();
+  });
 });

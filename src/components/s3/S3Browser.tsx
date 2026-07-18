@@ -301,6 +301,26 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
     } catch { /* best-effort */ }
   }, [sessionId, session]);
 
+  // Upload one or more whole folders. The picker is folder-only, so the queue
+  // recreates each folder under the current prefix and walks it recursively.
+  const handleUploadFolder = useCallback(async () => {
+    if (!session) return;
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selection = await open({ directory: true, multiple: true, title: "Upload folder" });
+      if (!selection) return;
+      const localPaths = Array.isArray(selection) ? selection : [selection];
+      if (localPaths.length === 0) return;
+
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("s3_enqueue_upload", {
+        s3SessionId: sessionId,
+        localPaths,
+        prefix: session.currentPrefix,
+      });
+    } catch { /* best-effort */ }
+  }, [sessionId, session]);
+
   // ─── Edit in external editor ───────────────────────────────────────────────
 
   const handleEditInEditor = useCallback((entry: ExplorerEntry, editor?: EditorConfig) => {
@@ -419,6 +439,7 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
         onNewFile={() => setCreatingFile(true)}
         onNewFolder={() => setCreatingFolder(true)}
         onUpload={() => void handleUpload()}
+        onUploadFolder={() => void handleUploadFolder()}
       />
 
       {/* Error banner */}

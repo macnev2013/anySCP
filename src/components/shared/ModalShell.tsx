@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef, useId } from "react";
+import { useState, useEffect, useId } from "react";
 import { X } from "lucide-react";
+import { ModalBackdrop } from "./ModalBackdrop";
 
 // ─── Shared button styles ─────────────────────────────────────────────────────
 // Import these in any modal footer so every button looks identical.
@@ -89,7 +90,6 @@ export function ModalShell({
 }: ModalShellProps) {
   const titleId = useId();
   const [visible, setVisible] = useState(false);
-  const backdropRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (open) requestAnimationFrame(() => setVisible(true));
@@ -125,9 +125,9 @@ export function ModalShell({
   const hasFooter = footer !== undefined || footerStart !== undefined;
 
   return (
-    <div
-      ref={backdropRef}
-      onClick={(e) => e.target === backdropRef.current && !busy && onClose()}
+    <ModalBackdrop
+      onClose={onClose}
+      closeDisabled={busy}
       className={[
         "fixed inset-0 z-50 flex items-start justify-center pt-[8vh]",
         "transition-[background-color,backdrop-filter] duration-[var(--duration-base)]",
@@ -195,6 +195,6 @@ export function ModalShell({
           </div>
         )}
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }

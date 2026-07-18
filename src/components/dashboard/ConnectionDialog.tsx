@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Loader2, AlertCircle, X } from "lucide-react";
+import { ModalBackdrop } from "../shared/ModalBackdrop";
 
 interface ConnectionDialogProps {
   /** Host label or user@host shown during connecting */
@@ -25,9 +26,10 @@ export function ConnectionDialog({ label, error, onClose, onRetry, onCancel }: C
   }, [onClose, onCancel, error]);
 
   return (
-    <div
+    <ModalBackdrop
+      onClose={onClose}
+      closeDisabled={!error}
       className="fixed inset-0 z-50 flex items-center justify-center bg-bg-base/60 backdrop-blur-sm"
-      onClick={(e) => e.target === e.currentTarget && error && onClose()}
     >
       <div className="w-full max-w-sm mx-4 rounded-xl bg-bg-overlay border border-border p-6 shadow-[var(--shadow-lg)] animate-[fadeIn_120ms_var(--ease-expo-out)_both]">
         {error ? (
@@ -100,6 +102,6 @@ export function ConnectionDialog({ label, error, onClose, onRetry, onCancel }: C
           </div>
         )}
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }

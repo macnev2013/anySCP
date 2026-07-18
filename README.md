@@ -24,7 +24,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License MIT"/></a>
   <a href="https://github.com/macnev2013/anySCP/stargazers"><img src="https://img.shields.io/github/stars/macnev2013/anySCP?style=social" alt="Stars"/></a>
   <img src="https://visitor-badge.laobi.icu/badge?page_id=macnev2013.anySCP&label=Views&color=blue" alt="Views"/>
-  <a href="https://discord.gg/8UuzYeNVAR"><img src="https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white" alt="Discord"/></a>
+  <a href="https://discord.gg/3xNRbNAmYb"><img src="https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white" alt="Discord"/></a>
   <a href="https://join.slack.com/t/anyscp/shared_invite/zt-40b1jsfg4-f9rq_xRof_MVQqLXSPDE2Q"><img src="https://img.shields.io/badge/Slack-Join%20us-4A154B?logo=slack&logoColor=white" alt="Slack"/></a>
 </p>
 
@@ -48,23 +48,24 @@ AnySCP is a free, open-source desktop application that combines an SSH terminal,
 
 ## ⚡ How AnySCP Compares
 
-| Feature | AnySCP | Termius | PuTTY | WinSCP | Cyberduck |
-|---------|--------|---------|-------|--------|-----------|
-| SSH Terminal | Yes | Yes | Yes | No | No |
-| SFTP Browser | Yes | Yes | No | Yes | Yes |
-| S3 Browser | Yes | No | No | No | Yes |
-| Split Panes | Yes | Yes | No | No | No |
-| Port Forwarding | Yes | Yes | Yes | No | No |
-| Command Snippets | Yes | Yes | No | No | No |
-| Cross-Platform | Yes | Yes | Windows | Windows | Yes |
-| Free (no limits) | Yes | No | Yes | Yes | Yes |
-| No Account Required | Yes | No | Yes | Yes | Yes |
-| Open Source | Yes | No | Yes | Yes | Yes (GPL) |
-| Credential Privacy | Local (OS keychain) | Cloud-synced | Local | Local | Local |
+| Feature             | AnySCP              | Termius      | PuTTY   | WinSCP  | Cyberduck |
+| ------------------- | ------------------- | ------------ | ------- | ------- | --------- |
+| SSH Terminal        | Yes                 | Yes          | Yes     | No      | No        |
+| SFTP Browser        | Yes                 | Yes          | No      | Yes     | Yes       |
+| S3 Browser          | Yes                 | No           | No      | No      | Yes       |
+| Split Panes         | Yes                 | Yes          | No      | No      | No        |
+| Port Forwarding     | Yes                 | Yes          | Yes     | No      | No        |
+| Command Snippets    | Yes                 | Yes          | No      | No      | No        |
+| Cross-Platform      | Yes                 | Yes          | Windows | Windows | Yes       |
+| Free (no limits)    | Yes                 | No           | Yes     | Yes     | Yes       |
+| No Account Required | Yes                 | No           | Yes     | Yes     | Yes       |
+| Open Source         | Yes                 | No           | Yes     | Yes     | Yes (GPL) |
+| Credential Privacy  | Local (OS keychain) | Cloud-synced | Local   | Local   | Local     |
 
 ## ✨ Features
 
 ### 💻 SSH Terminal Client
+
 - Full-featured terminal emulator powered by xterm.js with GPU-accelerated WebGL rendering
 - Split terminal panes (horizontal and vertical) within a single SSH session
 - In-terminal search with regex support
@@ -74,6 +75,7 @@ AnySCP is a free, open-source desktop application that combines an SSH terminal,
 - Import connections from `~/.ssh/config`
 
 ### 📁 SFTP File Manager
+
 - Browse, upload, download, rename, move, copy, and delete remote files and directories
 - Drag-and-drop file upload from your desktop directly into the remote file browser
 - Multi-select files with Ctrl+Click and Shift+Click for bulk operations
@@ -84,6 +86,7 @@ AnySCP is a free, open-source desktop application that combines an SSH terminal,
 - Concurrent file transfers with configurable parallelism
 
 ### ☁️ S3 Cloud Storage Browser
+
 - Connect to **Amazon S3**, **MinIO**, **Cloudflare R2**, **Backblaze B2**, **Wasabi**, **DigitalOcean Spaces**, or any S3-compatible storage service
 - Same file browser UI as SFTP -- sort, multi-select, context menus, keyboard shortcuts
 - Drag-and-drop upload with recursive directory support
@@ -94,6 +97,7 @@ AnySCP is a free, open-source desktop application that combines an SSH terminal,
 - Switch between multiple buckets within a single connection
 
 ### 🔗 Server & Connection Management
+
 - Save SSH hosts and S3 connections with labels, colors, environment tags, and notes
 - Organize connections into color-coded groups
 - Import SSH hosts from `~/.ssh/config` with one click
@@ -102,6 +106,7 @@ AnySCP is a free, open-source desktop application that combines an SSH terminal,
 - Full connection history with audit log
 
 ### 📋 Command Snippets Library
+
 - Save frequently used shell commands with labels and descriptions
 - Create parameterized command templates with `{{variable}}` placeholders
 - Organize snippets into folders
@@ -109,6 +114,7 @@ AnySCP is a free, open-source desktop application that combines an SSH terminal,
 - Full-text search across all saved snippets
 
 ### 🔀 SSH Port Forwarding
+
 - Set up local and remote SSH tunnels
 - Create, start, and stop port forwarding rules per host
 - Tunnels create their own SSH connections automatically -- no terminal session needed
@@ -116,6 +122,7 @@ AnySCP is a free, open-source desktop application that combines an SSH terminal,
 - Presets for common services (PostgreSQL, MySQL, Redis, MongoDB, HTTP, Kubernetes)
 
 ### 🔐 Security & Privacy
+
 - Credentials stored in your **OS keychain** (macOS Keychain, Windows Credential Manager, Linux libsecret/KWallet)
 - SSH private keys and passwords never leave the Rust backend process
 - Fully offline -- no internet connection required after installation
@@ -123,19 +130,20 @@ AnySCP is a free, open-source desktop application that combines an SSH terminal,
 
 ## 📸 Screenshots
 
-| Connection Manager | SSH Terminal |
-|:--:|:--:|
-| ![Connection Manager](screens/hosts.png) | ![SSH Terminal](screens/terminal.png) |
-| *Organize servers with groups, colors, and tags* | *Split panes, search, and tabbed sessions* |
+|                Connection Manager                |                SSH Terminal                |
+| :----------------------------------------------: | :----------------------------------------: |
+|     ![Connection Manager](screens/hosts.png)     |   ![SSH Terminal](screens/terminal.png)    |
+| _Organize servers with groups, colors, and tags_ | _Split panes, search, and tabbed sessions_ |
 
-| File Explorer | Command Snippets |
-|:--:|:--:|
-| ![File Explorer](screens/explorer.png) | ![Snippets](screens/snippets.png) |
-| *SFTP & S3 with drag-drop, context menus* | *Parameterized templates with quick-insert* |
+|               File Explorer               |              Command Snippets               |
+| :---------------------------------------: | :-----------------------------------------: |
+|  ![File Explorer](screens/explorer.png)   |      ![Snippets](screens/snippets.png)      |
+| _SFTP & S3 with drag-drop, context menus_ | _Parameterized templates with quick-insert_ |
 
 ## 📥 Installation
 
 ### Download
+
 1. Download the latest release from the [Releases](https://github.com/macnev2013/anySCP/releases) page
 2. Choose the right file for your platform:
    - **macOS (Apple Silicon)**: `.dmg` (aarch64)
@@ -147,9 +155,11 @@ AnySCP is a free, open-source desktop application that combines an SSH terminal,
 > **macOS note**: If you see "app is damaged", run: `xattr -cr /Applications/anyscp.app`
 
 ### Updating
+
 Already have anySCP installed? Go to **Settings → About & Updates** and click **Check** to update in-app — or turn on **Automatic Updates** to install new releases automatically.
 
 ### Requirements
+
 - macOS 11+, Windows 10+, or Linux (Ubuntu 22.04+)
 - For SFTP: SSH access to remote servers
 - For S3: Access key and secret key (or S3-compatible credentials)
@@ -157,6 +167,7 @@ Already have anySCP installed? Go to **Settings → About & Updates** and click 
 ## 🔨 Building
 
 ### Prerequisites
+
 - [Node.js](https://nodejs.org) 18+
 - [pnpm](https://pnpm.io)
 - [Rust](https://rustup.rs) (latest stable)
@@ -181,15 +192,15 @@ pnpm tauri build
 
 ## 🛠 Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Desktop runtime | [Tauri v2](https://v2.tauri.app) |
-| Backend | Rust (tokio, russh, russh-sftp, rust-s3, rusqlite) |
-| Frontend | React 19, TypeScript (strict), Tailwind CSS v4 |
-| Terminal | xterm.js with WebGL renderer |
-| State management | Zustand |
-| Credential storage | OS keychain via `keyring` crate |
-| Database | SQLite (bundled, zero config) |
+| Layer              | Technology                                         |
+| ------------------ | -------------------------------------------------- |
+| Desktop runtime    | [Tauri v2](https://v2.tauri.app)                   |
+| Backend            | Rust (tokio, russh, russh-sftp, rust-s3, rusqlite) |
+| Frontend           | React 19, TypeScript (strict), Tailwind CSS v4     |
+| Terminal           | xterm.js with WebGL renderer                       |
+| State management   | Zustand                                            |
+| Credential storage | OS keychain via `keyring` crate                    |
+| Database           | SQLite (bundled, zero config)                      |
 
 ## 🏗 Architecture
 
@@ -243,20 +254,24 @@ Please open an issue first to discuss what you'd like to change.
 ## 🐛 Troubleshooting
 
 ### SSH Connection Issues
+
 - **Can't connect**: Verify host, port, username, and credentials
 - **Authentication failed**: Check password or SSH key permissions
 - **Timeout**: Check firewall settings and network connectivity
 
 ### S3 Connection Issues
+
 - **Access Denied**: Verify your access key and secret key are correct
 - **Bucket not found**: Check the bucket name and region settings
 - **Invalid credentials**: Ensure IAM user has S3 permissions
 
 ### File Operations
+
 - **Permission denied**: Ensure your user has appropriate file permissions
 - **Upload failed**: Check available disk space on remote server
 
 ### macOS
+
 - **"App is damaged"**: Run `xattr -cr /Applications/anyscp.app`
 
 ## 📄 License
@@ -272,7 +287,7 @@ This project is licensed under the MIT License -- see the [LICENSE](LICENSE) fil
 
 ## 💬 Support
 
-- **Discord**: [Join our community](https://discord.gg/8UuzYeNVAR)
+- **Discord**: [Join our community](https://discord.gg/3xNRbNAmYb)
 - **Slack**: [Join our workspace](https://join.slack.com/t/anyscp/shared_invite/zt-40b1jsfg4-f9rq_xRof_MVQqLXSPDE2Q)
 - **Issues**: [GitHub Issues](https://github.com/macnev2013/anySCP/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/macnev2013/anySCP/discussions)

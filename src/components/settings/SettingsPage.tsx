@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { ModalShell, BTN_GHOST, BTN_PRIMARY, BTN_DANGER } from "../shared/ModalShell";
+import { ModalBackdrop } from "../shared/ModalBackdrop";
 import { useSettingsStore } from "../../stores/settings-store";
 import { CustomSelect, type SelectOption } from "../shared/CustomSelect";
 import { useUpdaterStore } from "../../stores/updater-store";
@@ -121,7 +122,7 @@ export function SettingsPage() {
         </nav>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto bg-bg-base">
+        <div className="flex-1 overflow-y-scroll bg-bg-base">
           <div className="max-w-4xl mx-auto px-8 py-6">
             {/* Section header */}
             <div className="mb-6">
@@ -223,6 +224,27 @@ const TERMINAL_FONT_CANDIDATES: FontCandidate[] = [
   { value: "'Ubuntu Mono', monospace", label: "Ubuntu Mono", family: "Ubuntu Mono" },
 ];
 
+// Monospace candidates for the UI (`--font-mono`: permissions, paths, kbd,
+// snippets, addresses). JetBrains Mono (the default) is bundled; "System UI"
+// uses the OS UI monospace (`ui-monospace`). The rest are common system fonts,
+// filtered to those actually installed.
+const INTERFACE_MONO_FONT_CANDIDATES: FontCandidate[] = [
+  { value: "'JetBrains Mono', 'Fira Code', ui-monospace, monospace", label: "JetBrains Mono (Default)" },
+  { value: "ui-monospace, monospace", label: "System UI" },
+  { value: "'Cascadia Code', monospace", label: "Cascadia Code", family: "Cascadia Code" },
+  { value: "'Cascadia Mono', monospace", label: "Cascadia Mono", family: "Cascadia Mono" },
+  { value: "'Consolas', monospace", label: "Consolas", family: "Consolas" },
+  { value: "'DejaVu Sans Mono', monospace", label: "DejaVu Sans Mono", family: "DejaVu Sans Mono" },
+  { value: "'Fira Code', monospace", label: "Fira Code", family: "Fira Code" },
+  { value: "'Hack', monospace", label: "Hack", family: "Hack" },
+  { value: "'IBM Plex Mono', monospace", label: "IBM Plex Mono", family: "IBM Plex Mono" },
+  { value: "'Menlo', monospace", label: "Menlo", family: "Menlo" },
+  { value: "'Roboto Mono', monospace", label: "Roboto Mono", family: "Roboto Mono" },
+  { value: "'SF Mono', monospace", label: "SF Mono", family: "SF Mono" },
+  { value: "'Source Code Pro', monospace", label: "Source Code Pro", family: "Source Code Pro" },
+  { value: "'Ubuntu Mono', monospace", label: "Ubuntu Mono", family: "Ubuntu Mono" },
+];
+
 /**
  * Whether a named font is actually installed. document.fonts.check() is
  * unreliable (it returns true for unknown names), so measure a test string:
@@ -287,8 +309,11 @@ function AppearanceSettings() {
   const setAccentCustom = useSettingsStore((s) => s.setAccentCustom);
   const interfaceFont = useSettingsStore((s) => s.interfaceFont);
   const setInterfaceFont = useSettingsStore((s) => s.setInterfaceFont);
+  const interfaceMonoFont = useSettingsStore((s) => s.interfaceMonoFont);
+  const setInterfaceMonoFont = useSettingsStore((s) => s.setInterfaceMonoFont);
 
   const fontOptions = useInstalledFontOptions(INTERFACE_FONT_CANDIDATES, interfaceFont);
+  const monoFontOptions = useInstalledFontOptions(INTERFACE_MONO_FONT_CANDIDATES, interfaceMonoFont);
 
   const [wheelOpen, setWheelOpen] = useState(false);
   const customRef = useRef<HTMLDivElement>(null);
@@ -435,6 +460,22 @@ function AppearanceSettings() {
           onChange={setInterfaceFont}
           options={fontOptions}
           className="w-44"
+          previewOptionFont
+        />
+      </SettingRow>
+      <SettingRow>
+        <div>
+          <p className={LABEL_CLASS}>Interface Monospace Font</p>
+          <p className={DESC_CLASS}>Font for paths, permissions, and code (not the terminal)</p>
+        </div>
+        <CustomSelect
+          id="s-interface-mono-font"
+          data-testid="s-interface-mono-font"
+          value={interfaceMonoFont}
+          onChange={setInterfaceMonoFont}
+          options={monoFontOptions}
+          className="w-44"
+          previewOptionFont
         />
       </SettingRow>
     </SettingsGroup>
@@ -543,6 +584,7 @@ function TerminalSettings() {
             onChange={setFontFamily}
             options={termFontOptions}
             className="w-44"
+            previewOptionFont
           />
         </SettingRow>
 
@@ -1181,7 +1223,6 @@ function AddEditorModal({ open, onClose, onAdd }: {
   const [args, setArgs] = useState("{path}");
   const [visible, setVisible] = useState(false);
 
-  const backdropRef = useRef<HTMLDivElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
 
   // Reset fields and play the open transition each time it's shown.
@@ -1231,9 +1272,8 @@ function AddEditorModal({ open, onClose, onAdd }: {
   if (!open) return null;
 
   return (
-    <div
-      ref={backdropRef}
-      onClick={(e) => { if (e.target === backdropRef.current) onClose(); }}
+    <ModalBackdrop
+      onClose={onClose}
       className={[
         "fixed inset-0 z-50 flex items-start justify-center pt-[8vh]",
         "transition-[background-color,backdrop-filter] duration-[var(--duration-base)]",
@@ -1338,7 +1378,7 @@ function AddEditorModal({ open, onClose, onAdd }: {
           </button>
         </div>
       </form>
-    </div>
+    </ModalBackdrop>
   );
 }
 

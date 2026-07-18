@@ -1,4 +1,10 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
+import {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useCallback,
+} from "react";
 import {
   Folder,
   FileText,
@@ -20,11 +26,19 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { ModalShell, BTN_GHOST, BTN_DANGER } from "../shared/ModalShell";
-import type { ExplorerEntry, ExplorerClipboard, FileSystemProvider, ChmodResult } from "../../types/explorer";
+import type {
+  ExplorerEntry,
+  ExplorerClipboard,
+  FileSystemProvider,
+  ChmodResult,
+} from "../../types/explorer";
 import { ContextMenu } from "../shared/ContextMenu";
 import type { ContextMenuItem } from "../shared/ContextMenu";
 import { formatBytes } from "../../utils/format";
-import { useSettingsStore, type EditorConfig } from "../../stores/settings-store";
+import {
+  useSettingsStore,
+  type EditorConfig,
+} from "../../stores/settings-store";
 import { isEditableInEditor } from "../../lib/file-types";
 import { FilePropertiesDialog } from "./FilePropertiesDialog";
 
@@ -35,7 +49,10 @@ interface ExplorerFileTableProps {
   entries: ExplorerEntry[];
   sortBy: "name" | "size" | "modified";
   sortAsc: boolean;
-  onSortChange: (sortBy: "name" | "size" | "modified", sortAsc: boolean) => void;
+  onSortChange: (
+    sortBy: "name" | "size" | "modified",
+    sortAsc: boolean,
+  ) => void;
   clipboard: ExplorerClipboard | null;
   onSetClipboard: (clipboard: ExplorerClipboard | null) => void;
   onNavigate: (path: string) => void;
@@ -84,28 +101,65 @@ interface ContextMenuState {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+// Fixed-width timestamp so rows never wrap: zero-pad day/hour, and format the
+// date and time separately to drop the locale's "at" joiner. `undefined` locale
+// keeps month/day order and 12h/24h OS-aware. Formatters are hoisted — each
+// toLocale* call constructs an Intl.DateTimeFormat, and this runs twice per
+// row (title + text) on every render of large directories.
+const MODIFIED_DATE_FMT = new Intl.DateTimeFormat(undefined, {
+  year: "numeric",
+  month: "short",
+  day: "2-digit",
+});
+const MODIFIED_TIME_FMT = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+});
 function formatModified(unix: number | null): string {
   if (unix === null) return "—";
-  return new Date(unix * 1000).toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  const date = new Date(unix * 1000);
+  return `${MODIFIED_DATE_FMT.format(date)} ${MODIFIED_TIME_FMT.format(date)}`;
 }
 
 function EntryIcon({ entry }: { entry: ExplorerEntry }) {
   if (entry.isSymlink) {
-    return <LinkIcon size={16} strokeWidth={1.8} className="text-accent shrink-0" aria-hidden="true" />;
+    return (
+      <LinkIcon
+        size={16}
+        strokeWidth={1.8}
+        className="text-accent shrink-0"
+        aria-hidden="true"
+      />
+    );
   }
   switch (entry.entryType) {
     case "Directory":
-      return <Folder size={16} strokeWidth={1.8} className="text-accent shrink-0" aria-hidden="true" />;
+      return (
+        <Folder
+          size={16}
+          strokeWidth={1.8}
+          className="text-accent shrink-0"
+          aria-hidden="true"
+        />
+      );
     case "File":
-      return <FileText size={16} strokeWidth={1.6} className="text-text-muted shrink-0" aria-hidden="true" />;
+      return (
+        <FileText
+          size={16}
+          strokeWidth={1.6}
+          className="text-text-muted shrink-0"
+          aria-hidden="true"
+        />
+      );
     default:
-      return <File size={16} strokeWidth={1.6} className="text-text-muted shrink-0" aria-hidden="true" />;
+      return (
+        <File
+          size={16}
+          strokeWidth={1.6}
+          className="text-text-muted shrink-0"
+          aria-hidden="true"
+        />
+      );
   }
 }
 
@@ -180,13 +234,19 @@ function NewFolderRow({
 
   const commit = () => {
     const name = value.trim();
-    if (name) onCommit(name); else onCancel();
+    if (name) onCommit(name);
+    else onCancel();
   };
 
   return (
     <div className="flex items-center gap-2 px-3 py-2 bg-accent/5">
       <span className="w-5 flex items-center justify-center shrink-0">
-        <Folder size={16} strokeWidth={1.8} className="text-accent" aria-hidden="true" />
+        <Folder
+          size={16}
+          strokeWidth={1.8}
+          className="text-accent"
+          aria-hidden="true"
+        />
       </span>
       <input
         ref={inputRef}
@@ -230,13 +290,19 @@ function NewFileRow({
 
   const commit = () => {
     const name = value.trim();
-    if (name) onCommit(name); else onCancel();
+    if (name) onCommit(name);
+    else onCancel();
   };
 
   return (
     <div className="flex items-center gap-2 px-3 py-2 bg-accent/5">
       <span className="w-5 flex items-center justify-center shrink-0">
-        <FileText size={16} strokeWidth={1.6} className="text-text-muted" aria-hidden="true" />
+        <FileText
+          size={16}
+          strokeWidth={1.6}
+          className="text-text-muted"
+          aria-hidden="true"
+        />
       </span>
       <input
         ref={inputRef}
@@ -298,10 +364,14 @@ export function ExplorerFileTable({
   const caps = provider.capabilities;
   const editors = useSettingsStore((s) => s.editors);
   const defaultEditorId = useSettingsStore((s) => s.defaultEditorId);
-  const doubleClickAction = useSettingsStore((s) => s.explorerDoubleClickAction);
+  const doubleClickAction = useSettingsStore(
+    (s) => s.explorerDoubleClickAction,
+  );
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<ExplorerEntry[] | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<ExplorerEntry[] | null>(
+    null,
+  );
   const [propsEntry, setPropsEntry] = useState<ExplorerEntry | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const lastClickedId = useRef<string | null>(null);
@@ -311,7 +381,12 @@ export function ExplorerFileTable({
   // enabled (for file-drop uploads), which suppresses HTML5 drag events in the
   // webview — so internal move/copy is driven by pointer events, not `draggable`.
   const [dragOverId, setDragOverId] = useState<string | null>(null);
-  const [dragGhost, setDragGhost] = useState<{ x: number; y: number; count: number; copy: boolean } | null>(null);
+  const [dragGhost, setDragGhost] = useState<{
+    x: number;
+    y: number;
+    count: number;
+    copy: boolean;
+  } | null>(null);
 
   // Reset scroll to the top only when the directory actually changes. Same-dir
   // refreshes (e.g. after a chmod / rename / create) keep the scroll container
@@ -321,9 +396,11 @@ export function ExplorerFileTable({
   }, [currentPath]);
 
   // Cut entry dimming
-  const cutIds = clipboard?.operation === "cut" && clipboard.sourceSessionId === provider.sessionId
-    ? new Set(clipboard.entries.map((e) => e.id))
-    : null;
+  const cutIds =
+    clipboard?.operation === "cut" &&
+    clipboard.sourceSessionId === provider.sessionId
+      ? new Set(clipboard.entries.map((e) => e.id))
+      : null;
 
   // ─── Sort ─────────────────────────────────────────────────────────────────
 
@@ -369,13 +446,19 @@ export function ExplorerFileTable({
         setRenamingId(entry.id);
       }
     };
-    (window as unknown as {
-      __e2eExplorerStartRename?: (n: string, newName?: string) => void;
-    }).__e2eExplorerStartRename = hook;
+    (
+      window as unknown as {
+        __e2eExplorerStartRename?: (n: string, newName?: string) => void;
+      }
+    ).__e2eExplorerStartRename = hook;
     return () => {
-      (window as unknown as {
-        __e2eExplorerStartRename?: ((n: string, newName?: string) => void) | null;
-      }).__e2eExplorerStartRename = null;
+      (
+        window as unknown as {
+          __e2eExplorerStartRename?:
+            | ((n: string, newName?: string) => void)
+            | null;
+        }
+      ).__e2eExplorerStartRename = null;
     };
   }, [sortedEntries, onRename]);
 
@@ -385,18 +468,36 @@ export function ExplorerFileTable({
   // drive reliably in WebDriver). `mode` is the octal value as a number.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const hook = (name: string, mode: number, recursive = false): Promise<ChmodResult | void> | undefined => {
+    const hook = (
+      name: string,
+      mode: number,
+      recursive = false,
+    ): Promise<ChmodResult | void> | undefined => {
       const entry = sortedEntries.find((e) => e.name === name);
       if (!entry || !onApplyPermissions) return undefined;
       return onApplyPermissions(entry, mode, recursive);
     };
-    (window as unknown as {
-      __e2eExplorerChmod?: (n: string, mode: number, recursive?: boolean) => Promise<ChmodResult | void> | undefined;
-    }).__e2eExplorerChmod = hook;
+    (
+      window as unknown as {
+        __e2eExplorerChmod?: (
+          n: string,
+          mode: number,
+          recursive?: boolean,
+        ) => Promise<ChmodResult | void> | undefined;
+      }
+    ).__e2eExplorerChmod = hook;
     return () => {
-      (window as unknown as {
-        __e2eExplorerChmod?: ((n: string, mode: number, recursive?: boolean) => Promise<ChmodResult | void> | undefined) | null;
-      }).__e2eExplorerChmod = null;
+      (
+        window as unknown as {
+          __e2eExplorerChmod?:
+            | ((
+                n: string,
+                mode: number,
+                recursive?: boolean,
+              ) => Promise<ChmodResult | void> | undefined)
+            | null;
+        }
+      ).__e2eExplorerChmod = null;
     };
   }, [sortedEntries, onApplyPermissions]);
 
@@ -413,13 +514,17 @@ export function ExplorerFileTable({
       );
       setSelectedIds(ids);
     };
-    (window as unknown as {
-      __e2eExplorerSetSelection?: (names: string[]) => void;
-    }).__e2eExplorerSetSelection = hook;
+    (
+      window as unknown as {
+        __e2eExplorerSetSelection?: (names: string[]) => void;
+      }
+    ).__e2eExplorerSetSelection = hook;
     return () => {
-      (window as unknown as {
-        __e2eExplorerSetSelection?: ((names: string[]) => void) | null;
-      }).__e2eExplorerSetSelection = null;
+      (
+        window as unknown as {
+          __e2eExplorerSetSelection?: ((names: string[]) => void) | null;
+        }
+      ).__e2eExplorerSetSelection = null;
     };
   }, [sortedEntries]);
 
@@ -429,7 +534,8 @@ export function ExplorerFileTable({
     if (e.metaKey || e.ctrlKey) {
       setSelectedIds((prev) => {
         const next = new Set(prev);
-        if (next.has(entry.id)) next.delete(entry.id); else next.add(entry.id);
+        if (next.has(entry.id)) next.delete(entry.id);
+        else next.add(entry.id);
         return next;
       });
     } else if (e.shiftKey && lastClickedId.current) {
@@ -470,7 +576,9 @@ export function ExplorerFileTable({
       if ((e.target as HTMLElement).closest("input")) return;
 
       const dragEntries =
-        selectedIds.has(entry.id) && selectedIds.size > 1 ? selectedEntries : [entry];
+        selectedIds.has(entry.id) && selectedIds.size > 1
+          ? selectedEntries
+          : [entry];
       const startX = e.clientX;
       const startY = e.clientY;
       let started = false;
@@ -479,16 +587,21 @@ export function ExplorerFileTable({
       // Resolve the directory row under a point to a valid drop target id, or
       // null (not a dir, or dropping onto self / into the dragged subtree).
       const folderTargetAt = (x: number, y: number): string | null => {
-        const row = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest(
-          "[data-entry-row]",
-        ) as HTMLElement | null;
+        const row = (
+          document.elementFromPoint(x, y) as HTMLElement | null
+        )?.closest("[data-entry-row]") as HTMLElement | null;
         if (!row || row.dataset.entryType !== "Directory") return null;
         const target = entries.find(
-          (en) => en.name === row.dataset.entryName && en.entryType === "Directory",
+          (en) =>
+            en.name === row.dataset.entryName && en.entryType === "Directory",
         );
         if (!target) return null;
         const ids = dragEntries.map((s) => s.id);
-        if (ids.includes(target.id) || ids.some((p) => target.id.startsWith(p + "/"))) return null;
+        if (
+          ids.includes(target.id) ||
+          ids.some((p) => target.id.startsWith(p + "/"))
+        )
+          return null;
         return target.id;
       };
 
@@ -526,7 +639,12 @@ export function ExplorerFileTable({
             return;
           }
           setDragOverId(folderTargetAt(ev.clientX, ev.clientY));
-          setDragGhost({ x: ev.clientX, y: ev.clientY, count: dragEntries.length, copy: ev.altKey });
+          setDragGhost({
+            x: ev.clientX,
+            y: ev.clientY,
+            count: dragEntries.length,
+            copy: ev.altKey,
+          });
         }
       };
 
@@ -596,7 +714,8 @@ export function ExplorerFileTable({
     // binaries (video, images, PDFs, archives, …) fall back to download rather
     // than dumping raw bytes into the editor. It also falls back when editing
     // isn't possible (no editor configured, or the provider can't edit).
-    const defaultEditor = editors.find((e) => e.id === defaultEditorId) ?? editors[0];
+    const defaultEditor =
+      editors.find((e) => e.id === defaultEditorId) ?? editors[0];
     if (
       doubleClickAction === "open" &&
       caps.canEditInEditor &&
@@ -610,7 +729,10 @@ export function ExplorerFileTable({
     }
   };
 
-  const handleContextMenu = (e: React.MouseEvent, entry: ExplorerEntry | null) => {
+  const handleContextMenu = (
+    e: React.MouseEvent,
+    entry: ExplorerEntry | null,
+  ) => {
     e.preventDefault();
     setContextMenu({ entry, x: e.clientX, y: e.clientY });
   };
@@ -626,20 +748,44 @@ export function ExplorerFileTable({
 
   // ─── Context menu items ───────────────────────────────────────────────────
 
-  const canPaste = caps.canCopyPaste && clipboard !== null && clipboard.sourceSessionId === provider.sessionId;
+  const canPaste =
+    caps.canCopyPaste &&
+    clipboard !== null &&
+    clipboard.sourceSessionId === provider.sessionId;
 
   const buildMenuItems = (entry: ExplorerEntry | null): ContextMenuItem[] => {
     if (!entry) {
       const items: ContextMenuItem[] = [];
       if (canPaste) {
-        items.push({ label: "Paste", icon: ClipboardPaste, onClick: () => onPaste?.() });
-        items.push({ label: "", onClick: () => {}, separator: true, disabled: true });
+        items.push({
+          label: "Paste",
+          icon: ClipboardPaste,
+          onClick: () => onPaste?.(),
+        });
+        items.push({
+          label: "",
+          onClick: () => {},
+          separator: true,
+          disabled: true,
+        });
       }
       if (caps.canCreateFile) {
-        items.push({ label: "New File", icon: File, onClick: () => onCreateFile?.("") || document.dispatchEvent(new CustomEvent("explorer:new-file")) });
+        items.push({
+          label: "New File",
+          icon: File,
+          onClick: () =>
+            onCreateFile?.("") ||
+            document.dispatchEvent(new CustomEvent("explorer:new-file")),
+        });
       }
       if (caps.canCreateFolder) {
-        items.push({ label: "New Folder", icon: FolderPlus, onClick: () => onCreateFolder?.("") || document.dispatchEvent(new CustomEvent("explorer:new-folder")) });
+        items.push({
+          label: "New Folder",
+          icon: FolderPlus,
+          onClick: () =>
+            onCreateFolder?.("") ||
+            document.dispatchEvent(new CustomEvent("explorer:new-folder")),
+        });
       }
       return items;
     }
@@ -661,15 +807,29 @@ export function ExplorerFileTable({
         items.push({
           label: `Copy ${count} items`,
           icon: Copy,
-          onClick: () => onSetClipboard({ entries: selectedEntries, operation: "copy", sourceSessionId: provider.sessionId }),
+          onClick: () =>
+            onSetClipboard({
+              entries: selectedEntries,
+              operation: "copy",
+              sourceSessionId: provider.sessionId,
+            }),
         });
         items.push({
           label: `Cut ${count} items`,
           icon: Scissors,
-          onClick: () => onSetClipboard({ entries: selectedEntries, operation: "cut", sourceSessionId: provider.sessionId }),
+          onClick: () =>
+            onSetClipboard({
+              entries: selectedEntries,
+              operation: "cut",
+              sourceSessionId: provider.sessionId,
+            }),
         });
         if (canPaste) {
-          items.push({ label: "Paste", icon: ClipboardPaste, onClick: () => onPaste?.() });
+          items.push({
+            label: "Paste",
+            icon: ClipboardPaste,
+            onClick: () => onPaste?.(),
+          });
         }
       }
       if (caps.canDelete) {
@@ -686,8 +846,13 @@ export function ExplorerFileTable({
 
     // Single item context menu. Only offered when at least one editor is
     // configured (auto-seeded on first run, or added in Settings → Editors).
-    if (caps.canEditInEditor && entry.entryType !== "Directory" && editors.length > 0) {
-      const defaultEditor = editors.find((e) => e.id === defaultEditorId) ?? editors[0];
+    if (
+      caps.canEditInEditor &&
+      entry.entryType !== "Directory" &&
+      editors.length > 0
+    ) {
+      const defaultEditor =
+        editors.find((e) => e.id === defaultEditorId) ?? editors[0];
       // Primary "Edit" uses the default editor.
       items.push({
         label: `Edit in ${defaultEditor.name}`,
@@ -710,7 +875,11 @@ export function ExplorerFileTable({
 
     if (caps.canDownload) {
       if (entry.entryType !== "Directory") {
-        items.push({ label: "Download", icon: Download, onClick: () => onDownload(entry) });
+        items.push({
+          label: "Download",
+          icon: Download,
+          onClick: () => onDownload(entry),
+        });
       } else if (provider.type === "sftp") {
         items.push({
           label: "Download Folder",
@@ -729,7 +898,11 @@ export function ExplorerFileTable({
     }
 
     if (caps.canRename) {
-      items.push({ label: "Rename", icon: Pencil, onClick: () => setRenamingId(entry.id) });
+      items.push({
+        label: "Rename",
+        icon: Pencil,
+        onClick: () => setRenamingId(entry.id),
+      });
     }
 
     items.push({
@@ -743,15 +916,29 @@ export function ExplorerFileTable({
         label: "Copy",
         icon: Copy,
         separator: true,
-        onClick: () => onSetClipboard({ entries: [entry], operation: "copy", sourceSessionId: provider.sessionId }),
+        onClick: () =>
+          onSetClipboard({
+            entries: [entry],
+            operation: "copy",
+            sourceSessionId: provider.sessionId,
+          }),
       });
       items.push({
         label: "Cut",
         icon: Scissors,
-        onClick: () => onSetClipboard({ entries: [entry], operation: "cut", sourceSessionId: provider.sessionId }),
+        onClick: () =>
+          onSetClipboard({
+            entries: [entry],
+            operation: "cut",
+            sourceSessionId: provider.sessionId,
+          }),
       });
       if (canPaste) {
-        items.push({ label: "Paste", icon: ClipboardPaste, onClick: () => onPaste?.() });
+        items.push({
+          label: "Paste",
+          icon: ClipboardPaste,
+          onClick: () => onPaste?.(),
+        });
       }
     }
 
@@ -779,15 +966,27 @@ export function ExplorerFileTable({
 
   // ─── Sort indicator ───────────────────────────────────────────────────────
 
-  const SortIcon = ({ col }: { col: "name" | "size" | "modified" }) => {
-    if (sortBy !== col) return null;
-    return sortAsc
-      ? <ChevronUp size={12} strokeWidth={2.5} className="inline ml-0.5" aria-hidden="true" />
-      : <ChevronDown size={12} strokeWidth={2.5} className="inline ml-0.5" aria-hidden="true" />;
+  // The chevron is always rendered (just `invisible` when inactive) so it
+  // reserves a constant width and position — sorting never shifts the header. It
+  // sits on the side away from the label's alignment edge; a centered label gets
+  // a `col={null}` reserving-only copy on the far side to stay centered.
+  const SortArrow = ({ col, gap }: { col: "name" | "size" | "modified" | null; gap: "ml-0.5" | "mr-0.5" }) => {
+    const active = col !== null && sortBy === col;
+    const Icon = active && !sortAsc ? ChevronDown : ChevronUp;
+    return (
+      <Icon
+        size={12}
+        strokeWidth={2.5}
+        aria-hidden="true"
+        className={`inline ${gap} ${active ? "" : "invisible"}`}
+      />
+    );
   };
 
   const thClass = (col: "name" | "size" | "modified") => [
-    "text-left text-[length:var(--text-xs)] font-semibold uppercase tracking-wide text-text-muted",
+    // No text-align here — each header sets its own (buttons default to center).
+    // A hardcoded one would beat the columns' text-center in the CSS cascade.
+    "text-[length:var(--text-xs)] font-semibold uppercase tracking-wide text-text-muted",
     "cursor-pointer select-none hover:text-text-secondary transition-colors duration-[var(--duration-fast)]",
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm",
     sortBy === col ? "text-text-secondary" : "",
@@ -808,7 +1007,10 @@ export function ExplorerFileTable({
               className="flex items-center gap-3 px-3 py-2 rounded-lg animate-pulse"
             >
               <div className="w-4 h-4 rounded bg-bg-subtle shrink-0" />
-              <div className="h-3 rounded bg-bg-subtle" style={{ width: `${40 + (i % 5) * 12}%` }} />
+              <div
+                className="h-3 rounded bg-bg-subtle"
+                style={{ width: `${40 + (i % 5) * 12}%` }}
+              />
               <div className="ml-auto flex gap-8">
                 <div className="w-12 h-3 rounded bg-bg-subtle" />
                 <div className="w-16 h-3 rounded bg-bg-subtle" />
@@ -825,9 +1027,51 @@ export function ExplorerFileTable({
 
   return (
     <>
+      {/* Column header — a fixed row above the list, a sibling of the scroller
+          rather than a child, so the scroller stays a direct flex child of the
+          pane column and scrolls. The right padding reserves the scrollbar
+          gutter so the columns line up with the rows beneath. */}
+      <div className="shrink-0 bg-bg-surface border-b border-border flex items-center gap-2 py-2 pl-3 pr-[calc(0.75rem+var(--scrollbar-size))]">
+        <span className="w-5 shrink-0" />
+
+        <button
+          data-testid="explorer-sort-name"
+          className={`flex-1 text-left ${thClass("name")}`}
+          onClick={() => handleSortClick("name")}
+          aria-sort={sortBy === "name" ? (sortAsc ? "ascending" : "descending") : "none"}
+        >
+          Name <SortArrow col="name" gap="ml-0.5" />
+        </button>
+
+        <button
+          data-testid="explorer-sort-size"
+          className={`w-20 text-right ${thClass("size")}`}
+          onClick={() => handleSortClick("size")}
+          aria-sort={sortBy === "size" ? (sortAsc ? "ascending" : "descending") : "none"}
+        >
+          <SortArrow col="size" gap="mr-0.5" /> Size
+        </button>
+
+        <button
+          data-testid="explorer-sort-modified"
+          className={`w-44 text-center ${thClass("modified")}`}
+          onClick={() => handleSortClick("modified")}
+          aria-sort={sortBy === "modified" ? (sortAsc ? "ascending" : "descending") : "none"}
+        >
+          <SortArrow col="modified" gap="mr-0.5" /> Modified <SortArrow col={null} gap="ml-0.5" />
+        </button>
+
+        {/* Last column: Permissions for SFTP, Class for S3 */}
+        <span className="w-24 text-[length:var(--text-xs)] font-semibold uppercase tracking-wide text-text-muted select-none">
+          {caps.hasPermissions ? "Permissions" : caps.hasStorageClass ? "Class" : ""}
+        </span>
+      </div>
+
       <div
         ref={tableRef}
-        className={`flex-1 overflow-y-auto${dragGhost ? " select-none" : ""}`}
+        // -scroll, not -auto: the header above reserves the scrollbar gutter,
+        // so short listings would otherwise sit 6px left of their headers.
+        className={`flex-1 overflow-y-scroll${dragGhost ? " select-none" : ""}`}
         onClick={(e) => {
           const target = e.target as Element;
           if (!target.closest("[data-entry-row]")) setSelectedIds(new Set());
@@ -840,43 +1084,6 @@ export function ExplorerFileTable({
           }
         }}
       >
-        {/* Table header */}
-        <div className="sticky top-0 z-10 bg-bg-surface border-b border-border px-3 py-2 flex items-center gap-2">
-          <span className="w-5 shrink-0" />
-
-          <button
-            data-testid="explorer-sort-name"
-            className={`flex-1 ${thClass("name")}`}
-            onClick={() => handleSortClick("name")}
-            aria-sort={sortBy === "name" ? (sortAsc ? "ascending" : "descending") : "none"}
-          >
-            Name <SortIcon col="name" />
-          </button>
-
-          <button
-            data-testid="explorer-sort-size"
-            className={`w-20 text-right ${thClass("size")}`}
-            onClick={() => handleSortClick("size")}
-            aria-sort={sortBy === "size" ? (sortAsc ? "ascending" : "descending") : "none"}
-          >
-            Size <SortIcon col="size" />
-          </button>
-
-          <button
-            data-testid="explorer-sort-modified"
-            className={`w-44 ${thClass("modified")}`}
-            onClick={() => handleSortClick("modified")}
-            aria-sort={sortBy === "modified" ? (sortAsc ? "ascending" : "descending") : "none"}
-          >
-            Modified <SortIcon col="modified" />
-          </button>
-
-          {/* Last column: Permissions for SFTP, Class for S3 */}
-          <span className="w-24 text-[length:var(--text-xs)] font-semibold uppercase tracking-wide text-text-muted select-none">
-            {caps.hasPermissions ? "Permissions" : caps.hasStorageClass ? "Class" : ""}
-          </span>
-        </div>
-
         {/* New file/folder rows */}
         {creatingFile && (
           <NewFileRow
@@ -894,14 +1101,21 @@ export function ExplorerFileTable({
         {/* Rows */}
         {sortedEntries.length === 0 && !creatingFolder && !creatingFile ? (
           <div className="flex flex-col items-center justify-center flex-1 min-h-[200px] gap-3 py-12">
-            <Folder size={30} strokeWidth={1.2} className="text-text-muted/30" aria-hidden="true" />
+            <Folder
+              size={30}
+              strokeWidth={1.2}
+              className="text-text-muted/30"
+              aria-hidden="true"
+            />
             <p className="text-[length:var(--text-sm)] text-text-muted">
               This folder is empty
             </p>
             <div className="flex items-center gap-2">
               {caps.canCreateFile && (
                 <button
-                  onClick={() => document.dispatchEvent(new CustomEvent("explorer:new-file"))}
+                  onClick={() =>
+                    document.dispatchEvent(new CustomEvent("explorer:new-file"))
+                  }
                   className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[length:var(--text-xs)] font-medium text-text-muted hover:text-text-secondary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <FilePlus size={13} strokeWidth={2} aria-hidden="true" />
@@ -910,7 +1124,11 @@ export function ExplorerFileTable({
               )}
               {caps.canCreateFolder && (
                 <button
-                  onClick={() => document.dispatchEvent(new CustomEvent("explorer:new-folder"))}
+                  onClick={() =>
+                    document.dispatchEvent(
+                      new CustomEvent("explorer:new-folder"),
+                    )
+                  }
                   className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[length:var(--text-xs)] font-medium text-text-muted hover:text-text-secondary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <FolderPlus size={13} strokeWidth={2} aria-hidden="true" />
@@ -928,7 +1146,8 @@ export function ExplorerFileTable({
             aria-label="Directory contents"
             onContextMenu={(e) => {
               const target = e.target as Element;
-              if (!target.closest("[data-entry-row]")) handleContextMenu(e, null);
+              if (!target.closest("[data-entry-row]"))
+                handleContextMenu(e, null);
             }}
           >
             {sortedEntries.map((entry) => {
@@ -945,7 +1164,8 @@ export function ExplorerFileTable({
                   onClick={(e) => handleRowClick(entry, e)}
                   onDoubleClick={() => handleDoubleClick(entry)}
                   onContextMenu={(e) => {
-                    if (!selectedIds.has(entry.id)) setSelectedIds(new Set([entry.id]));
+                    if (!selectedIds.has(entry.id))
+                      setSelectedIds(new Set([entry.id]));
                     handleContextMenu(e, entry);
                   }}
                   onKeyDown={(e) => {
@@ -955,23 +1175,48 @@ export function ExplorerFileTable({
                       e.preventDefault();
                       setRenamingId(entry.id);
                     }
-                    if ((e.key === "Delete" || e.key === "Backspace") && caps.canDelete && !isInput) {
-                      if (selectedIds.size > 0) setConfirmDelete(selectedEntries);
+                    if (
+                      (e.key === "Delete" || e.key === "Backspace") &&
+                      caps.canDelete &&
+                      !isInput
+                    ) {
+                      if (selectedIds.size > 0)
+                        setConfirmDelete(selectedEntries);
                     }
                     if (!isInput && (e.metaKey || e.ctrlKey) && e.key === "a") {
                       e.preventDefault();
                       setSelectedIds(new Set(sortedEntries.map((en) => en.id)));
                     }
                     if (!isInput && caps.canCopyPaste) {
-                      if ((e.metaKey || e.ctrlKey) && e.key === "c" && selectedIds.size > 0) {
+                      if (
+                        (e.metaKey || e.ctrlKey) &&
+                        e.key === "c" &&
+                        selectedIds.size > 0
+                      ) {
                         e.preventDefault();
-                        onSetClipboard({ entries: selectedEntries, operation: "copy", sourceSessionId: provider.sessionId });
+                        onSetClipboard({
+                          entries: selectedEntries,
+                          operation: "copy",
+                          sourceSessionId: provider.sessionId,
+                        });
                       }
-                      if ((e.metaKey || e.ctrlKey) && e.key === "x" && selectedIds.size > 0) {
+                      if (
+                        (e.metaKey || e.ctrlKey) &&
+                        e.key === "x" &&
+                        selectedIds.size > 0
+                      ) {
                         e.preventDefault();
-                        onSetClipboard({ entries: selectedEntries, operation: "cut", sourceSessionId: provider.sessionId });
+                        onSetClipboard({
+                          entries: selectedEntries,
+                          operation: "cut",
+                          sourceSessionId: provider.sessionId,
+                        });
                       }
-                      if ((e.metaKey || e.ctrlKey) && e.key === "v" && canPaste) {
+                      if (
+                        (e.metaKey || e.ctrlKey) &&
+                        e.key === "v" &&
+                        canPaste
+                      ) {
                         e.preventDefault();
                         onPaste?.();
                       }
@@ -980,17 +1225,23 @@ export function ExplorerFileTable({
                   // Pointer-driven drag (HTML5 DnD is suppressed by the OS
                   // drag-drop handler). Drop on a folder = move (Alt = copy);
                   // drag out of the window = download. See handleRowPointerDown.
-                  onPointerDown={(caps.canInternalDragMove || onDragOut)
-                    ? (e) => handleRowPointerDown(e, entry)
-                    : undefined}
+                  onPointerDown={
+                    caps.canInternalDragMove || onDragOut
+                      ? (e) => handleRowPointerDown(e, entry)
+                      : undefined
+                  }
                   className={[
                     "flex items-center gap-2 px-3 py-2 cursor-default",
                     "transition-colors duration-[var(--duration-fast)]",
                     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
                     "group",
-                    isSelected ? "bg-accent/10 text-text-primary" : "hover:bg-bg-subtle",
+                    isSelected
+                      ? "bg-accent/10 text-text-primary"
+                      : "hover:bg-bg-subtle",
                     cutIds?.has(entry.id) ? "opacity-40" : "",
-                    dragOverId === entry.id ? "ring-2 ring-accent bg-accent/10" : "",
+                    dragOverId === entry.id
+                      ? "ring-2 ring-accent bg-accent/10"
+                      : "",
                   ].join(" ")}
                 >
                   {/* Icon */}
@@ -1012,24 +1263,30 @@ export function ExplorerFileTable({
                   </span>
 
                   {/* Size */}
-                  <span className="w-20 text-right text-[length:var(--text-sm)] text-text-muted shrink-0 tabular-nums">
+                  <span className="w-20 text-right text-[length:var(--text-xs)] text-text-muted shrink-0 font-mono tabular-nums whitespace-nowrap">
                     {entry.entryType === "Directory" ? "—" : formatBytes(entry.size)}
                   </span>
 
-                  {/* Modified */}
-                  <span className="w-44 text-[length:var(--text-sm)] text-text-muted shrink-0 tabular-nums">
+                  {/* Modified — centered so it doesn't crowd the right-aligned
+                      Size on its left or leave dead space before Permissions;
+                      12px because mono reads visually larger than the 14px sans.
+                      Truncate + title as a safety net for wide locales (#109). */}
+                  <span
+                    className="w-44 text-center text-[length:var(--text-xs)] text-text-muted shrink-0 font-mono tracking-tight truncate"
+                    title={formatModified(entry.modified)}
+                  >
                     {formatModified(entry.modified)}
                   </span>
 
                   {/* Permissions / Storage Class */}
                   <span
                     data-entry-perms={caps.hasPermissions ? entry.permissionsDisplay ?? "" : undefined}
-                    className="w-24 font-mono text-[length:var(--text-xs)] text-text-muted shrink-0 tracking-tight"
+                    className="w-24 font-mono text-[length:var(--text-xs)] text-text-muted shrink-0 tracking-tight whitespace-nowrap"
                   >
                     {caps.hasPermissions
-                      ? entry.permissionsDisplay ?? ""
+                      ? (entry.permissionsDisplay ?? "")
                       : caps.hasStorageClass
-                        ? entry.storageClass ?? "—"
+                        ? (entry.storageClass ?? "—")
                         : ""}
                   </span>
                 </div>
@@ -1082,7 +1339,6 @@ export function ExplorerFileTable({
   );
 }
 
-
 // ─── Delete confirm dialog ────────────────────────────────────────────────────
 
 function DeleteConfirmDialog({
@@ -1115,10 +1371,21 @@ function DeleteConfirmDialog({
       footer={
         <>
           {/* eslint-disable-next-line jsx-a11y/no-autofocus */}
-          <button autoFocus data-testid="explorer-delete-cancel" type="button" onClick={onCancel} className={BTN_GHOST}>
+          <button
+            autoFocus
+            data-testid="explorer-delete-cancel"
+            type="button"
+            onClick={onCancel}
+            className={BTN_GHOST}
+          >
             Cancel
           </button>
-          <button data-testid="explorer-delete-confirm-button" type="button" onClick={onConfirm} className={BTN_DANGER}>
+          <button
+            data-testid="explorer-delete-confirm-button"
+            type="button"
+            onClick={onConfirm}
+            className={BTN_DANGER}
+          >
             {isSingle ? "Delete" : `Delete ${count} items`}
           </button>
         </>
@@ -1127,13 +1394,18 @@ function DeleteConfirmDialog({
       <p className="text-[length:var(--text-sm)] text-text-secondary">
         {isSingle ? (
           <>
-            <span className="font-mono text-text-primary">{entry.name}</span> will be permanently deleted.
-            {entry.entryType === "Directory" && <> All contents inside will also be removed.</>}
+            <span className="font-mono text-text-primary">{entry.name}</span>{" "}
+            will be permanently deleted.
+            {entry.entryType === "Directory" && (
+              <> All contents inside will also be removed.</>
+            )}
           </>
         ) : (
           <>
             {count} items will be permanently deleted.
-            {hasDirs && <> Directories and all their contents will be removed.</>}
+            {hasDirs && (
+              <> Directories and all their contents will be removed.</>
+            )}
           </>
         )}
       </p>

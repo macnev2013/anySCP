@@ -498,8 +498,34 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         localPaths,
         remoteDir: session.currentPath,
       });
-    } catch {
-      // Upload errors surface in the transfer overlay
+    } catch (err) {
+      // Transfer errors surface in the overlay, but a rejected enqueue (e.g.
+      // unreadable local path) never creates a job there — toast it.
+      toast.error(`Upload failed: ${errorMessage(err)}`);
+    }
+  }, [sessionId, transport, session]);
+
+  // Upload one or more whole folders. The native picker is folder-only
+  // (`directory: true`), returning the selected folder paths themselves — not
+  // their contents — so `enqueue_upload` recreates each folder remotely and
+  // walks it recursively (same queue/progress path as file upload and drops).
+  const handleUploadFolder = useCallback(async () => {
+    if (!session) return;
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selection = await open({ directory: true, multiple: true, title: "Upload folder" });
+      if (!selection) return;
+      const localPaths = Array.isArray(selection) ? selection : [selection];
+      if (localPaths.length === 0) return;
+
+      await explorerInvoke(transport, "enqueue_upload", sessionId, {
+        localPaths,
+        remoteDir: session.currentPath,
+      });
+    } catch (err) {
+      // Transfer errors surface in the overlay, but a rejected enqueue (e.g.
+      // unreadable picked folder) never creates a job there — toast it.
+      toast.error(`Upload failed: ${errorMessage(err)}`);
     }
   }, [sessionId, transport, session]);
 
@@ -751,6 +777,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         onNewFile={() => setCreatingFile(true)}
         onNewFolder={() => setCreatingFolder(true)}
         onUpload={() => void handleUpload()}
+        onUploadFolder={() => void handleUploadFolder()}
         busy={busy}
         sudoMode={sudoMode}
         sudoBusy={togglingSudo}

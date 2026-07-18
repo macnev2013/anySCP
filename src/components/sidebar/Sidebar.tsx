@@ -236,6 +236,7 @@ export function Sidebar() {
       {popoverOpen && (
         <TransferPopover
           anchorRect={transferBtnRef.current?.getBoundingClientRect() ?? null}
+          triggerRef={transferBtnRef}
           onClose={handlePopoverClose}
         />
       )}

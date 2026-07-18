@@ -1,3 +1,4 @@
+import { useRef, useState, useEffect, useCallback } from "react";
 import {
   X,
   Code,
@@ -12,6 +13,9 @@ import {
   Plug,
   History,
   Settings,
+  ArrowUpDown,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { useTabStore, type UnifiedTab, type PageId } from "../../stores/tab-store";
 import { useSessionStore, countPanes, getTopDirection } from "../../stores/session-store";
@@ -25,6 +29,7 @@ const PAGE_ICONS: Record<PageId, React.ElementType> = {
   "port-forwarding": Plug,
   history: History,
   settings: Settings,
+  transfers: ArrowUpDown,
 };
 
 function getTabIcon(tab: UnifiedTab): React.ElementType {
@@ -41,6 +46,12 @@ const IS_MAC =
   (navigator.platform.includes("Mac") || navigator.platform === "MacIntel");
 const SNIPPET_SHORTCUT = IS_MAC ? "⌘K" : "Ctrl K";
 
+// Browser-style tab-overflow scroll button (shown instead of a scrollbar).
+const CHEVRON_BTN =
+  "shrink-0 flex items-center justify-center w-6 h-[32px] rounded-md text-text-muted " +
+  "hover:text-text-primary hover:bg-bg-overlay disabled:opacity-30 disabled:pointer-events-none " +
+  "transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export function UnifiedTabBar() {
@@ -56,6 +67,53 @@ export function UnifiedTabBar() {
 
   const toggleSnippetPanel = useUiStore((s) => s.toggleSnippetPanel);
   const snippetPanelOpen = useUiStore((s) => s.snippetPanelOpen);
+
+  // When the tabs overflow, show browser-style chevrons instead of a scrollbar.
+  // Both slots render whenever there's overflow (each disabled when its side is
+  // exhausted) so the strip width stays stable while scrolling.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [overflow, setOverflow] = useState(false);
+  const [canLeft, setCanLeft] = useState(false);
+  const [canRight, setCanRight] = useState(false);
+
+  const updateArrows = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const max = el.scrollWidth - el.clientWidth;
+    setOverflow(max > 1);
+    setCanLeft(el.scrollLeft > 1);
+    setCanRight(el.scrollLeft < max - 1);
+  }, []);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.addEventListener("scroll", updateArrows, { passive: true });
+    const ro = new ResizeObserver(updateArrows);
+    ro.observe(el);
+    return () => {
+      el.removeEventListener("scroll", updateArrows);
+      ro.disconnect();
+    };
+  }, [updateArrows]);
+
+  // Re-measure after every render: content width changes without a container
+  // resize or count change (pane-split indicator, label rename) still flow
+  // through a render of this component. The setters bail when unchanged.
+  useEffect(updateArrows);
+
+  // Keep the active tab visible — a newly opened tab is appended off-screen
+  // right, and with the scrollbar hidden there'd be no hint it exists.
+  useEffect(() => {
+    scrollRef.current
+      ?.querySelector('[role="tab"][aria-selected="true"]')
+      ?.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }, [activeTabId]);
+
+  const scrollTabs = (dir: -1 | 1) => {
+    const el = scrollRef.current;
+    if (el) el.scrollBy({ left: dir * el.clientWidth * 0.75, behavior: "smooth" });
+  };
 
   const handleClose = async (tabId: string, tab: UnifiedTab, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -88,8 +146,20 @@ export function UnifiedTabBar() {
 
   return (
     <div className="flex items-center h-[var(--tabbar-height)] no-select px-2 pt-2">
+      {overflow && (
+        <button
+          type="button"
+          onClick={() => scrollTabs(-1)}
+          disabled={!canLeft}
+          aria-label="Scroll tabs left"
+          className={`${CHEVRON_BTN} mr-1`}
+        >
+          <ChevronLeft size={16} strokeWidth={2} aria-hidden="true" />
+        </button>
+      )}
       <div
-        className="flex items-center gap-2.5 overflow-x-auto overflow-y-hidden flex-1 min-w-0"
+        ref={scrollRef}
+        className="flex items-center gap-2.5 overflow-x-auto overflow-y-hidden flex-1 min-w-0 [&::-webkit-scrollbar]:hidden"
         role="tablist"
         aria-label="Open sessions"
       >
@@ -136,6 +206,8 @@ export function UnifiedTabBar() {
               data-tab-type={tab.type}
               data-tab-label={tab.label}
               onClick={() => setActiveTab(tabId)}
+              // Middle-click closes the tab, like a browser.
+              onAuxClick={(e) => { if (e.button === 1 && closeable) { e.preventDefault(); void handleClose(tabId, tab, e); } }}
               onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setActiveTab(tabId); } }}
               title={tab.label + (paneCount > 1 ? ` (${paneCount} panes)` : "")}
               className={[
@@ -162,9 +234,13 @@ export function UnifiedTabBar() {
                 aria-hidden="true"
               />
 
-              {/* Label */}
-              <span className={`truncate ${isActive ? "font-medium" : ""}`}>
-                {tab.label}
+              {/* Label — the wrapper reserves the bold (active) width so
+                  toggling font-medium on activate/deactivate doesn't resize the
+                  tab and shift its neighbours (see .label-stable-bold). */}
+              <span data-label={tab.label} className="label-stable-bold">
+                <span className={`truncate ${isActive ? "font-medium" : ""}`}>
+                  {tab.label}
+                </span>
               </span>
 
               {/* Split indicator (terminal only) */}
@@ -215,6 +291,18 @@ export function UnifiedTabBar() {
         })}
 
       </div>
+
+      {overflow && (
+        <button
+          type="button"
+          onClick={() => scrollTabs(1)}
+          disabled={!canRight}
+          aria-label="Scroll tabs right"
+          className={`${CHEVRON_BTN} ml-1`}
+        >
+          <ChevronRight size={16} strokeWidth={2} aria-hidden="true" />
+        </button>
+      )}
 
       {/* Right actions — only show snippet button when a terminal tab is active.
           A labelled button (with the ⌘K hint) reads as a control instead of a
