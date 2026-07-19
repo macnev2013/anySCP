@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import type { TransferEvent, TransferStatusValue } from "../types";
 
+/// Fix infinite history
+const MAX_FINISHED_HOSTORY = 200;
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function isFinished(status: TransferStatusValue): boolean {
@@ -9,10 +12,30 @@ function isFinished(status: TransferStatusValue): boolean {
   return false;
 }
 
+function trimFinished(
+  transfers: Map<string, TransferEvent>,
+  order: string[],
+): { transfers: Map<string, TransferEvent>; order: string[] } {
+  if (order.length <= MAX_FINISHED_HOSTORY) {
+    return { transfers, order };
+  }
+  const next = new Map(transfers);
+  const nextOrder = order.slice();
+  while (nextOrder.length > MAX_FINISHED_HOSTORY) {
+    const oldest = nextOrder.shift()!;
+    const t = next.get(oldest);
+    if (t && isFinished(t.status)) {
+      next.delete(oldest);
+    }
+  }
+  return { transfers: next, order: nextOrder };
+}
+
 // ─── Store shape ──────────────────────────────────────────────────────────────
 
 interface TransferState {
   transfers: Map<string, TransferEvent>;
+  finished_order: string[];
   /** Maps sftp_session_id → host label. Persists after session closes. */
   hostLabels: Map<string, string>;
   popoverOpen: boolean;
@@ -30,6 +53,7 @@ interface TransferState {
 
 export const useTransferStore = create<TransferState>((set) => ({
   transfers: new Map(),
+  finished_order: [],
   hostLabels: new Map(),
   popoverOpen: false,
 
@@ -37,14 +61,23 @@ export const useTransferStore = create<TransferState>((set) => ({
     set((state) => {
       const next = new Map(state.transfers);
       next.set(event.transfer_id, event);
-      return { transfers: next };
+
+      if (!isFinished(event.status)) {
+        return { transfers: next };
+      }
+      const order = [...state.finished_order, event.transfer_id];
+      const trimmed = trimFinished(next, order);
+      return { transfers: trimmed.transfers, finished_order: trimmed.order };
     }),
 
   removeTransfer: (id) =>
     set((state) => {
       const next = new Map(state.transfers);
       next.delete(id);
-      return { transfers: next };
+      return {
+        transfers: next,
+        finished_order: state.finished_order.filter((fid) => fid !== id),
+      };
     }),
 
   clearFinished: () =>
@@ -55,7 +88,7 @@ export const useTransferStore = create<TransferState>((set) => ({
           next.set(id, transfer);
         }
       }
-      return { transfers: next };
+      return { transfers: next, finished_order: [] };
     }),
 
   hydrate: (items) =>
@@ -70,7 +103,20 @@ export const useTransferStore = create<TransferState>((set) => ({
       for (const [id, transfer] of state.transfers) {
         next.set(id, transfer);
       }
-      return { transfers: next };
+
+      const seen = new Set(state.finished_order);
+      const order = [...state.finished_order];
+      for (const item of items) {
+        if (isFinished(item.status) && !seen.has(item.transfer_id)) {
+          order.push(item.transfer_id);
+          seen.add(item.transfer_id);
+        }
+      }
+      const trimmed = trimFinished(next, order);
+      return {
+        transfers: trimmed.transfers,
+        finished_order: trimmed.order,
+      };
     }),
 
   setHostLabel: (sftpSessionId, label) =>
@@ -81,9 +127,7 @@ export const useTransferStore = create<TransferState>((set) => ({
       return { hostLabels: next };
     }),
 
-  togglePopover: () =>
-    set((state) => ({ popoverOpen: !state.popoverOpen })),
+  togglePopover: () => set((state) => ({ popoverOpen: !state.popoverOpen })),
 
-  setPopoverOpen: (open) =>
-    set({ popoverOpen: open }),
+  setPopoverOpen: (open) => set({ popoverOpen: open }),
 }));

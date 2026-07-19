@@ -24,6 +24,8 @@ const CHUNK_SIZE: usize = 256 * 1024; // 256 KB
 const EMIT_THROTTLE: Duration = Duration::from_millis(100);
 /// Window over which bytes are accumulated to compute speed.
 const SPEED_WINDOW: Duration = Duration::from_secs(2);
+/// Fix infinite history
+const MAX_FINISHED_HISTORY: usize = 200;
 
 // ─── Job state ───────────────────────────────────────────────────────────────
 
@@ -71,12 +73,6 @@ pub struct TransferJobState {
 
 impl TransferJobState {
     fn to_event(&self) -> TransferEvent {
-        let eta_secs = if self.speed_bps > 0 && self.total_bytes > self.bytes_transferred {
-            Some((self.total_bytes - self.bytes_transferred) / self.speed_bps)
-        } else {
-            None
-        };
-
         TransferEvent {
             transfer_id: self.transfer_id.clone(),
             sftp_session_id: self.sftp_session_id.clone(),
@@ -89,18 +85,12 @@ impl TransferJobState {
             files_done: self.files_done,
             files_total: self.files_total,
             speed_bps: self.speed_bps,
-            eta_secs,
+            eta_secs: self.eta_secs(),
             created_at: self.created_at,
         }
     }
 
     fn to_info(&self) -> TransferInfo {
-        let eta_secs = if self.speed_bps > 0 && self.total_bytes > self.bytes_transferred {
-            Some((self.total_bytes - self.bytes_transferred) / self.speed_bps)
-        } else {
-            None
-        };
-
         TransferInfo {
             transfer_id: self.transfer_id.clone(),
             sftp_session_id: self.sftp_session_id.clone(),
@@ -113,9 +103,14 @@ impl TransferJobState {
             files_done: self.files_done,
             files_total: self.files_total,
             speed_bps: self.speed_bps,
-            eta_secs,
+            eta_secs: self.eta_secs(),
             created_at: self.created_at,
         }
+    }
+
+    fn eta_secs(&self) -> Option<u64> {
+        (self.speed_bps > 0 && self.total_bytes > self.bytes_transferred)
+            .then(|| (self.total_bytes - self.bytes_transferred) / self.speed_bps)
     }
 }
 
@@ -123,6 +118,8 @@ impl TransferJobState {
 
 pub struct TransferManager {
     jobs: Arc<DashMap<String, TransferJobState>>,
+    /// FIFO if finished job ids, oldest to first
+    finished_order: Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
     queue_tx: mpsc::UnboundedSender<String>,
     semaphore: Arc<Semaphore>,
     sftp_manager: Arc<SftpManager>,
@@ -136,6 +133,7 @@ impl TransferManager {
     pub fn new(sftp_manager: Arc<SftpManager>, app_handle: AppHandle) -> Self {
         let (queue_tx, queue_rx) = mpsc::unbounded_channel::<String>();
         let jobs: Arc<DashMap<String, TransferJobState>> = Arc::new(DashMap::new());
+        let finished_order = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
         let semaphore = Arc::new(Semaphore::new(3));
         let max_concurrent = Arc::new(AtomicU32::new(3));
 
@@ -145,6 +143,7 @@ impl TransferManager {
 
         Self {
             jobs,
+            finished_order,
             queue_tx,
             semaphore,
             sftp_manager,
@@ -159,6 +158,7 @@ impl TransferManager {
         let mut guard = self.worker_rx.lock().expect("worker_rx mutex poisoned");
         if let Some(mut queue_rx) = guard.take() {
             let jobs = self.jobs.clone();
+            let finished_order = self.finished_order.clone();
             let semaphore = self.semaphore.clone();
             let sftp_manager = self.sftp_manager.clone();
             let app_handle = self.app_handle.clone();
@@ -172,11 +172,19 @@ impl TransferManager {
                         .expect("semaphore closed");
 
                     let jobs = jobs.clone();
+                    let finished_order = finished_order.clone();
                     let sftp_manager = sftp_manager.clone();
                     let app_handle = app_handle.clone();
 
                     tokio::spawn(async move {
-                        execute_transfer(&jobs, &job_id, &sftp_manager, &app_handle).await;
+                        execute_transfer(
+                            &jobs,
+                            &finished_order,
+                            &job_id,
+                            &sftp_manager,
+                            &app_handle,
+                        )
+                        .await;
                         drop(permit);
                     });
                 }
@@ -398,6 +406,7 @@ impl TransferManager {
             let event = job.to_event();
             drop(job);
             let _ = self.app_handle.emit("sftp:transfer", event);
+            record_finished(&self.jobs, &self.finished_order, transfer_id);
         }
 
         Ok(())
@@ -595,6 +604,7 @@ async fn walk_local_dir_inner(path: &PathBuf, visited: &mut HashSet<PathBuf>) ->
 /// Top-level dispatcher. Runs inside the worker task.
 async fn execute_transfer(
     jobs: &Arc<DashMap<String, TransferJobState>>,
+    finished_order: &Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
     job_id: &str,
     sftp_manager: &Arc<SftpManager>,
     app_handle: &AppHandle,
@@ -604,7 +614,14 @@ async fn execute_transfer(
         if let Some(job) = jobs.get(job_id) {
             if job.cancel_token.is_cancelled() {
                 drop(job);
-                set_job_status(jobs, job_id, TransferStatus::Cancelled, None, app_handle);
+                set_job_status(
+                    jobs,
+                    &finished_order,
+                    job_id,
+                    TransferStatus::Cancelled,
+                    None,
+                    app_handle,
+                );
                 return;
             }
         } else {
@@ -613,7 +630,14 @@ async fn execute_transfer(
     }
 
     // Mark InProgress.
-    set_job_status(jobs, job_id, TransferStatus::InProgress, None, app_handle);
+    set_job_status(
+        jobs,
+        finished_order,
+        job_id,
+        TransferStatus::InProgress,
+        None,
+        app_handle,
+    );
 
     // Retrieve the SFTP session arc — bail with an error if the session is gone.
     let sftp_arc = {
@@ -630,6 +654,7 @@ async fn execute_transfer(
             Err(e) => {
                 set_job_status(
                     jobs,
+                    finished_order,
                     job_id,
                     TransferStatus::Failed(e.to_string()),
                     Some(e.to_string()),
@@ -771,11 +796,23 @@ async fn execute_transfer(
                     "files_total": job_files_total,
                 }),
             );
-            set_job_status(jobs, job_id, TransferStatus::Completed, None, app_handle);
+            set_job_status(
+                jobs,
+                finished_order,
+                job_id,
+                TransferStatus::Completed,
+                None,
+                app_handle,
+            );
         }
-        Err(SftpError::TransferCancelled) => {
-            set_job_status(jobs, job_id, TransferStatus::Cancelled, None, app_handle)
-        }
+        Err(SftpError::TransferCancelled) => set_job_status(
+            jobs,
+            finished_order,
+            job_id,
+            TransferStatus::Cancelled,
+            None,
+            app_handle,
+        ),
         Err(e) => {
             crate::telemetry::capture(
                 "transfer_failed",
@@ -788,6 +825,7 @@ async fn execute_transfer(
             );
             set_job_status(
                 jobs,
+                finished_order,
                 job_id,
                 TransferStatus::Failed(e.to_string()),
                 Some(e.to_string()),
@@ -821,17 +859,54 @@ enum KindDesc {
 
 fn set_job_status(
     jobs: &Arc<DashMap<String, TransferJobState>>,
+    finished_order: &Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
     job_id: &str,
     status: TransferStatus,
     error: Option<String>,
     app_handle: &AppHandle,
 ) {
-    if let Some(mut job) = jobs.get_mut(job_id) {
-        job.status = status;
-        job.error = error;
-        let event = job.to_event();
-        drop(job);
-        let _ = app_handle.emit("sftp:transfer", event);
+    let Some(mut job) = jobs.get_mut(job_id) else {
+        return;
+    };
+    let is_terminal = matches!(
+        status,
+        TransferStatus::Completed | TransferStatus::Failed(_) | TransferStatus::Cancelled
+    );
+    job.status = status;
+    job.error = error;
+    let event = job.to_event();
+    drop(job);
+    let _ = app_handle.emit("sftp:transfer", event);
+
+    if is_terminal {
+        record_finished(jobs, finished_order, job_id);
+    }
+}
+
+/// Track a newly-finished job and evict the oldest once history exceeds
+fn record_finished(
+    jobs: &Arc<DashMap<String, TransferJobState>>,
+    finished_order: &Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
+    job_id: &str,
+) {
+    let mut order = finished_order
+        .lock()
+        .expect("finished_order mutex poisoned");
+    order.push_back(job_id.to_string());
+
+    while order.len() > MAX_FINISHED_HISTORY {
+        let Some(oldest) = order.pop_front() else {
+            break;
+        };
+        let still_terminal = jobs.get(&oldest).is_some_and(|job| {
+            matches!(
+                job.status,
+                TransferStatus::Completed | TransferStatus::Failed(_) | TransferStatus::Cancelled
+            )
+        });
+        if still_terminal {
+            jobs.remove(&oldest);
+        }
     }
 }
 

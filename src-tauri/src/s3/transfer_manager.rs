@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
@@ -20,6 +20,8 @@ const EMIT_THROTTLE: Duration = Duration::from_millis(100);
 const SPEED_WINDOW: Duration = Duration::from_secs(2);
 /// Read chunk size for streaming file reads (used for progress tracking).
 const CHUNK_SIZE: usize = 256 * 1024; // 256 KB
+/// Fix infinite history
+const MAX_FINISHED_HISTORY: usize = 200;
 
 // ─── Job state ───────────────────────────────────────────────────────────────
 
@@ -94,6 +96,7 @@ impl TransferJobState {
 
 pub struct S3TransferManager {
     jobs: Arc<DashMap<String, TransferJobState>>,
+    finished_order: Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
     queue_tx: mpsc::UnboundedSender<String>,
     semaphore: Arc<Semaphore>,
     s3_manager: Arc<S3Manager>,
@@ -108,6 +111,7 @@ impl S3TransferManager {
     pub fn new(s3_manager: Arc<S3Manager>, app_handle: AppHandle) -> Self {
         let (queue_tx, queue_rx) = mpsc::unbounded_channel::<String>();
         let jobs: Arc<DashMap<String, TransferJobState>> = Arc::new(DashMap::new());
+        let finished_order = Arc::new(std::sync::Mutex::new(VecDeque::new()));
         let semaphore = Arc::new(Semaphore::new(3));
         let max_concurrent = Arc::new(AtomicU32::new(3));
 
@@ -117,6 +121,7 @@ impl S3TransferManager {
 
         Self {
             jobs,
+            finished_order,
             queue_tx,
             semaphore,
             s3_manager,
@@ -131,6 +136,7 @@ impl S3TransferManager {
         let mut guard = self.worker_rx.lock().expect("worker_rx mutex poisoned");
         if let Some(mut queue_rx) = guard.take() {
             let jobs = self.jobs.clone();
+            let finished_order = self.finished_order.clone();
             let semaphore = self.semaphore.clone();
             let s3_manager = self.s3_manager.clone();
             let app_handle = self.app_handle.clone();
@@ -144,11 +150,13 @@ impl S3TransferManager {
                         .expect("semaphore closed");
 
                     let jobs = jobs.clone();
+                    let finished_order = finished_order.clone();
                     let s3_manager = s3_manager.clone();
                     let app_handle = app_handle.clone();
 
                     tokio::spawn(async move {
-                        execute_transfer(&jobs, &job_id, &s3_manager, &app_handle).await;
+                        execute_transfer(&jobs, &finished_order, &job_id, &s3_manager, &app_handle)
+                            .await;
                         drop(permit);
                     });
                 }
@@ -392,6 +400,7 @@ impl S3TransferManager {
             let event = job.to_event();
             drop(job);
             let _ = self.app_handle.emit("s3:transfer", event);
+            record_finished(&self.jobs, &self.finished_order, transfer_id);
         }
 
         Ok(())
@@ -506,6 +515,7 @@ async fn walk_local_dir_inner(path: &PathBuf, visited: &mut HashSet<PathBuf>) ->
 /// Top-level dispatcher. Runs inside the worker task.
 async fn execute_transfer(
     jobs: &Arc<DashMap<String, TransferJobState>>,
+    finished_order: &Arc<std::sync::Mutex<VecDeque<String>>>,
     job_id: &str,
     s3_manager: &Arc<S3Manager>,
     app_handle: &AppHandle,
@@ -515,7 +525,14 @@ async fn execute_transfer(
         if let Some(job) = jobs.get(job_id) {
             if job.cancel_token.is_cancelled() {
                 drop(job);
-                set_job_status(jobs, job_id, S3TransferStatus::Cancelled, None, app_handle);
+                set_job_status(
+                    jobs,
+                    finished_order,
+                    job_id,
+                    S3TransferStatus::Cancelled,
+                    None,
+                    app_handle,
+                );
                 return;
             }
         } else {
@@ -524,7 +541,14 @@ async fn execute_transfer(
     }
 
     // Mark InProgress.
-    set_job_status(jobs, job_id, S3TransferStatus::InProgress, None, app_handle);
+    set_job_status(
+        jobs,
+        finished_order,
+        job_id,
+        S3TransferStatus::InProgress,
+        None,
+        app_handle,
+    );
 
     // Retrieve the bucket — bail with an error if the session is gone.
     let bucket = {
@@ -541,6 +565,7 @@ async fn execute_transfer(
             Err(e) => {
                 set_job_status(
                     jobs,
+                    finished_order,
                     job_id,
                     S3TransferStatus::Failed(e.to_string()),
                     Some(e.to_string()),
@@ -641,11 +666,23 @@ async fn execute_transfer(
                     "files_total": job_files_total,
                 }),
             );
-            set_job_status(jobs, job_id, S3TransferStatus::Completed, None, app_handle);
+            set_job_status(
+                jobs,
+                finished_order,
+                job_id,
+                S3TransferStatus::Completed,
+                None,
+                app_handle,
+            );
         }
-        Err(S3Error::TransferCancelled) => {
-            set_job_status(jobs, job_id, S3TransferStatus::Cancelled, None, app_handle)
-        }
+        Err(S3Error::TransferCancelled) => set_job_status(
+            jobs,
+            finished_order,
+            job_id,
+            S3TransferStatus::Cancelled,
+            None,
+            app_handle,
+        ),
         Err(e) => {
             crate::telemetry::capture(
                 "transfer_failed",
@@ -658,6 +695,7 @@ async fn execute_transfer(
             );
             set_job_status(
                 jobs,
+                finished_order,
                 job_id,
                 S3TransferStatus::Failed(e.to_string()),
                 Some(e.to_string()),
@@ -678,17 +716,55 @@ enum KindDesc {
 
 fn set_job_status(
     jobs: &Arc<DashMap<String, TransferJobState>>,
+    finished_order: &Arc<std::sync::Mutex<VecDeque<String>>>,
     job_id: &str,
     status: S3TransferStatus,
     error: Option<String>,
     app_handle: &AppHandle,
 ) {
-    if let Some(mut job) = jobs.get_mut(job_id) {
-        job.status = status;
-        job.error = error;
-        let event = job.to_event();
-        drop(job);
-        let _ = app_handle.emit("s3:transfer", event);
+    let Some(mut job) = jobs.get_mut(job_id) else {
+        return;
+    };
+    let is_terminal = matches!(
+        status,
+        S3TransferStatus::Completed | S3TransferStatus::Failed(_) | S3TransferStatus::Cancelled
+    );
+    job.status = status;
+    job.error = error;
+    let event = job.to_event();
+    drop(job);
+    let _ = app_handle.emit("s3:transfer", event);
+    if is_terminal {
+        record_finished(jobs, finished_order, job_id);
+    }
+}
+
+/// Track a newly-finished job and evict the oldest once history exceeds
+fn record_finished(
+    jobs: &Arc<DashMap<String, TransferJobState>>,
+    finished_order: &Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
+    job_id: &str,
+) {
+    let mut order = finished_order
+        .lock()
+        .expect("finished_order mutex poisoned");
+    order.push_back(job_id.to_string());
+
+    while order.len() > MAX_FINISHED_HISTORY {
+        let Some(oldest) = order.pop_front() else {
+            break;
+        };
+        let still_terminal = jobs.get(&oldest).is_some_and(|job| {
+            matches!(
+                job.status,
+                S3TransferStatus::Completed
+                    | S3TransferStatus::Failed(_)
+                    | S3TransferStatus::Cancelled
+            )
+        });
+        if still_terminal {
+            jobs.remove(&oldest);
+        }
     }
 }
 
