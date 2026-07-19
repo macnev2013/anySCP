@@ -616,7 +616,7 @@ async fn execute_transfer(
                 drop(job);
                 set_job_status(
                     jobs,
-                    &finished_order,
+                    finished_order,
                     job_id,
                     TransferStatus::Cancelled,
                     None,
