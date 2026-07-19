@@ -6,7 +6,7 @@ authors = ["Nevil Macwan <macnev2013@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/macnev2013/anySCP"
 homepage = "https://github.com/macnev2013/anySCP"
-edition = "2021"
+edition = "2024"
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -16,12 +16,12 @@ name = "anyscp_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 # Tauri framework
-tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-opener = "2.5.4"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -45,10 +45,10 @@ uuid = { version = "1", features = ["v4"] }
 dashmap = "6"
 
 # SQLite persistence
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # File watching (for edit-in-vscode re-upload on save)
-notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
+notify = { version = "8", default-features = false, features = ["macos_kqueue"] }
 
 # SFTP
 russh-sftp = "2.1"
@@ -93,9 +93,8 @@ getrandom = "0.2"
 flate2 = "1"
 
 # Telemetry
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 dirs = "6"
 
 [dev-dependencies]
 tempfile = "3"
-

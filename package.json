@@ -19,10 +19,10 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@tauri-apps/api": "^2",
+    "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
-    "@tauri-apps/plugin-dialog": "^2.6.0",
-    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-dialog": "^2.7.2",
+    "@tauri-apps/plugin-opener": "^2.5.4",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.0",
     "@xterm/addon-fit": "^0.11.0",
@@ -47,8 +47,8 @@
     "@vitejs/plugin-react": "^4.6.0",
     "jsdom": "^29.1.1",
     "tailwindcss": "^4.2.2",
-    "typescript": "~5.8.3",
-    "vite": "^7.0.4",
-    "vitest": "^3.2.6"
+    "typescript": "~7.0.2",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
   }
 }

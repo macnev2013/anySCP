@@ -180,10 +180,10 @@ fn resolve_jump_target(
     if let Some(id) = alias_to_id.get(value) {
         return Some(id.clone());
     }
-    if host_part != value {
-        if let Some(id) = alias_to_id.get(host_part) {
-            return Some(id.clone());
-        }
+    if host_part != value
+        && let Some(id) = alias_to_id.get(host_part)
+    {
+        return Some(id.clone());
     }
 
     // 2. Unique label/hostname match among all saved hosts. Collect distinct host

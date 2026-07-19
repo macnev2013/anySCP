@@ -213,17 +213,17 @@ pub async fn s3_update_connection(
     .map_err(|e| S3Error::OperationError(e.to_string()))?;
 
     // Only update credentials if both are provided
-    if let (Some(ak), Some(sk)) = (access_key, secret_key) {
-        if !ak.is_empty() && !sk.is_empty() {
-            let vault_key = format!("s3:{}", id);
-            let cred = crate::vault::StoredCredential::Password {
-                password: format!("{}:{}", ak, sk),
-            };
-            let _ = tokio::task::spawn_blocking(move || {
-                crate::vault::save_credential(&vault_key, &cred)
-            })
-            .await;
-        }
+    if let (Some(ak), Some(sk)) = (access_key, secret_key)
+        && !ak.is_empty()
+        && !sk.is_empty()
+    {
+        let vault_key = format!("s3:{}", id);
+        let cred = crate::vault::StoredCredential::Password {
+            password: format!("{}:{}", ak, sk),
+        };
+        let _ =
+            tokio::task::spawn_blocking(move || crate::vault::save_credential(&vault_key, &cred))
+                .await;
     }
 
     Ok(())
@@ -318,7 +318,7 @@ pub async fn s3_reconnect(
         _ => {
             return Err(S3Error::CredentialError(
                 "Unexpected credential type".to_string(),
-            ))
+            ));
         }
     };
 

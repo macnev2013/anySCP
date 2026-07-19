@@ -16,7 +16,7 @@
 //! raw command bytes and produce [`ScpEntry`] / [`StatInfo`] / [`TreeEntry`],
 //! with no SSH dependency, so every flavor is unit-tested below.
 
-use super::{format_permissions, ScpEntry, ScpEntryType, ScpError};
+use super::{ScpEntry, ScpEntryType, ScpError, format_permissions};
 
 /// Which remote userland we're talking to. Detected once at session open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -642,10 +642,8 @@ fn parse_ls_line(line: &str) -> Option<LsLine<'_>> {
     let mut name = line[name_start..].trim_start_matches([' ', '\t']);
 
     // For symlinks, strip the ` -> target` suffix; keep just the link's name.
-    if is_symlink {
-        if let Some((left, _target)) = name.split_once(" -> ") {
-            name = left;
-        }
+    if is_symlink && let Some((left, _target)) = name.split_once(" -> ") {
+        name = left;
     }
 
     if name.is_empty() || name == "." || name == ".." {
@@ -715,10 +713,8 @@ fn parse_ls_line_allow_self(line: &str) -> Option<LsLine<'_>> {
     let time_tok = toks[date_idx + 2];
     let name_start = time_tok.0 + time_tok.1.len();
     let mut name = line[name_start..].trim_start_matches([' ', '\t']);
-    if is_symlink {
-        if let Some((left, _)) = name.split_once(" -> ") {
-            name = left;
-        }
+    if is_symlink && let Some((left, _)) = name.split_once(" -> ") {
+        name = left;
     }
     if name.is_empty() {
         return None;

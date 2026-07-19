@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
@@ -201,7 +201,7 @@ impl S3TransferManager {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "unknown".to_string());
 
-            let transfer_id = uuid::Uuid::new_v4().to_string();
+            let transfer_id: String = uuid::Uuid::new_v4().to_string();
             let now = Self::unix_now_millis();
             let now_instant = Instant::now();
 
@@ -331,7 +331,7 @@ impl S3TransferManager {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| key.clone());
 
-        let transfer_id = uuid::Uuid::new_v4().to_string();
+        let transfer_id: String = uuid::Uuid::new_v4().to_string();
         let now = Self::unix_now_millis();
         let now_instant = Instant::now();
 
