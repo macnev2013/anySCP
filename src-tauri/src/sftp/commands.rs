@@ -613,9 +613,12 @@ pub async fn sftp_chmod_recursive(
                 continue; // never chmod or descend into symlinks
             }
 
-            targets.push(full.clone());
+            // Avoid cloning when it's possible
             if file_type == FileType::Dir {
+                targets.push(full.clone());
                 stack.push(full);
+            } else {
+                targets.push(full);
             }
         }
     }
