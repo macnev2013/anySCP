@@ -40,9 +40,6 @@ pub enum TransferJobKind {
         /// S3 object key.
         key: String,
         local_path: PathBuf,
-        /// Cached object size at enqueue time.
-        #[allow(dead_code)]
-        size: u64,
     },
 }
 
@@ -354,11 +351,7 @@ impl S3TransferManager {
             s3_session_id: s3_session_id.to_string(),
             name,
             direction: S3TransferDirection::Download,
-            kind: TransferJobKind::DownloadFile {
-                key,
-                local_path,
-                size,
-            },
+            kind: TransferJobKind::DownloadFile { key, local_path },
             status: S3TransferStatus::Queued,
             bytes_transferred: 0,
             total_bytes: size,
