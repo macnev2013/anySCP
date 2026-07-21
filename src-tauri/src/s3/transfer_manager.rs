@@ -6,9 +6,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
 use tauri::{AppHandle, Emitter};
+use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
+
+use crate::transfer_common::{eta_secs, record_progress, ProgressFields};
 
 use super::{S3Error, S3Manager, S3TransferDirection, S3TransferEvent, S3TransferStatus};
 
@@ -16,12 +19,12 @@ use super::{S3Error, S3Manager, S3TransferDirection, S3TransferEvent, S3Transfer
 
 /// Minimum duration between consecutive progress events per transfer.
 const EMIT_THROTTLE: Duration = Duration::from_millis(100);
-/// Window over which bytes are accumulated to compute speed.
-const SPEED_WINDOW: Duration = Duration::from_secs(2);
-/// Read chunk size for streaming file reads (used for progress tracking).
-const CHUNK_SIZE: usize = 256 * 1024; // 256 KB
 /// Fix infinite history
 const MAX_FINISHED_HISTORY: usize = 200;
+/// Window over which bytes are accumulated to compute speed.
+const SPEED_WINDOW: Duration = Duration::from_millis(500);
+const UPLOAD_CHUNK_SIZE: usize = 8 * 1024 * 1024;
+const RANGE_SIZE: u64 = 8 * 1024 * 1024;
 
 // ─── Job state ───────────────────────────────────────────────────────────────
 
@@ -65,11 +68,7 @@ pub struct TransferJobState {
 
 impl TransferJobState {
     fn to_event(&self) -> S3TransferEvent {
-        let eta_secs = if self.speed_bps > 0 && self.total_bytes > self.bytes_transferred {
-            Some((self.total_bytes - self.bytes_transferred) / self.speed_bps)
-        } else {
-            None
-        };
+        let eta_secs = eta_secs(self.speed_bps, self.total_bytes, self.bytes_transferred);
 
         S3TransferEvent {
             transfer_id: self.transfer_id.clone(),
@@ -90,6 +89,24 @@ impl TransferJobState {
 }
 
 // ─── Manager ─────────────────────────────────────────────────────────────────
+
+impl ProgressFields for TransferJobState {
+    fn bytes_transferred(&mut self) -> &mut u64 {
+        &mut self.bytes_transferred
+    }
+    fn speed_bps(&mut self) -> &mut u64 {
+        &mut self.speed_bps
+    }
+    fn speed_window_bytes(&mut self) -> &mut u64 {
+        &mut self.speed_window_bytes
+    }
+    fn speed_window_start(&mut self) -> &mut Instant {
+        &mut self.speed_window_start
+    }
+    fn last_emit(&mut self) -> &mut Instant {
+        &mut self.last_emit
+    }
+}
 
 pub struct S3TransferManager {
     jobs: Arc<DashMap<String, TransferJobState>>,
@@ -650,6 +667,9 @@ async fn execute_transfer(
 
     match result {
         Ok(()) => {
+            if let Some(mut job) = jobs.get_mut(job_id) {
+                job.bytes_transferred = job.total_bytes;
+            }
             crate::telemetry::capture(
                 "transfer_completed",
                 serde_json::json!({
@@ -775,25 +795,8 @@ fn update_progress(
     }
 
     if let Some(mut job) = jobs.get_mut(job_id) {
-        job.bytes_transferred += new_bytes;
-        job.speed_window_bytes += new_bytes;
-
-        // Recompute speed every SPEED_WINDOW. Before the first window completes,
-        // estimate speed from the time elapsed so far so the UI doesn't show 0.
-        let window_elapsed = job.speed_window_start.elapsed();
-        if window_elapsed >= SPEED_WINDOW {
-            let secs = window_elapsed.as_secs_f64().max(0.001);
-            job.speed_bps = (job.speed_window_bytes as f64 / secs) as u64;
-            job.speed_window_bytes = 0;
-            job.speed_window_start = Instant::now();
-        } else if job.speed_bps == 0 && window_elapsed.as_millis() > 200 {
-            // Initial estimate before the first full window.
-            let secs = window_elapsed.as_secs_f64().max(0.001);
-            job.speed_bps = (job.speed_window_bytes as f64 / secs) as u64;
-        }
-
-        // Emit only if EMIT_THROTTLE has elapsed.
-        if job.last_emit.elapsed() >= EMIT_THROTTLE {
+        let should_emit = record_progress(&mut *job, new_bytes, EMIT_THROTTLE, SPEED_WINDOW);
+        if should_emit {
             job.last_emit = Instant::now();
             let event = job.to_event();
             drop(job);
@@ -818,42 +821,108 @@ async fn run_upload_file(
     cancel_token: &CancellationToken,
     app_handle: &AppHandle,
 ) -> Result<(), S3Error> {
-    use tokio::io::AsyncReadExt;
+    const CONTENT_TYPE: &str = "application/octet-stream";
 
-    let mut local_file = tokio::fs::File::open(local_path)
-        .await
-        .map_err(|e| S3Error::IoError(format!("Cannot read {}: {e}", local_path.display())))?;
-
-    let mut data: Vec<u8> = Vec::new();
-    let mut buf = vec![0u8; CHUNK_SIZE];
-
-    // Read phase — track progress chunk-by-chunk.
-    loop {
-        if cancel_token.is_cancelled() {
-            return Err(S3Error::TransferCancelled);
-        }
-
-        let n = local_file
-            .read(&mut buf)
-            .await
-            .map_err(|e| S3Error::IoError(e.to_string()))?;
-        if n == 0 {
-            break;
-        }
-
-        data.extend_from_slice(&buf[..n]);
-        update_progress(jobs, job_id, n as u64, cancel_token, app_handle)?;
-    }
-
-    // Upload phase — single atomic PUT.
     if cancel_token.is_cancelled() {
         return Err(S3Error::TransferCancelled);
     }
 
-    bucket
-        .put_object(key, &data)
+    let file_len = tokio::fs::metadata(local_path)
         .await
-        .map_err(|e| S3Error::OperationError(format!("S3 PUT failed for {key}: {e}")))?;
+        .map_err(|e| S3Error::IoError(format!("Cannot stat {}: {e}", local_path.display())))?
+        .len();
+
+    let mut file = tokio::fs::File::open(local_path)
+        .await
+        .map_err(|e| S3Error::IoError(format!("Cannot read {}: {e}", local_path.display())))?;
+
+    if file_len < UPLOAD_CHUNK_SIZE as u64 {
+        let mut data = Vec::with_capacity(file_len as usize);
+        file.read_to_end(&mut data)
+            .await
+            .map_err(|e| S3Error::IoError(e.to_string()))?;
+        bucket
+            .put_object(key, &data)
+            .await
+            .map_err(|e| S3Error::OperationError(format!("S3 PUT failed for {key}: {e}")))?;
+        update_progress(jobs, job_id, file_len, cancel_token, app_handle)?;
+    } else {
+        let msg = bucket
+            .initiate_multipart_upload(key, CONTENT_TYPE)
+            .await
+            .map_err(|e| {
+                S3Error::OperationError(format!("S3 multipart initiate failed for {key}: {e}"))
+            })?;
+        let upload_id = msg.upload_id.clone();
+        let upload_result = async {
+            let mut parts = Vec::new();
+            let mut buf = vec![0u8; UPLOAD_CHUNK_SIZE];
+            let mut part_number: u32 = 0;
+
+            loop {
+                if cancel_token.is_cancelled() {
+                    return Err(S3Error::TransferCancelled);
+                }
+                let mut filled = 0;
+                while filled < buf.len() {
+                    let n = file
+                        .read(&mut buf[filled..])
+                        .await
+                        .map_err(|e| S3Error::IoError(e.to_string()))?;
+                    if n == 0 {
+                        break;
+                    }
+                    filled += n;
+                }
+                if filled == 0 {
+                    break;
+                }
+
+                part_number += 1;
+                let part = bucket
+                    .put_multipart_chunk(
+                        buf[..filled].to_vec(),
+                        &msg.key,
+                        part_number,
+                        &upload_id,
+                        CONTENT_TYPE,
+                    )
+                    .await
+                    .map_err(|e| {
+                        S3Error::OperationError(format!(
+                            "S3 multipart part {part_number} failed for {key}: {e}"
+                        ))
+                    })?;
+                parts.push(part);
+
+                update_progress(jobs, job_id, filled as u64, cancel_token, app_handle)?;
+
+                if filled < buf.len() {
+                    break;
+                }
+            }
+
+            Ok(parts)
+        }
+        .await;
+
+        match upload_result {
+            Ok(parts) => {
+                bucket
+                    .complete_multipart_upload(&msg.key, &upload_id, parts)
+                    .await
+                    .map_err(|e| {
+                        S3Error::OperationError(format!(
+                            "S3 multipart complete failed for {key}: {e}"
+                        ))
+                    })?;
+            }
+            Err(e) => {
+                let _ = bucket.abort_upload(&msg.key, &upload_id).await;
+                return Err(e);
+            }
+        }
+    }
 
     // Mark this file done.
     if let Some(mut job) = jobs.get_mut(job_id) {
@@ -963,14 +1032,6 @@ async fn run_download_file(
         return Err(S3Error::TransferCancelled);
     }
 
-    // Fetch the full object from S3 (single HTTP GET).
-    let response = bucket
-        .get_object(key)
-        .await
-        .map_err(|e| S3Error::OperationError(format!("S3 GET failed for {key}: {e}")))?;
-
-    let data = response.bytes().to_vec();
-
     // Ensure parent directory exists.
     if let Some(parent) = local_path.parent() {
         tokio::fs::create_dir_all(parent)
@@ -982,20 +1043,44 @@ async fn run_download_file(
         .await
         .map_err(|e| S3Error::IoError(format!("Cannot create {}: {e}", local_path.display())))?;
 
-    // Write phase — track progress chunk-by-chunk.
-    for chunk in data.chunks(CHUNK_SIZE) {
-        if cancel_token.is_cancelled() {
-            drop(local_file);
-            let _ = tokio::fs::remove_file(local_path).await;
-            return Err(S3Error::TransferCancelled);
+    let total_size = jobs.get(job_id).map(|j| j.total_bytes).unwrap_or(0);
+
+    let download_result: Result<(), S3Error> = async {
+        if total_size == 0 {
+            bucket
+                .get_object_to_writer(key, &mut local_file)
+                .await
+                .map_err(|e| S3Error::OperationError(format!("S3 GET failed for {key}: {e}")))?;
+            update_progress(jobs, job_id, 0, cancel_token, app_handle)?;
+            return Ok(());
         }
 
-        local_file
-            .write_all(chunk)
-            .await
-            .map_err(|e| S3Error::IoError(e.to_string()))?;
+        let mut offset = 0u64;
+        while offset < total_size {
+            if cancel_token.is_cancelled() {
+                return Err(S3Error::TransferCancelled);
+            }
 
-        update_progress(jobs, job_id, chunk.len() as u64, cancel_token, app_handle)?;
+            let end = (offset + RANGE_SIZE - 1).min(total_size - 1);
+            bucket
+                .get_object_range_to_writer(key, offset, Some(end), &mut local_file)
+                .await
+                .map_err(|e| {
+                    S3Error::OperationError(format!("S3 GET range failed for {key}: {e}"))
+                })?;
+
+            let n = end - offset + 1;
+            update_progress(jobs, job_id, n, cancel_token, app_handle)?;
+            offset = end + 1;
+        }
+        Ok(())
+    }
+    .await;
+
+    if let Err(e) = download_result {
+        drop(local_file);
+        let _ = tokio::fs::remove_file(local_path).await;
+        return Err(e);
     }
 
     local_file

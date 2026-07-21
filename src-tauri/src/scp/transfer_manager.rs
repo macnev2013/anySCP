@@ -9,7 +9,7 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -21,6 +21,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::ssh::handler::SshClientHandler;
+use crate::transfer_common::{apply_concurrency, eta_secs, record_progress, ProgressFields};
 
 use super::{
     exec, transfer, ScpError, ScpManager, TransferDirection, TransferEvent, TransferInfo,
@@ -30,9 +31,9 @@ use super::{
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const EMIT_THROTTLE: Duration = Duration::from_millis(100);
-const SPEED_WINDOW: Duration = Duration::from_secs(2);
 /// Fix infinite history
 const MAX_FINISHED_HISTORY: usize = 200;
+const SPEED_WINDOW: Duration = Duration::from_millis(500);
 
 // ─── Job state ───────────────────────────────────────────────────────────────
 
@@ -77,11 +78,7 @@ pub struct TransferJobState {
 
 impl TransferJobState {
     fn eta(&self) -> Option<u64> {
-        if self.speed_bps > 0 && self.total_bytes > self.bytes_transferred {
-            Some((self.total_bytes - self.bytes_transferred) / self.speed_bps)
-        } else {
-            None
-        }
+        eta_secs(self.speed_bps, self.total_bytes, self.bytes_transferred)
     }
 
     fn to_event(&self) -> TransferEvent {
@@ -122,6 +119,24 @@ impl TransferJobState {
 }
 
 // ─── Manager ─────────────────────────────────────────────────────────────────
+
+impl ProgressFields for TransferJobState {
+    fn bytes_transferred(&mut self) -> &mut u64 {
+        &mut self.bytes_transferred
+    }
+    fn speed_bps(&mut self) -> &mut u64 {
+        &mut self.speed_bps
+    }
+    fn speed_window_bytes(&mut self) -> &mut u64 {
+        &mut self.speed_window_bytes
+    }
+    fn speed_window_start(&mut self) -> &mut Instant {
+        &mut self.speed_window_start
+    }
+    fn last_emit(&mut self) -> &mut Instant {
+        &mut self.last_emit
+    }
+}
 
 pub struct ScpTransferManager {
     jobs: Arc<DashMap<String, TransferJobState>>,
@@ -413,20 +428,7 @@ impl ScpTransferManager {
     }
 
     pub fn set_max_concurrent(&self, n: u32) {
-        let old = self.max_concurrent.swap(n, Ordering::SeqCst);
-        let current = self.semaphore.available_permits() as u32;
-        match n.cmp(&old) {
-            std::cmp::Ordering::Greater => self.semaphore.add_permits((n - old) as usize),
-            std::cmp::Ordering::Less => {
-                let to_remove = (old - n).min(current);
-                for _ in 0..to_remove {
-                    if let Ok(permit) = self.semaphore.try_acquire() {
-                        permit.forget();
-                    }
-                }
-            }
-            std::cmp::Ordering::Equal => {}
-        }
+        apply_concurrency(&self.semaphore, &self.max_concurrent, n);
     }
 }
 
@@ -643,6 +645,9 @@ async fn execute_transfer(
 
     match result {
         Ok(()) => {
+            if let Some(mut job) = jobs.get_mut(job_id) {
+                job.bytes_transferred = job.total_bytes;
+            }
             crate::telemetry::capture(
                 "transfer_completed",
                 serde_json::json!({
@@ -775,21 +780,9 @@ fn report_progress(
 ) {
     if let Some(mut job) = jobs.get_mut(job_id) {
         let delta = cumulative.saturating_sub(job.bytes_transferred);
-        job.bytes_transferred = cumulative;
-        job.speed_window_bytes += delta;
 
-        let window_elapsed = job.speed_window_start.elapsed();
-        if window_elapsed >= SPEED_WINDOW {
-            let secs = window_elapsed.as_secs_f64().max(0.001);
-            job.speed_bps = (job.speed_window_bytes as f64 / secs) as u64;
-            job.speed_window_bytes = 0;
-            job.speed_window_start = Instant::now();
-        } else if job.speed_bps == 0 && window_elapsed.as_millis() > 200 {
-            let secs = window_elapsed.as_secs_f64().max(0.001);
-            job.speed_bps = (job.speed_window_bytes as f64 / secs) as u64;
-        }
-
-        if job.last_emit.elapsed() >= EMIT_THROTTLE {
+        let should_emit = record_progress(&mut *job, delta, EMIT_THROTTLE, SPEED_WINDOW);
+        if should_emit {
             job.last_emit = Instant::now();
             let event = job.to_event();
             drop(job);

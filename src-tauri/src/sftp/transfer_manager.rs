@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -12,6 +12,8 @@ use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
+use crate::transfer_common::{apply_concurrency, eta_secs, record_progress, ProgressFields};
+
 use super::{
     validate_remote_name, SftpError, SftpManager, TransferDirection, TransferEvent, TransferInfo,
     TransferStatus,
@@ -22,10 +24,10 @@ use super::{
 const CHUNK_SIZE: usize = 256 * 1024; // 256 KB
 /// Minimum duration between consecutive progress events per transfer.
 const EMIT_THROTTLE: Duration = Duration::from_millis(100);
-/// Window over which bytes are accumulated to compute speed.
-const SPEED_WINDOW: Duration = Duration::from_secs(2);
 /// Fix infinite history
 const MAX_FINISHED_HISTORY: usize = 200;
+/// Window over which bytes are accumulated to compute speed.
+const SPEED_WINDOW: Duration = Duration::from_millis(500);
 
 // ─── Job state ───────────────────────────────────────────────────────────────
 
@@ -70,6 +72,8 @@ pub struct TransferJobState {
 
 impl TransferJobState {
     fn to_event(&self) -> TransferEvent {
+        let eta_secs = eta_secs(self.speed_bps, self.total_bytes, self.bytes_transferred);
+
         TransferEvent {
             transfer_id: self.transfer_id.clone(),
             sftp_session_id: self.sftp_session_id.clone(),
@@ -82,12 +86,14 @@ impl TransferJobState {
             files_done: self.files_done,
             files_total: self.files_total,
             speed_bps: self.speed_bps,
-            eta_secs: self.eta_secs(),
+            eta_secs,
             created_at: self.created_at,
         }
     }
 
     fn to_info(&self) -> TransferInfo {
+        let eta_secs = eta_secs(self.speed_bps, self.total_bytes, self.bytes_transferred);
+
         TransferInfo {
             transfer_id: self.transfer_id.clone(),
             sftp_session_id: self.sftp_session_id.clone(),
@@ -100,18 +106,31 @@ impl TransferJobState {
             files_done: self.files_done,
             files_total: self.files_total,
             speed_bps: self.speed_bps,
-            eta_secs: self.eta_secs(),
+            eta_secs,
             created_at: self.created_at,
         }
-    }
-
-    fn eta_secs(&self) -> Option<u64> {
-        (self.speed_bps > 0 && self.total_bytes > self.bytes_transferred)
-            .then(|| (self.total_bytes - self.bytes_transferred) / self.speed_bps)
     }
 }
 
 // ─── Manager ─────────────────────────────────────────────────────────────────
+
+impl ProgressFields for TransferJobState {
+    fn bytes_transferred(&mut self) -> &mut u64 {
+        &mut self.bytes_transferred
+    }
+    fn speed_bps(&mut self) -> &mut u64 {
+        &mut self.speed_bps
+    }
+    fn speed_window_bytes(&mut self) -> &mut u64 {
+        &mut self.speed_window_bytes
+    }
+    fn speed_window_start(&mut self) -> &mut Instant {
+        &mut self.speed_window_start
+    }
+    fn last_emit(&mut self) -> &mut Instant {
+        &mut self.last_emit
+    }
+}
 
 pub struct TransferManager {
     jobs: Arc<DashMap<String, TransferJobState>>,
@@ -394,7 +413,7 @@ impl TransferManager {
                         job.files_total = count.max(job.files_done);
                         let event = job.to_event();
                         drop(job);
-                        app_handle.emit("sftp:transfer", event).ok();
+                        let _ = app_handle.emit("sftp:transfer", event);
                     }
                 });
             }
@@ -488,25 +507,7 @@ impl TransferManager {
     /// the counter so future acquisitions are limited (in-flight work is not
     /// interrupted).
     pub fn set_max_concurrent(&self, n: u32) {
-        let old = self.max_concurrent.swap(n, Ordering::SeqCst);
-        let current_permits = self.semaphore.available_permits() as u32;
-
-        match n.cmp(&old) {
-            std::cmp::Ordering::Greater => {
-                self.semaphore.add_permits((n - old) as usize);
-            }
-            std::cmp::Ordering::Less => {
-                // Acquire and permanently forget surplus permits so they are
-                // removed from the pool. We only take what is currently idle.
-                let to_remove = (old - n).min(current_permits);
-                for _ in 0..to_remove {
-                    if let Ok(permit) = self.semaphore.try_acquire() {
-                        permit.forget();
-                    }
-                }
-            }
-            std::cmp::Ordering::Equal => {}
-        }
+        apply_concurrency(&self.semaphore, &self.max_concurrent, n);
     }
 }
 
@@ -807,6 +808,9 @@ async fn execute_transfer(
 
     match result {
         Ok(()) => {
+            if let Some(mut job) = jobs.get_mut(job_id) {
+                job.bytes_transferred = job.total_bytes;
+            }
             crate::telemetry::capture(
                 "transfer_completed",
                 serde_json::json!({
@@ -944,25 +948,8 @@ fn update_progress(
     }
 
     if let Some(mut job) = jobs.get_mut(job_id) {
-        job.bytes_transferred += new_bytes;
-        job.speed_window_bytes += new_bytes;
-
-        // Recompute speed every SPEED_WINDOW. Before the first window completes,
-        // estimate speed from the time elapsed so far so the UI doesn't show 0.
-        let window_elapsed = job.speed_window_start.elapsed();
-        if window_elapsed >= SPEED_WINDOW {
-            let secs = window_elapsed.as_secs_f64().max(0.001);
-            job.speed_bps = (job.speed_window_bytes as f64 / secs) as u64;
-            job.speed_window_bytes = 0;
-            job.speed_window_start = Instant::now();
-        } else if job.speed_bps == 0 && window_elapsed.as_millis() > 200 {
-            // Initial estimate before the first full window
-            let secs = window_elapsed.as_secs_f64().max(0.001);
-            job.speed_bps = (job.speed_window_bytes as f64 / secs) as u64;
-        }
-
-        // Emit only if EMIT_THROTTLE has elapsed.
-        if job.last_emit.elapsed() >= EMIT_THROTTLE {
+        let should_emit = record_progress(&mut *job, new_bytes, EMIT_THROTTLE, SPEED_WINDOW);
+        if should_emit {
             job.last_emit = Instant::now();
             let event = job.to_event();
             drop(job);
@@ -1011,8 +998,6 @@ struct RegionError {
 
 /// State shared by the concurrent region writers of one file upload.
 struct UploadFileCtx {
-    jobs: Arc<DashMap<String, TransferJobState>>,
-    job_id: String,
     sftp_arc: Arc<tokio::sync::Mutex<russh_sftp::client::SftpSession>>,
     local_path: PathBuf,
     remote_path: String,
@@ -1020,7 +1005,20 @@ struct UploadFileCtx {
     /// when a single region owns the file end-to-end.
     open_flags: OpenFlags,
     cancel_token: CancellationToken,
-    app_handle: AppHandle,
+    progress_tx: mpsc::UnboundedSender<u64>,
+}
+
+fn mark_file_done(
+    jobs: &Arc<DashMap<String, TransferJobState>>,
+    job_id: &str,
+    app_handle: &AppHandle,
+) {
+    if let Some(mut job) = jobs.get_mut(job_id) {
+        job.files_done += 1;
+        let event = job.to_event();
+        drop(job);
+        let _ = app_handle.emit("sftp:transfer", event);
+    }
 }
 
 /// Fold per-region outcomes into the first error to surface and whether the
@@ -1082,15 +1080,26 @@ async fn run_upload_file(
         OpenFlags::WRITE
     };
 
+    let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<u64>();
+    let aggregator = tokio::spawn({
+        let jobs = jobs.clone();
+        let job_id = job_id.to_string();
+        let cancel_token = cancel_token.clone();
+        let app_handle = app_handle.clone();
+        async move {
+            while let Some(n) = progress_rx.recv().await {
+                let _ = update_progress(&jobs, &job_id, n, &cancel_token, &app_handle);
+            }
+        }
+    });
+
     let ctx = Arc::new(UploadFileCtx {
-        jobs: jobs.clone(),
-        job_id: job_id.to_string(),
         sftp_arc: sftp_arc.clone(),
         local_path: local_path.to_path_buf(),
         remote_path: remote_path.to_string(),
         open_flags,
         cancel_token: cancel_token.clone(),
-        app_handle: app_handle.clone(),
+        progress_tx,
     });
 
     let tasks: Vec<_> = regions
@@ -1117,6 +1126,9 @@ async fn run_upload_file(
         results.push(r);
     }
 
+    drop(ctx);
+    let _ = aggregator.await;
+
     let (first_err, remove_partial) = fold_region_results(results);
     if let Some(e) = first_err {
         // Best-effort cleanup of the partial remote file; on a dropped
@@ -1130,9 +1142,7 @@ async fn run_upload_file(
         return Err(e);
     }
 
-    if let Some(mut job) = jobs.get_mut(job_id) {
-        job.files_done += 1;
-    }
+    mark_file_done(jobs, job_id, app_handle);
     Ok(())
 }
 
@@ -1178,13 +1188,8 @@ async fn upload_region(ctx: Arc<UploadFileCtx>, start: u64, end: u64) -> Result<
         end - start,
         &ctx.cancel_token,
         |n| {
-            update_progress(
-                &ctx.jobs,
-                &ctx.job_id,
-                n,
-                &ctx.cancel_token,
-                &ctx.app_handle,
-            )
+            let _ = ctx.progress_tx.send(n);
+            Ok(())
         },
     )
     .await
@@ -1403,9 +1408,7 @@ async fn run_download_file(
         .map_err(|e| SftpError::RemoteIoError(e.to_string()))?;
 
     // Mark this file done.
-    if let Some(mut job) = jobs.get_mut(job_id) {
-        job.files_done += 1;
-    }
+    mark_file_done(jobs, job_id, app_handle);
 
     Ok(())
 }
