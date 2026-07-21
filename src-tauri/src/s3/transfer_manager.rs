@@ -734,18 +734,14 @@ fn set_job_status(
     let Some(mut job) = jobs.get_mut(job_id) else {
         return;
     };
-    let is_terminal = matches!(
-        status,
-        S3TransferStatus::Completed | S3TransferStatus::Failed(_) | S3TransferStatus::Cancelled
-    );
     job.status = status;
     job.error = error;
     let event = job.to_event();
-    drop(job);
     let _ = app_handle.emit("s3:transfer", event);
-    if is_terminal {
+    if job.is_terminal() {
         record_finished(jobs, finished_order, job_id);
     }
+    drop(job);
 }
 
 impl FinishedStatus for TransferJobState {
