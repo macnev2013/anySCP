@@ -1,6 +1,20 @@
+use dashmap::DashMap;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+/// Minimum duration between consecutive progress events per transfer.
+const EMIT_THROTTLE: Duration = Duration::from_millis(100);
+/// Fix infinite history
+const MAX_FINISHED_HISTORY: usize = 200;
+/// Window over which bytes are accumulated to compute speed.
+const SPEED_WINDOW: Duration = Duration::from_millis(500);
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
 
 pub fn eta_secs(speed_bps: u64, total_bytes: u64, bytes_transferred: u64) -> Option<u64> {
     if speed_bps > 0 && total_bytes > bytes_transferred {
@@ -35,19 +49,14 @@ pub trait ProgressFields {
     fn last_emit(&mut self) -> &mut Instant;
 }
 
-pub fn record_progress<T: ProgressFields>(
-    job: &mut T,
-    new_bytes: u64,
-    emit_throttle: Duration,
-    speed_window: Duration,
-) -> bool {
+pub fn record_progress<T: ProgressFields>(job: &mut T, new_bytes: u64) -> bool {
     const EMA_ALPHA: f64 = 0.3;
 
     *job.bytes_transferred() += new_bytes;
     *job.speed_window_bytes() += new_bytes;
 
     let window_elapsed = job.speed_window_start().elapsed();
-    if window_elapsed >= speed_window {
+    if window_elapsed >= SPEED_WINDOW {
         let secs = window_elapsed.as_secs_f64().max(0.001);
         let sample_bps = *job.speed_window_bytes() as f64 / secs;
         let prev_bps = *job.speed_bps() as f64;
@@ -64,11 +73,36 @@ pub fn record_progress<T: ProgressFields>(
         *job.speed_bps() = (*job.speed_window_bytes() as f64 / secs) as u64;
     }
 
-    if job.last_emit().elapsed() >= emit_throttle {
+    if job.last_emit().elapsed() >= EMIT_THROTTLE {
         *job.last_emit() = Instant::now();
         true
     } else {
         false
+    }
+}
+
+pub trait FinishedStatus {
+    fn is_terminal(&self) -> bool;
+}
+
+pub fn record_finished<T: FinishedStatus>(
+    jobs: &DashMap<String, T>,
+    finished_order: &Mutex<VecDeque<String>>,
+    job_id: &str,
+) {
+    let mut order = finished_order
+        .lock()
+        .expect("finished_order mutex poisoned");
+    order.push_back(job_id.to_string());
+
+    while order.len() > MAX_FINISHED_HISTORY {
+        let Some(oldest) = order.pop_front() else {
+            break;
+        };
+        let still_terminal = jobs.get(&oldest).is_some_and(|job| job.is_terminal());
+        if still_terminal {
+            jobs.remove(&oldest);
+        }
     }
 }
 
@@ -118,12 +152,7 @@ mod tests {
             speed_window_start: Instant::now(),
             last_emit: Instant::now() - Duration::from_secs(10),
         };
-        let should_emit = record_progress(
-            &mut job,
-            1024,
-            Duration::from_millis(100),
-            Duration::from_secs(2),
-        );
+        let should_emit = record_progress(&mut job, 1024);
         assert_eq!(job.bytes_transferred, 1024);
         assert!(should_emit); // last_emit was far in the past
     }

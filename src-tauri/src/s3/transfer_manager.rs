@@ -2,7 +2,7 @@ use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
 use tauri::{AppHandle, Emitter};
@@ -11,18 +11,14 @@ use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
-use crate::transfer_common::{eta_secs, record_progress, ProgressFields};
+use crate::transfer_common::{
+    eta_secs, record_finished, record_progress, FinishedStatus, ProgressFields,
+};
 
 use super::{S3Error, S3Manager, S3TransferDirection, S3TransferEvent, S3TransferStatus};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-/// Minimum duration between consecutive progress events per transfer.
-const EMIT_THROTTLE: Duration = Duration::from_millis(100);
-/// Fix infinite history
-const MAX_FINISHED_HISTORY: usize = 200;
-/// Window over which bytes are accumulated to compute speed.
-const SPEED_WINDOW: Duration = Duration::from_millis(500);
 const UPLOAD_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 const RANGE_SIZE: u64 = 8 * 1024 * 1024;
 
@@ -752,35 +748,14 @@ fn set_job_status(
     }
 }
 
-/// Track a newly-finished job and evict the oldest once history exceeds
-fn record_finished(
-    jobs: &Arc<DashMap<String, TransferJobState>>,
-    finished_order: &Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
-    job_id: &str,
-) {
-    let mut order = finished_order
-        .lock()
-        .expect("finished_order mutex poisoned");
-    order.push_back(job_id.to_string());
-
-    while order.len() > MAX_FINISHED_HISTORY {
-        let Some(oldest) = order.pop_front() else {
-            break;
-        };
-        let still_terminal = jobs.get(&oldest).is_some_and(|job| {
-            matches!(
-                job.status,
-                S3TransferStatus::Completed
-                    | S3TransferStatus::Failed(_)
-                    | S3TransferStatus::Cancelled
-            )
-        });
-        if still_terminal {
-            jobs.remove(&oldest);
-        }
+impl FinishedStatus for TransferJobState {
+    fn is_terminal(&self) -> bool {
+        matches!(
+            self.status,
+            S3TransferStatus::Completed | S3TransferStatus::Failed(_) | S3TransferStatus::Cancelled
+        )
     }
 }
-
 /// Update bytes/speed/ETA and emit a throttled progress event.
 /// Returns `Err(TransferCancelled)` if the token is cancelled.
 fn update_progress(
@@ -795,7 +770,7 @@ fn update_progress(
     }
 
     if let Some(mut job) = jobs.get_mut(job_id) {
-        let should_emit = record_progress(&mut *job, new_bytes, EMIT_THROTTLE, SPEED_WINDOW);
+        let should_emit = record_progress(&mut *job, new_bytes);
         if should_emit {
             job.last_emit = Instant::now();
             let event = job.to_event();

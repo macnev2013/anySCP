@@ -11,7 +11,7 @@ use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
 use russh::client::Handle;
@@ -21,19 +21,14 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::ssh::handler::SshClientHandler;
-use crate::transfer_common::{apply_concurrency, eta_secs, record_progress, ProgressFields};
+use crate::transfer_common::{
+    apply_concurrency, eta_secs, record_finished, record_progress, FinishedStatus, ProgressFields,
+};
 
 use super::{
     exec, transfer, ScpError, ScpManager, TransferDirection, TransferEvent, TransferInfo,
     TransferStatus,
 };
-
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-const EMIT_THROTTLE: Duration = Duration::from_millis(100);
-/// Fix infinite history
-const MAX_FINISHED_HISTORY: usize = 200;
-const SPEED_WINDOW: Duration = Duration::from_millis(500);
 
 // ─── Job state ───────────────────────────────────────────────────────────────
 
@@ -742,30 +737,12 @@ fn set_job_status(
     }
 }
 
-/// Track a newly-finished job and evict the oldest once history exceeds
-fn record_finished(
-    jobs: &Arc<DashMap<String, TransferJobState>>,
-    finished_order: &Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
-    job_id: &str,
-) {
-    let mut order = finished_order
-        .lock()
-        .expect("finished_order mutex poisoned");
-    order.push_back(job_id.to_string());
-
-    while order.len() > MAX_FINISHED_HISTORY {
-        let Some(oldest) = order.pop_front() else {
-            break;
-        };
-        let still_terminal = jobs.get(&oldest).is_some_and(|job| {
-            matches!(
-                job.status,
-                TransferStatus::Completed | TransferStatus::Failed(_) | TransferStatus::Cancelled
-            )
-        });
-        if still_terminal {
-            jobs.remove(&oldest);
-        }
+impl FinishedStatus for TransferJobState {
+    fn is_terminal(&self) -> bool {
+        matches!(
+            self.status,
+            TransferStatus::Completed | TransferStatus::Failed(_) | TransferStatus::Cancelled
+        )
     }
 }
 
@@ -781,7 +758,7 @@ fn report_progress(
     if let Some(mut job) = jobs.get_mut(job_id) {
         let delta = cumulative.saturating_sub(job.bytes_transferred);
 
-        let should_emit = record_progress(&mut *job, delta, EMIT_THROTTLE, SPEED_WINDOW);
+        let should_emit = record_progress(&mut *job, delta);
         if should_emit {
             job.last_emit = Instant::now();
             let event = job.to_event();
