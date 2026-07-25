@@ -308,8 +308,10 @@ export function AppShell() {
         key: "0",
         meta: true,
         action: () => {
-          const target = preZoomFontSizeRef.current ?? 14; // TODO: export DEFAULT
-          useSettingsStore.getState().setTerminalFontSize(target);
+          // No zoom active → nothing to reset; never clobber the user's
+          // configured font size with a default.
+          if (preZoomFontSizeRef.current === null) return;
+          useSettingsStore.getState().setTerminalFontSize(preZoomFontSizeRef.current);
           preZoomFontSizeRef.current = null;
         },
         when: () =>

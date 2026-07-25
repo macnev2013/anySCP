@@ -2,6 +2,7 @@ import {
   useState,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useCallback,
 } from "react";
@@ -404,22 +405,30 @@ export function ExplorerFileTable({
 
   // ─── Sort ─────────────────────────────────────────────────────────────────
 
-  const sortedEntries = [...entries].sort((a, b) => {
-    const aIsDir = a.entryType === "Directory";
-    const bIsDir = b.entryType === "Directory";
-    if (aIsDir && !bIsDir) return -1;
-    if (!aIsDir && bIsDir) return 1;
+  const sortedEntries = useMemo(
+    () =>
+      [...entries].sort((a, b) => {
+        const aIsDir = a.entryType === "Directory";
+        const bIsDir = b.entryType === "Directory";
+        if (aIsDir && !bIsDir) return -1;
+        if (!aIsDir && bIsDir) return 1;
 
-    let cmp = 0;
-    if (sortBy === "name") {
-      cmp = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-    } else if (sortBy === "size") {
-      cmp = a.size - b.size;
-    } else {
-      cmp = (a.modified ?? 0) - (b.modified ?? 0);
-    }
-    return sortAsc ? cmp : -cmp;
-  });
+        let cmp = 0;
+        if (sortBy === "name") {
+          cmp = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+        } else if (sortBy === "size") {
+          cmp = a.size - b.size;
+        } else {
+          cmp = (a.modified ?? 0) - (b.modified ?? 0);
+        }
+        return sortAsc ? cmp : -cmp;
+      }),
+    [entries, sortBy, sortAsc],
+  );
+
+  // Keyboard navigation walks this on every arrow keydown — derive it once per
+  // sort change instead of rebuilding a fresh array per keypress.
+  const sortedIds = useMemo(() => sortedEntries.map((en) => en.id), [sortedEntries]);
 
   const handleSortClick = (col: "name" | "size" | "modified") => {
     if (sortBy === col) {
@@ -1198,7 +1207,7 @@ export function ExplorerFileTable({
                       !isInput
                     ) {
                       e.preventDefault();
-                      const ids = sortedEntries.map((en) => en.id);
+                      const ids = sortedIds;
                       const currentIdx = ids.indexOf(entry.id);
                       const direction = e.key === "ArrowDown" ? 1 : -1;
                       const nextIdx = Math.min(
