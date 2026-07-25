@@ -723,14 +723,25 @@ fn set_job_status(
     let Some(mut job) = jobs.get_mut(job_id) else {
         return;
     };
+    // A terminal status is final: the transition that set it already emitted
+    // and recorded the job. A second call (queued-cancel followed by the
+    // worker's dequeue, or a cancel racing the InProgress mark) must not
+    // overwrite it or push a duplicate history entry.
+    if job.is_terminal() {
+        return;
+    }
     job.status = status;
     job.error = error;
     let event = job.to_event();
+    let is_terminal = job.is_terminal();
+    // Drop the shard write-guard BEFORE record_finished: it re-enters the map
+    // (get/remove of the evicted id), and a same-shard hit would deadlock.
+    drop(job);
+
     let _ = app_handle.emit("scp:transfer", event);
-    if job.is_terminal() {
+    if is_terminal {
         record_finished(jobs, finished_order, job_id);
     }
-    drop(job);
 }
 
 impl FinishedStatus for TransferJobState {
@@ -756,7 +767,6 @@ fn report_progress(
 
         let should_emit = record_progress(&mut *job, delta);
         if should_emit {
-            job.last_emit = Instant::now();
             let event = job.to_event();
             drop(job);
             let _ = app_handle.emit("scp:transfer", event);

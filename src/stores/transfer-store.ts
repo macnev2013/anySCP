@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { TransferEvent, TransferStatusValue } from "../types";
 
 /// Fix infinite history
-const MAX_FINISHED_HOSTORY = 200;
+const MAX_FINISHED_HISTORY = 200;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -16,12 +16,12 @@ function trimFinished(
   transfers: Map<string, TransferEvent>,
   order: string[],
 ): { transfers: Map<string, TransferEvent>; order: string[] } {
-  if (order.length <= MAX_FINISHED_HOSTORY) {
+  if (order.length <= MAX_FINISHED_HISTORY) {
     return { transfers, order };
   }
   const next = new Map(transfers);
   const nextOrder = order.slice();
-  while (nextOrder.length > MAX_FINISHED_HOSTORY) {
+  while (nextOrder.length > MAX_FINISHED_HISTORY) {
     const oldest = nextOrder.shift()!;
     const t = next.get(oldest);
     if (t && isFinished(t.status)) {
@@ -63,6 +63,11 @@ export const useTransferStore = create<TransferState>((set) => ({
       next.set(event.transfer_id, event);
 
       if (!isFinished(event.status)) {
+        return { transfers: next };
+      }
+      // A transfer can emit more than one terminal event (e.g. a cancel that
+      // races the worker) — never let it occupy two history slots.
+      if (state.finished_order.includes(event.transfer_id)) {
         return { transfers: next };
       }
       const order = [...state.finished_order, event.transfer_id];
