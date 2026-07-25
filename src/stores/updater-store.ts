@@ -93,8 +93,8 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
   },
 
   // Runs once on launch. With auto-update on, silently downloads + installs the
-  // update (applied next launch). With it off, surfaces a popup unless the user
-  // skipped this exact version.
+  // update, then relaunches straight into the new binary. With it off, surfaces
+  // a popup unless the user skipped this exact version.
   checkOnStartup: async () => {
     if (get().status === "checking" || get().status === "downloading") return;
     set({ status: "checking", error: null });
