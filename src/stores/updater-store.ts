@@ -93,7 +93,7 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
   },
 
   // Runs once on launch. With auto-update on, silently downloads + installs the
-  // update, then relaunches straight into the new binary. With it off, surfaces
+  // update and relaunches immediately into the new binary. With it off, surfaces
   // a popup unless the user skipped this exact version.
   checkOnStartup: async () => {
     if (get().status === "checking" || get().status === "downloading") return;
@@ -115,8 +115,18 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
         await downloadInstall(update, set);
         // Relaunch straight into the new binary
         if (get().status === "ready") {
-          const { relaunch } = await import("@tauri-apps/plugin-process");
-          await relaunch();
+          try {
+            const { relaunch } = await import("@tauri-apps/plugin-process");
+            await relaunch();
+          } catch (relaunchErr) {
+            set({
+              status: "error",
+              error: message(
+                relaunchErr,
+                "Couldn't restart automatically — please reopen the app",
+              ),
+            });
+          }
         }
       } else if (skippedUpdateVersion === update.version) {
         set({ status: "idle" });
