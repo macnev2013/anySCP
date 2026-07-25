@@ -156,4 +156,107 @@ mod tests {
         assert_eq!(job.bytes_transferred, 1024);
         assert!(should_emit); // last_emit was far in the past
     }
+
+    // ─── record_finished eviction ────────────────────────────────────────────
+
+    struct FinishedJob {
+        terminal: bool,
+    }
+
+    impl FinishedStatus for FinishedJob {
+        fn is_terminal(&self) -> bool {
+            self.terminal
+        }
+    }
+
+    fn seed(
+        jobs: &DashMap<String, FinishedJob>,
+        order: &Mutex<VecDeque<String>>,
+        count: usize,
+        terminal: bool,
+    ) {
+        for i in 0..count {
+            let id = format!("job-{i}");
+            jobs.insert(id.clone(), FinishedJob { terminal });
+            order.lock().unwrap().push_back(id);
+        }
+    }
+
+    #[test]
+    fn record_finished_evicts_oldest_terminal_jobs_past_the_cap() {
+        let jobs = DashMap::new();
+        let order = Mutex::new(VecDeque::new());
+        seed(&jobs, &order, MAX_FINISHED_HISTORY, true);
+
+        jobs.insert("newest".into(), FinishedJob { terminal: true });
+        record_finished(&jobs, &order, "newest");
+
+        let order = order.lock().unwrap();
+        assert_eq!(order.len(), MAX_FINISHED_HISTORY);
+        assert!(!jobs.contains_key("job-0"), "oldest terminal job evicted");
+        assert!(jobs.contains_key("newest"));
+        assert_eq!(order.back().map(String::as_str), Some("newest"));
+    }
+
+    #[test]
+    fn record_finished_never_deletes_a_job_that_went_live_again() {
+        let jobs = DashMap::new();
+        let order = Mutex::new(VecDeque::new());
+        seed(&jobs, &order, MAX_FINISHED_HISTORY, true);
+        // job-0 is due for eviction but was retried back to a live state.
+        jobs.get_mut("job-0").unwrap().terminal = false;
+
+        jobs.insert("newest".into(), FinishedJob { terminal: true });
+        record_finished(&jobs, &order, "newest");
+
+        assert!(
+            jobs.contains_key("job-0"),
+            "non-terminal job must survive eviction (its order slot is still consumed)"
+        );
+    }
+
+    #[test]
+    fn record_finished_tolerates_order_ids_missing_from_the_map() {
+        let jobs: DashMap<String, FinishedJob> = DashMap::new();
+        let order = Mutex::new(VecDeque::new());
+        // Order references jobs that were already removed externally.
+        for i in 0..(MAX_FINISHED_HISTORY + 5) {
+            order.lock().unwrap().push_back(format!("gone-{i}"));
+        }
+
+        jobs.insert("newest".into(), FinishedJob { terminal: true });
+        record_finished(&jobs, &order, "newest");
+
+        assert_eq!(order.lock().unwrap().len(), MAX_FINISHED_HISTORY);
+        assert!(jobs.contains_key("newest"));
+    }
+
+    /// Deadlock watchdog: `record_finished` re-enters the map (get + remove of
+    /// evicted ids), so it must never itself hold a guard across that access,
+    /// and callers must drop theirs first (see set_job_status). Two shards is
+    /// dashmap's minimum; a same-key re-entrant guard deadlocks regardless of
+    /// shard count, and the watchdog turns that hang into a test failure.
+    #[test]
+    fn record_finished_mass_eviction_completes_on_a_minimal_shard_map() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let jobs: DashMap<String, FinishedJob> =
+                DashMap::with_capacity_and_hasher_and_shard_amount(
+                    512,
+                    std::collections::hash_map::RandomState::new(),
+                    2,
+                );
+            let order = Mutex::new(VecDeque::new());
+            seed(&jobs, &order, MAX_FINISHED_HISTORY + 100, true);
+
+            jobs.insert("newest".into(), FinishedJob { terminal: true });
+            record_finished(&jobs, &order, "newest");
+            let _ = tx.send(order.lock().unwrap().len());
+        });
+
+        let len = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("record_finished deadlocked on same-shard eviction");
+        assert_eq!(len, MAX_FINISHED_HISTORY);
+    }
 }
