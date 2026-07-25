@@ -46,6 +46,10 @@ pub struct SshManager {
     /// running; cancelling its token aborts the attempt before any session is
     /// registered, so no ghost session or lingering handle is left behind.
     pending_connects: DashMap<String, CancellationToken>,
+    /// session_id → saved-host id, for every session opened against a saved
+    /// host (PTY or bare/SFTP). Lets `disconnect` tear down auto-started tunnels
+    /// once the *last* session for a host goes away.
+    session_hosts: DashMap<String, String>,
 }
 
 impl SshManager {
@@ -54,6 +58,7 @@ impl SshManager {
             sessions: DashMap::new(),
             bare_handles: DashMap::new(),
             pending_connects: DashMap::new(),
+            session_hosts: DashMap::new(),
         }
     }
 
@@ -90,6 +95,7 @@ impl SshManager {
         config: HostConfig,
         app_handle: AppHandle,
         attempt_id: Option<String>,
+        host_id: Option<String>,
     ) -> Result<SessionId, SshError> {
         let session_id = SessionId::new();
         let sid = session_id.0.clone();
@@ -168,6 +174,9 @@ impl SshManager {
 
         let session = outcome?;
         self.sessions.insert(sid.clone(), session);
+        if let Some(hid) = host_id {
+            self.session_hosts.insert(sid.clone(), hid);
+        }
 
         Ok(session_id)
     }
@@ -179,6 +188,7 @@ impl SshManager {
         &self,
         config: HostConfig,
         attempt_id: Option<String>,
+        host_id: Option<String>,
     ) -> Result<SessionId, SshError> {
         let session_id = SessionId::new();
         let sid = session_id.0.clone();
@@ -219,6 +229,9 @@ impl SshManager {
                 _jump_handles: jump_handles,
             },
         );
+        if let Some(hid) = host_id {
+            self.session_hosts.insert(sid.clone(), hid);
+        }
 
         Ok(session_id)
     }
@@ -301,8 +314,8 @@ impl SshManager {
     /// Authenticate an already-connected handle using the config's auth method.
     /// Shared by direct and tunnelled connection paths (and the health-check
     /// probe, which authenticates the jump host before tunnelling to the target).
-    pub(crate) async fn authenticate_handle(
-        handle: &mut client::Handle<SshClientHandler>,
+    pub(crate) async fn authenticate_handle<H: client::Handler<Error = russh::Error>>(
+        handle: &mut client::Handle<H>,
         config: &HostConfig,
     ) -> Result<(), SshError> {
         let authenticated = match &config.auth_method {
@@ -351,8 +364,8 @@ impl SshManager {
         Ok(())
     }
 
-    async fn auth_with_key_data(
-        handle: &mut client::Handle<SshClientHandler>,
+    async fn auth_with_key_data<H: client::Handler<Error = russh::Error>>(
+        handle: &mut client::Handle<H>,
         username: &str,
         key_data: &str,
         passphrase: Option<&str>,
@@ -485,6 +498,15 @@ impl SshManager {
                 status: ConnectionStatus::Disconnected,
             },
         );
+
+        // If this was the last live session for its host, tear down any tunnels
+        // that were auto-started on connect so they don't outlive the host.
+        if let Some((_, host_id)) = self.session_hosts.remove(session_id) {
+            let host_still_connected = self.session_hosts.iter().any(|e| *e.value() == host_id);
+            if !host_still_connected {
+                crate::portforward::commands::stop_auto_tunnels_for_host(&app_handle, &host_id);
+            }
+        }
 
         info!(session_id = %session_id, "SSH disconnected");
         Ok(())

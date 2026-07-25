@@ -88,6 +88,7 @@ export function ImportSshConfigModal({ onClose, onImported }: ImportSshConfigMod
           identity_file: e.identity_file,
           proxy_jump: e.proxy_jump,
           keep_alive_interval: e.keep_alive_interval,
+          forwards: e.forwards ?? [],
         }));
 
       const importResult = await invoke<ImportResult>("import_save_ssh_hosts", {

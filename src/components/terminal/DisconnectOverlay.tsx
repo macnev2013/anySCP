@@ -45,6 +45,14 @@ export function DisconnectOverlay({
         newSessionId = await invoke<string>("ssh_connect", { hostConfig });
       }
 
+      // Tear down the old (dead) backend session now that the new one is up.
+      // Done after connecting so the host is never seen as fully disconnected
+      // in between — otherwise its auto-started tunnels would be torn down and
+      // immediately re-created. Best-effort: the session may already be gone.
+      try {
+        await invoke("ssh_disconnect", { sessionId });
+      } catch { /* already disconnected */ }
+
       const { removeSession, addSession } = useSessionStore.getState();
       const label = hostConfig.label || `${hostConfig.username}@${hostConfig.host}`;
       useTabStore.getState().removeTab(sessionId);

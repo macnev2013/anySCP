@@ -1569,6 +1569,44 @@ impl HostDb {
         Ok(())
     }
 
+    /// Look up an existing rule id by its natural key (host + type + listen
+    /// bind/port + destination). Used by the SSH-config import to make
+    /// re-importing the same host idempotent: a matching rule is left untouched
+    /// rather than duplicated. Returns `None` when no rule matches.
+    #[allow(clippy::too_many_arguments)]
+    pub fn find_pf_rule_id_by_natural_key(
+        &self,
+        host_id: &str,
+        forward_type: &str,
+        bind_address: &str,
+        local_port: u32,
+        remote_host: &str,
+        remote_port: u32,
+    ) -> Result<Option<String>, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let id = conn
+            .query_row(
+                "SELECT id FROM port_forwarding_rules
+                 WHERE host_id = ?1 AND forward_type = ?2 AND bind_address = ?3
+                   AND local_port = ?4 AND remote_host = ?5 AND remote_port = ?6
+                 LIMIT 1",
+                params![
+                    host_id,
+                    forward_type,
+                    bind_address,
+                    local_port as i64,
+                    remote_host,
+                    remote_port as i64
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(id)
+    }
+
     /// Update last_used_at timestamp for a rule.
     pub fn touch_pf_rule(&self, id: &str) -> Result<(), DbError> {
         let conn = self
@@ -1617,6 +1655,26 @@ impl HostDb {
             let rows = stmt.query_map([], Self::map_pf_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         }
+    }
+
+    /// Look up a single port-forwarding rule by id. Returns `None` when absent.
+    pub fn get_pf_rule(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::portforward::PortForwardRule>, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::InitError(format!("db lock poisoned: {e}")))?;
+        let rule = conn
+            .query_row(
+                "SELECT id, host_id, label, forward_type, bind_address, local_port, remote_host, remote_port, auto_start, enabled, created_at, description, last_used_at, total_bytes
+                 FROM port_forwarding_rules WHERE id = ?1",
+                params![id],
+                Self::map_pf_row,
+            )
+            .optional()?;
+        Ok(rule)
     }
 
     fn map_pf_row(row: &rusqlite::Row) -> rusqlite::Result<crate::portforward::PortForwardRule> {
@@ -2899,5 +2957,43 @@ mod tests {
             .map(|g| g.id)
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["a", "b"], "order unchanged after rollback");
+    }
+
+    #[test]
+    fn pf_rule_natural_key_lookup_and_get() {
+        let (db, _dir) = test_db();
+        db.save_host(&sample_host("h1")).expect("host");
+        db.create_pf_rule(
+            "r1",
+            Some("h1"),
+            Some("DB"),
+            None,
+            "local",
+            "127.0.0.1",
+            5432,
+            "localhost",
+            5432,
+            true,
+        )
+        .expect("create rule");
+
+        // Exact natural-key match returns the id; a differing port does not.
+        assert_eq!(
+            db.find_pf_rule_id_by_natural_key("h1", "local", "127.0.0.1", 5432, "localhost", 5432)
+                .unwrap()
+                .as_deref(),
+            Some("r1")
+        );
+        assert_eq!(
+            db.find_pf_rule_id_by_natural_key("h1", "local", "127.0.0.1", 9999, "localhost", 5432)
+                .unwrap(),
+            None
+        );
+
+        // get_pf_rule round-trips the auto_start flag and forward type.
+        let rule = db.get_pf_rule("r1").unwrap().expect("rule present");
+        assert!(rule.auto_start);
+        assert_eq!(rule.forward_type, crate::portforward::ForwardType::Local);
+        assert!(db.get_pf_rule("nope").unwrap().is_none());
     }
 }

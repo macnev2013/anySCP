@@ -44,6 +44,7 @@ export type {
 export { S3_PROVIDERS } from "./s3";
 
 export type {
+  ForwardType,
   PortForwardRule,
   TunnelStatus,
 } from "./port-forwarding";

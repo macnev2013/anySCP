@@ -99,14 +99,10 @@ export const usePortForwardStore = create<PortForwardState>((set, get) => ({
 
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      const status = await invoke<TunnelStatus>("pf_start_tunnel", {
-        ruleId,
-        hostId,
-        bindAddress: rule.bind_address,
-        localPort: rule.local_port,
-        remoteHost: rule.remote_host,
-        remotePort: rule.remote_port,
-      });
+      // The backend loads the rule (forward type + params) by id; hostId is
+      // kept in the signature for callers but no longer sent.
+      void hostId;
+      const status = await invoke<TunnelStatus>("pf_start_tunnel", { ruleId });
       set((state) => {
         const next = new Map(state.activeTunnels);
         next.set(ruleId, status);
@@ -117,6 +113,9 @@ export const usePortForwardStore = create<PortForwardState>((set, get) => ({
         ? String((err as { message: string }).message)
         : typeof err === "string" ? err : "Tunnel failed to start";
       console.error("Start tunnel failed:", msg);
+      const name = rule.label || `Port ${rule.local_port}`;
+      const { toast } = await import("../stores/toast-store");
+      toast.error(`Tunnel “${name}” failed to start: ${msg}`);
       set((state) => {
         const next = new Map(state.activeTunnels);
         next.set(ruleId, {

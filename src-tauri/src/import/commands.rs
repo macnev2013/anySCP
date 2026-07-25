@@ -48,59 +48,97 @@ pub async fn import_save_ssh_hosts(
         let mut skipped = 0u32;
         let mut errors = Vec::new();
 
-        // alias (Host block name) → generated host id, for ProxyJump resolution.
+        // alias (Host block name) → host id, for ProxyJump resolution.
         let mut alias_to_id: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         // (host id, alias, raw ProxyJump value) tuples that still need resolving.
         let mut pending_jumps: Vec<(String, String, String)> = Vec::new();
 
+        // Whether imported forwards should default to auto-start. OpenSSH
+        // auto-activates LocalForward on connect, so the global default is
+        // `true` unless the user turned it off in Settings.
+        let auto_start_default = auto_start_default(&db);
+
+        // Snapshot of pre-existing hosts so re-importing the same config reuses
+        // the existing host (keyed by host+user+port) instead of piling up
+        // duplicate host rows — which also makes tunnel import idempotent.
+        let preexisting = db.list_hosts().unwrap_or_default();
+
         for entry in &entries {
-            let now = timestamp_now();
-            let id = uuid::Uuid::new_v4().to_string();
+            // Reuse an existing host with the same (host, user, port); otherwise
+            // create a fresh one. Either way `host_id` is what tunnels bind to.
+            let existing = preexisting.iter().find(|h| {
+                h.host == entry.hostname && h.username == entry.user && h.port == entry.port
+            });
 
-            let host = SavedHost {
-                id: id.clone(),
-                label: entry.host_alias.clone(),
-                host: entry.hostname.clone(),
-                port: entry.port as _,
-                username: entry.user.clone(),
-                auth_type: if entry.identity_file.is_some() {
-                    "privateKey".to_string()
-                } else {
-                    "password".to_string()
-                },
-                key_path: entry.identity_file.clone(),
-                group_id: None,
-                color: None,
-                notes: None,
-                environment: None,
-                os_type: None,
-                startup_command: None,
-                proxy_jump: entry.proxy_jump.clone(),
-                proxy_jump_host_id: None,
-                start_directory: None,
-                keep_alive_interval: entry.keep_alive_interval,
-                default_shell: None,
-                font_size: None,
-                last_connected_at: None,
-                connection_count: None,
-                created_at: now.clone(),
-                updated_at: now,
-            };
+            let host_id = if let Some(h) = existing {
+                // Host already present — don't duplicate it, but still attach any
+                // newly-added forwards below. Counts as skipped at the host level.
+                skipped += 1;
+                alias_to_id.insert(entry.host_alias.clone(), h.id.clone());
+                h.id.clone()
+            } else {
+                let now = timestamp_now();
+                let id = uuid::Uuid::new_v4().to_string();
 
-            match db.save_host(&host) {
-                Ok(()) => {
-                    imported += 1;
-                    alias_to_id.insert(entry.host_alias.clone(), id.clone());
-                    if let Some(pj) = entry.proxy_jump.as_ref().filter(|s| !s.trim().is_empty()) {
-                        pending_jumps.push((id, entry.host_alias.clone(), pj.clone()));
+                let host = SavedHost {
+                    id: id.clone(),
+                    label: entry.host_alias.clone(),
+                    host: entry.hostname.clone(),
+                    port: entry.port as _,
+                    username: entry.user.clone(),
+                    auth_type: if entry.identity_file.is_some() {
+                        "privateKey".to_string()
+                    } else {
+                        "password".to_string()
+                    },
+                    key_path: entry.identity_file.clone(),
+                    group_id: None,
+                    color: None,
+                    notes: None,
+                    environment: None,
+                    os_type: None,
+                    startup_command: None,
+                    proxy_jump: entry.proxy_jump.clone(),
+                    proxy_jump_host_id: None,
+                    start_directory: None,
+                    keep_alive_interval: entry.keep_alive_interval,
+                    default_shell: None,
+                    font_size: None,
+                    last_connected_at: None,
+                    connection_count: None,
+                    created_at: now.clone(),
+                    updated_at: now,
+                };
+
+                match db.save_host(&host) {
+                    Ok(()) => {
+                        imported += 1;
+                        alias_to_id.insert(entry.host_alias.clone(), id.clone());
+                        if let Some(pj) = entry.proxy_jump.as_ref().filter(|s| !s.trim().is_empty())
+                        {
+                            pending_jumps.push((id.clone(), entry.host_alias.clone(), pj.clone()));
+                        }
+                        id
+                    }
+                    Err(e) => {
+                        errors.push(format!("{}: {e}", entry.host_alias));
+                        skipped += 1;
+                        continue;
                     }
                 }
-                Err(e) => {
-                    errors.push(format!("{}: {e}", entry.host_alias));
-                    skipped += 1;
-                }
-            }
+            };
+
+            // Materialise the host's forward directives as tunnel records,
+            // skipping any that already exist (idempotent re-import).
+            import_forwards_for_host(
+                &db,
+                &host_id,
+                &entry.host_alias,
+                &entry.forwards,
+                auto_start_default,
+                &mut errors,
+            );
         }
 
         // Second pass: resolve each parsed ProxyJump value against the imported
@@ -149,6 +187,74 @@ pub async fn import_save_ssh_hosts(
 fn timestamp_now() -> String {
     // SQLite-compatible datetime string
     "datetime('now')".to_string()
+}
+
+/// Read the global "auto-start tunnels by default" preference. Defaults to
+/// `true` (matching OpenSSH, which auto-activates forwards on connect) when the
+/// setting was never written.
+fn auto_start_default(db: &HostDb) -> bool {
+    !matches!(
+        db.get_setting(crate::portforward::AUTO_START_DEFAULT_SETTING_KEY)
+            .ok()
+            .flatten()
+            .as_deref(),
+        Some("false")
+    )
+}
+
+/// Create one tunnel record per forward directive for `host_id`, skipping any
+/// that already exist (matched on the natural key) so re-importing the same
+/// config never duplicates tunnels. Failures are recorded per-forward and do
+/// not abort the import.
+fn import_forwards_for_host(
+    db: &HostDb,
+    host_id: &str,
+    alias: &str,
+    forwards: &[super::SshForward],
+    auto_start_default: bool,
+    errors: &mut Vec<String>,
+) {
+    for fwd in forwards {
+        match db.find_pf_rule_id_by_natural_key(
+            host_id,
+            &fwd.forward_type,
+            &fwd.bind_address,
+            fwd.listen_port as u32,
+            &fwd.dest_host,
+            fwd.dest_port as u32,
+        ) {
+            Ok(Some(_)) => continue, // already imported — idempotent skip
+            Ok(None) => {}
+            Err(e) => {
+                errors.push(format!("{alias}: tunnel lookup failed: {e}"));
+                continue;
+            }
+        }
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let label = format!(
+            "{} {}",
+            fwd.forward_type
+                .get(0..1)
+                .map(|c| c.to_uppercase() + &fwd.forward_type[1..])
+                .unwrap_or_else(|| fwd.forward_type.clone()),
+            fwd.listen_port
+        );
+        if let Err(e) = db.create_pf_rule(
+            &id,
+            Some(host_id),
+            Some(&label),
+            None,
+            &fwd.forward_type,
+            &fwd.bind_address,
+            fwd.listen_port as u32,
+            &fwd.dest_host,
+            fwd.dest_port as u32,
+            auto_start_default,
+        ) {
+            errors.push(format!("{alias}: tunnel not created: {e}"));
+        }
+    }
 }
 
 /// Resolve a single-hop `ProxyJump` directive value to a saved-host id.
@@ -311,5 +417,44 @@ mod tests {
     #[test]
     fn unmatched_value_returns_none() {
         assert_eq!(resolve_jump_target("nope", &HashMap::new(), &[]), None);
+    }
+
+    #[test]
+    fn import_forwards_is_idempotent() {
+        let dir = std::env::temp_dir().join(format!("anyscp-imp-{}", uuid::Uuid::new_v4()));
+        let db = HostDb::new(&dir).expect("db");
+        let mut h = host("h1", "web", "10.0.0.1");
+        h.created_at = "t".into();
+        h.updated_at = "t".into();
+        db.save_host(&h).expect("save host");
+
+        let forwards = vec![
+            super::super::SshForward {
+                forward_type: "local".into(),
+                bind_address: "127.0.0.1".into(),
+                listen_port: 81,
+                dest_host: "localhost".into(),
+                dest_port: 81,
+            },
+            super::super::SshForward {
+                forward_type: "dynamic".into(),
+                bind_address: "127.0.0.1".into(),
+                listen_port: 1080,
+                dest_host: String::new(),
+                dest_port: 0,
+            },
+        ];
+
+        let mut errors = Vec::new();
+        import_forwards_for_host(&db, "h1", "web", &forwards, true, &mut errors);
+        // Re-import the same forwards: must NOT create duplicates.
+        import_forwards_for_host(&db, "h1", "web", &forwards, true, &mut errors);
+
+        assert!(errors.is_empty(), "no errors expected: {errors:?}");
+        let rules = db.list_pf_rules(Some("h1")).expect("list");
+        assert_eq!(rules.len(), 2, "exactly one tunnel per forward, no dupes");
+        assert!(rules.iter().all(|r| r.auto_start), "auto_start seeded true");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

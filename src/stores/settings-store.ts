@@ -50,6 +50,9 @@ interface SettingsState {
   // Explorer
   explorerDoubleClickAction: DoubleClickAction;
 
+  // Tunnels
+  tunnelsAutoStartDefault: boolean;
+
   // Transfers
   transferConcurrency: number;
 
@@ -77,6 +80,7 @@ interface SettingsState {
   setTerminalCopyOnSelect: (enabled: boolean) => void;
   setTerminalPasteButton: (button: PasteButton) => void;
   setExplorerDoubleClickAction: (action: DoubleClickAction) => void;
+  setTunnelsAutoStartDefault: (enabled: boolean) => void;
   setTransferConcurrency: (n: number) => void;
   addEditor: (editor: Omit<EditorConfig, "id">) => void;
   updateEditor: (id: string, patch: Partial<Omit<EditorConfig, "id">>) => void;
@@ -103,6 +107,7 @@ const DEFAULTS = {
   terminalCopyOnSelect: false,
   terminalPasteButton: "none" as PasteButton,
   explorerDoubleClickAction: "download" as DoubleClickAction,
+  tunnelsAutoStartDefault: true,
   transferConcurrency: 3,
   editors: [] as EditorConfig[],
   defaultEditorId: null as string | null,
@@ -301,6 +306,11 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     persist("explorer_double_click_action", action);
   },
 
+  setTunnelsAutoStartDefault: (enabled) => {
+    set({ tunnelsAutoStartDefault: enabled });
+    persist("tunnels_auto_start_default", String(enabled));
+  },
+
   setTerminalPasteButton: (button) => {
     set({ terminalPasteButton: button });
     persist("terminal_paste_button", button);
@@ -373,6 +383,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           case "terminal_copy_on_select": updates.terminalCopyOnSelect = value === "true"; break;
           case "terminal_paste_button": updates.terminalPasteButton = value === "right" || value === "middle" ? value : DEFAULTS.terminalPasteButton; break;
           case "explorer_double_click_action": updates.explorerDoubleClickAction = value === "open" ? "open" : "download"; break;
+          case "tunnels_auto_start_default": updates.tunnelsAutoStartDefault = value !== "false"; break;
           case "transfer_concurrency": updates.transferConcurrency = Number(value) || DEFAULTS.transferConcurrency; break;
           case "app_interface_font": updates.interfaceFont = value || DEFAULTS.interfaceFont; break;
           case "app_interface_mono_font": updates.interfaceMonoFont = value || DEFAULTS.interfaceMonoFont; break;

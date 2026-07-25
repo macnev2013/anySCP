@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use tauri::State;
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::task;
-use tracing::instrument;
+use tracing::{instrument, warn};
 
 use crate::db::{DbError, HostDb};
-use crate::ssh::manager::SshManager;
+use crate::types::{HostConfig, SshError};
 
-use super::{manager::PortForwardManager, ForwardType, PortForwardRule, TunnelStatus};
+use super::{manager::PortForwardManager, ForwardType, PortForwardRule, TunnelState, TunnelStatus};
 
 // ─── CRUD ────────────────────────────────────────────────────────────────────
 
@@ -28,6 +28,10 @@ pub async fn pf_create_rule(
 ) -> Result<PortForwardRule, DbError> {
     let id = uuid::Uuid::new_v4().to_string();
     let db = Arc::clone(&db);
+
+    // Store the canonical lowercase form (matches imported rules) regardless of
+    // the casing the frontend sent ("Local" vs "local").
+    let forward_type = forward_type.to_ascii_lowercase();
 
     let c_id = id.clone();
     let c_host_id = host_id.clone();
@@ -134,106 +138,138 @@ pub async fn pf_list_rules(
 
 // ─── Tunnel control ──────────────────────────────────────────────────────────
 
-#[tauri::command]
-#[instrument(skip(pf_manager, ssh_manager, db))]
-#[allow(clippy::too_many_arguments)]
-pub async fn pf_start_tunnel(
-    rule_id: String,
+/// Resolve a saved host into a [`HostConfig`] for a tunnel's dedicated SSH
+/// connection, including its full ProxyJump chain so a tunnel for a host that's
+/// only reachable through a bastion connects the same way the terminal does.
+/// Reuses the connect path's resolver (credentials from the vault, cycle-guarded
+/// jump chain) and runs the blocking DB/keychain work off the async runtime.
+async fn resolve_tunnel_host_config(
+    db: Arc<HostDb>,
     host_id: String,
-    bind_address: String,
-    local_port: u32,
-    remote_host: String,
-    remote_port: u32,
-    pf_manager: State<'_, Arc<PortForwardManager>>,
-    ssh_manager: State<'_, SshManager>,
-    db: State<'_, Arc<HostDb>>,
-) -> Result<TunnelStatus, crate::types::SshError> {
-    use crate::types::AuthMethod;
-
-    // Load host from DB
-    let db_clone = Arc::clone(&db);
-    let hid = host_id.clone();
-    let saved_host = task::spawn_blocking(move || db_clone.get_host(&hid))
-        .await
-        .map_err(|e| crate::types::SshError::IoError(format!("task panicked: {e}")))?
-        .map_err(|e| crate::types::SshError::IoError(e.to_string()))?
-        .ok_or_else(|| {
-            crate::types::SshError::SessionNotFound(format!("host not found: {host_id}"))
-        })?;
-
-    // Resolve credentials from vault
-    let vid = host_id.clone();
-    let auth_type = saved_host.auth_type.clone();
-    let key_path = saved_host.key_path.clone();
-
-    let auth_method = task::spawn_blocking(move || -> AuthMethod {
-        match auth_type.as_str() {
-            "privateKey" => {
-                let path = key_path.unwrap_or_default();
-                let passphrase = match crate::vault::get_credential(&vid) {
-                    Ok(crate::vault::StoredCredential::KeyPassphrase { passphrase }) => {
-                        Some(passphrase)
-                    }
-                    _ => None,
-                };
-                AuthMethod::PrivateKey {
-                    key_path: path,
-                    passphrase,
-                }
-            }
-            _ => {
-                let password = match crate::vault::get_credential(&vid) {
-                    Ok(crate::vault::StoredCredential::Password { password }) => password,
-                    _ => String::new(),
-                };
-                AuthMethod::Password { password }
-            }
-        }
+) -> Result<HostConfig, SshError> {
+    task::spawn_blocking(move || {
+        crate::ssh::commands::build_host_config_blocking(&host_id, &db, &mut Vec::new())
     })
     .await
-    .map_err(|e| crate::types::SshError::IoError(format!("task panicked: {e}")))?;
+    .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
+}
 
-    // Connect SSH (no PTY needed for tunnels)
-    let config = crate::types::HostConfig {
-        host: saved_host.host,
-        port: saved_host.port,
-        username: saved_host.username,
-        auth_method,
-        label: if saved_host.label.is_empty() {
-            None
-        } else {
-            Some(saved_host.label)
-        },
-        keep_alive_interval: None,
-        default_shell: None,
-        startup_command: None,
-        // Port-forwarding connects directly; ProxyJump tunnelling is handled by
-        // the terminal/SFTP connect paths.
-        jump_host: None,
+/// Start the tunnel described by `rule`, establishing its own dedicated SSH
+/// connection. `auto_started` marks tunnels brought up automatically on host
+/// connect so they can be torn down when the host disconnects.
+async fn start_rule(
+    app_handle: AppHandle,
+    rule: PortForwardRule,
+    auto_started: bool,
+) -> Result<TunnelStatus, SshError> {
+    let host_id = rule
+        .host_id
+        .clone()
+        .ok_or_else(|| SshError::SessionNotFound("tunnel has no host".to_string()))?;
+
+    let db = app_handle.state::<Arc<HostDb>>().inner().clone();
+    let pf_manager = app_handle
+        .state::<Arc<PortForwardManager>>()
+        .inner()
+        .clone();
+
+    let config = resolve_tunnel_host_config(db.clone(), host_id.clone()).await?;
+
+    // Record last_used_at (best effort).
+    let dbc = db.clone();
+    let rid = rule.id.clone();
+    let _ = task::spawn_blocking(move || dbc.touch_pf_rule(&rid)).await;
+
+    pf_manager
+        .start_tunnel(
+            rule.id,
+            rule.forward_type,
+            config,
+            rule.bind_address,
+            rule.local_port,
+            rule.remote_host,
+            rule.remote_port,
+            Some(host_id),
+            auto_started,
+        )
+        .await
+}
+
+/// Start a single tunnel on demand (manual toggle from the UI). The rule is
+/// loaded from the DB so its forward type and parameters are authoritative.
+#[tauri::command]
+#[instrument(skip(db))]
+pub async fn pf_start_tunnel(
+    rule_id: String,
+    app_handle: AppHandle,
+    db: State<'_, Arc<HostDb>>,
+) -> Result<TunnelStatus, SshError> {
+    let dbc = Arc::clone(&db);
+    let rid = rule_id.clone();
+    let rule = task::spawn_blocking(move || dbc.get_pf_rule(&rid))
+        .await
+        .map_err(|e| SshError::IoError(format!("task panicked: {e}")))?
+        .map_err(|e| SshError::IoError(e.to_string()))?
+        .ok_or_else(|| SshError::SessionNotFound(format!("tunnel rule not found: {rule_id}")))?;
+
+    let status = start_rule(app_handle, rule, false).await?;
+    crate::telemetry::capture("tunnel_started", serde_json::json!({}));
+    Ok(status)
+}
+
+/// Start every `auto_start` tunnel bound to `host_id`. Invoked in the background
+/// right after a host's SSH session is established. Each tunnel gets its own
+/// connection; a failure to bring one up surfaces as a non-fatal `pf:status`
+/// error and never aborts the others or the host connection.
+pub async fn start_auto_tunnels_for_host(app_handle: AppHandle, host_id: String) {
+    let db = app_handle.state::<Arc<HostDb>>().inner().clone();
+
+    let hid = host_id.clone();
+    let rules = match task::spawn_blocking(move || db.list_pf_rules(Some(&hid))).await {
+        Ok(Ok(rules)) => rules,
+        Ok(Err(e)) => {
+            warn!(host_id = %host_id, error = %e, "auto-start: failed to list tunnels");
+            return;
+        }
+        Err(e) => {
+            warn!(host_id = %host_id, error = %e, "auto-start: list task panicked");
+            return;
+        }
     };
 
-    let session_id = ssh_manager.connect_no_pty(config, None).await?;
-    let handle = ssh_manager.get_handle(&session_id.0)?;
+    for rule in rules.into_iter().filter(|r| r.auto_start) {
+        let rule_id = rule.id.clone();
+        let local_port = rule.local_port;
+        match start_rule(app_handle.clone(), rule, true).await {
+            Ok(_) => {
+                info_started(&rule_id);
+            }
+            Err(e) => {
+                warn!(rule_id = %rule_id, error = %e, "auto-start: tunnel failed");
+                // Surface a non-fatal error to the UI without stopping the rest.
+                let _ = app_handle.emit(
+                    "pf:status",
+                    &TunnelStatus {
+                        rule_id,
+                        status: TunnelState::Error,
+                        local_port,
+                        connections: 0,
+                        error: Some(e.to_string()),
+                    },
+                );
+            }
+        }
+    }
+}
 
-    // Record last_used_at
-    let db_clone = Arc::clone(&db);
-    let rid = rule_id.clone();
-    let _ = task::spawn_blocking(move || db_clone.touch_pf_rule(&rid)).await;
+/// Stop all auto-started tunnels for a host (called when the host disconnects).
+pub fn stop_auto_tunnels_for_host(app_handle: &AppHandle, host_id: &str) {
+    let pf_manager = app_handle.state::<Arc<PortForwardManager>>();
+    pf_manager.stop_auto_started_for_host(host_id);
+}
 
-    let status = pf_manager
-        .start_tunnel(
-            rule_id,
-            handle,
-            bind_address,
-            local_port,
-            remote_host,
-            remote_port,
-        )
-        .await?;
-
-    crate::telemetry::capture("tunnel_started", serde_json::json!({}));
-
-    Ok(status)
+fn info_started(rule_id: &str) {
+    tracing::info!(rule_id = %rule_id, "auto-start: tunnel active");
 }
 
 #[tauri::command]

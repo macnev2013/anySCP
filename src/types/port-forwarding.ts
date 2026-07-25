@@ -1,9 +1,11 @@
+export type ForwardType = "Local" | "Remote" | "Dynamic";
+
 export interface PortForwardRule {
   id: string;
   host_id: string | null;
   label: string | null;
   description: string | null;
-  forward_type: "Local" | "Remote";
+  forward_type: ForwardType;
   bind_address: string;
   local_port: number;
   remote_host: string;
