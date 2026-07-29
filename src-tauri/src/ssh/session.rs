@@ -28,6 +28,8 @@ pub struct SplitConfig {
     pub default_shell: Option<String>,
 }
 
+pub type JumpChain = Arc<Vec<Arc<Mutex<Handle<SshClientHandler>>>>>;
+
 pub struct SshSession {
     handle: Arc<Mutex<Handle<SshClientHandler>>>,
     cmd_tx: mpsc::UnboundedSender<SessionCmd>,
@@ -42,7 +44,7 @@ pub struct SshSession {
     /// Never locked/accessed for I/O — merely held to prevent russh from tearing
     /// the tunnel down. Empty for a direct (non-tunnelled) connection.
     #[allow(dead_code)]
-    jump_handles: Arc<Vec<Handle<SshClientHandler>>>,
+    jump_handles: JumpChain,
 }
 
 impl SshSession {
@@ -50,9 +52,9 @@ impl SshSession {
     /// reader loop, and return the session wrapper.
     // ProxyJump support added `jump_handles`, pushing this one over the 7-arg lint.
     #[allow(clippy::too_many_arguments)]
-    pub async fn open_pty(
-        handle: Handle<SshClientHandler>,
-        jump_handles: Arc<Vec<Handle<SshClientHandler>>>,
+    async fn spawn_pty_session(
+        handle: Arc<Mutex<Handle<SshClientHandler>>>,
+        jump_handles: JumpChain,
         session_id: String,
         cols: u32,
         rows: u32,
@@ -60,9 +62,6 @@ impl SshSession {
         default_shell: Option<String>,
         startup_command: Option<String>,
     ) -> Result<Self, SshError> {
-        // Wrap the handle immediately so it can be shared with SFTP later.
-        let handle = Arc::new(Mutex::new(handle));
-
         let channel = handle
             .lock()
             .await
@@ -177,115 +176,57 @@ impl SshSession {
         })
     }
 
+    /// Open a PTY channel on an authenticated connection, start the output
+    /// reader loop, and return the session wrapper.
+    // ProxyJump support added `jump_handles`, pushing this one over the 7-arg lint.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn open_pty(
+        handle: Handle<SshClientHandler>,
+        jump_handles: JumpChain,
+        session_id: String,
+        cols: u32,
+        rows: u32,
+        app_handle: AppHandle,
+        default_shell: Option<String>,
+        startup_command: Option<String>,
+    ) -> Result<Self, SshError> {
+        // Wrap the handle immediately so it can be shared with SFTP later.
+        let handle = Arc::new(Mutex::new(handle));
+        Self::spawn_pty_session(
+            handle,
+            jump_handles,
+            session_id,
+            cols,
+            rows,
+            app_handle,
+            default_shell,
+            startup_command,
+        )
+        .await
+    }
+
     /// Open a new PTY channel on the same authenticated connection.
     /// Used for split panes — avoids re-authentication.
-    #[allow(clippy::too_many_arguments)]
     pub async fn open_split_pty(
         handle: Arc<Mutex<Handle<SshClientHandler>>>,
-        jump_handles: Arc<Vec<Handle<SshClientHandler>>>,
+        jump_handles: JumpChain,
         session_id: String,
         cols: u32,
         rows: u32,
         app_handle: AppHandle,
         default_shell: Option<String>,
     ) -> Result<Self, SshError> {
-        let channel = handle
-            .lock()
-            .await
-            .channel_open_session()
-            .await
-            .map_err(|e| SshError::ChannelError(e.to_string()))?;
-
-        channel
-            .request_pty(false, "xterm-256color", cols, rows, 0, 0, &[])
-            .await
-            .map_err(|e| SshError::ChannelError(e.to_string()))?;
-
-        if let Some(shell) = &default_shell {
-            channel
-                .exec(false, shell.as_bytes())
-                .await
-                .map_err(|e| SshError::ChannelError(e.to_string()))?;
-        } else {
-            channel
-                .request_shell(false)
-                .await
-                .map_err(|e| SshError::ChannelError(e.to_string()))?;
-        }
-
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCmd>();
-
-        let reader_session_id = session_id.clone();
-        let reader_app = app_handle.clone();
-
-        let reader_task = tokio::spawn(async move {
-            let mut channel = channel;
-            loop {
-                tokio::select! {
-                    msg = channel.wait() => {
-                        match msg {
-                            Some(ChannelMsg::Data { data }) => {
-                                let payload = SshOutputPayload {
-                                    session_id: reader_session_id.clone(),
-                                    data: data.to_vec(),
-                                };
-                                let _ = reader_app.emit("ssh:output", &payload);
-                            }
-                            Some(ChannelMsg::ExtendedData { data, .. }) => {
-                                let payload = SshOutputPayload {
-                                    session_id: reader_session_id.clone(),
-                                    data: data.to_vec(),
-                                };
-                                let _ = reader_app.emit("ssh:output", &payload);
-                            }
-                            Some(ChannelMsg::Eof | ChannelMsg::Close) | None => {
-                                let status_payload = SshStatusPayload {
-                                    session_id: reader_session_id.clone(),
-                                    status: ConnectionStatus::Disconnected,
-                                };
-                                let _ = reader_app.emit("ssh:status", &status_payload);
-                                break;
-                            }
-                            _ => {}
-                        }
-                    }
-                    cmd = cmd_rx.recv() => {
-                        match cmd {
-                            Some(SessionCmd::Data(data)) => {
-                                let _ = channel.data(&data[..]).await;
-                            }
-                            Some(SessionCmd::Resize { cols, rows }) => {
-                                let _ = channel.window_change(cols, rows, 0, 0).await;
-                            }
-                            Some(SessionCmd::Eof) | None => {
-                                let _ = channel.eof().await;
-                                let _ = channel.close().await;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        let _ = app_handle.emit(
-            "ssh:status",
-            &SshStatusPayload {
-                session_id: session_id.clone(),
-                status: ConnectionStatus::Connected,
-            },
-        );
-
-        Ok(Self {
+        Self::spawn_pty_session(
             handle,
-            cmd_tx,
-            reader_task,
-            session_id,
-            split_config: SplitConfig { default_shell },
-            // Share the parent's ProxyJump tunnel chain so it stays alive for as
-            // long as this split pane lives, independent of the parent session.
             jump_handles,
-        })
+            session_id,
+            cols,
+            rows,
+            app_handle,
+            default_shell,
+            None,
+        )
+        .await
     }
 
     /// Return the shared Handle so the SFTP layer can lock it briefly to open
@@ -296,7 +237,7 @@ impl SshSession {
 
     /// Return the shared ProxyJump tunnel chain so a split pane can keep the same
     /// tunnel alive for its own lifetime. Empty for a direct connection.
-    pub fn jump_handles(&self) -> Arc<Vec<Handle<SshClientHandler>>> {
+    pub fn jump_handles(&self) -> JumpChain {
         self.jump_handles.clone()
     }
 

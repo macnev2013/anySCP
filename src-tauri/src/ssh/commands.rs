@@ -66,6 +66,16 @@ pub async fn ssh_disconnect(
 }
 
 #[tauri::command]
+pub async fn ssh_forget_known_host(
+    host: String,
+    port: u16,
+    state: State<'_, SshManager>,
+) -> Result<(), SshError> {
+    state.forget_known_host(&host, port);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn ssh_send_input(
     session_id: String,
     data: Vec<u8>,
@@ -129,6 +139,7 @@ pub async fn inspect_ssh_key(path: String) -> Result<SshKeyInfo, SshError> {
 pub async fn ssh_health_check_saved_host(
     host_id: String,
     db: State<'_, Arc<HostDb>>,
+    ssh_manager: State<'_, SshManager>,
 ) -> Result<HostHealthCheckResult, SshError> {
     let db_clone = Arc::clone(&db);
     let id_for_db = host_id.clone();
@@ -138,7 +149,7 @@ pub async fn ssh_health_check_saved_host(
     .await
     .map_err(|e| SshError::IoError(format!("task panicked: {e}")))??;
 
-    Ok(probe_host_health(&config).await)
+    Ok(probe_host_health(&config, ssh_manager.known_hosts()).await)
 }
 
 /// Probe a saved host's reachability, routing through its ProxyJump host when one
@@ -147,10 +158,13 @@ pub async fn ssh_health_check_saved_host(
 /// opening a `direct-tcpip` channel to the target (mirroring how a real
 /// connection is established). Never returns an error — every failure mode maps
 /// to a structured [`HostHealthCheckResult`].
-async fn probe_host_health(config: &HostConfig) -> HostHealthCheckResult {
+async fn probe_host_health(
+    config: &HostConfig,
+    known_hosts: Arc<crate::ssh::known_hosts::KnownHostsStore>,
+) -> HostHealthCheckResult {
     match &config.jump_host {
-        Some(jump) => probe_via_jump(config, jump).await,
-        None => probe_direct(&config.host, config.port).await,
+        Some(jump) => probe_via_jump(config, jump, known_hosts).await,
+        None => probe_direct(&config.host, config.port, known_hosts).await,
     }
 }
 
@@ -160,7 +174,11 @@ async fn probe_host_health(config: &HostConfig) -> HostHealthCheckResult {
 /// that resolves to many (or black-holed) addresses cannot stall the probe for
 /// `N * HEALTH_CHECK_TIMEOUT`. The connected TCP stream is reused for the
 /// handshake, so a reachable host is connected to only once.
-async fn probe_direct(host: &str, port: u16) -> HostHealthCheckResult {
+async fn probe_direct(
+    host: &str,
+    port: u16,
+    known_hosts: Arc<crate::ssh::known_hosts::KnownHostsStore>,
+) -> HostHealthCheckResult {
     let started = Instant::now();
     let elapsed_ms = || started.elapsed().as_millis() as u64;
 
@@ -175,7 +193,8 @@ async fn probe_direct(host: &str, port: u16) -> HostHealthCheckResult {
     // open a second connection to the host. The handshake bound is the outer
     // `timeout`, so no `inactivity_timeout` is needed on the throwaway config.
     let russh_config = Arc::new(client::Config::default());
-    let handler = super::handler::SshClientHandler;
+    let (handler, mismatch) =
+        crate::ssh::handler::SshClientHandler::new(host.to_string(), port, known_hosts);
     match timeout(
         HEALTH_CHECK_TIMEOUT,
         client::connect_stream(russh_config, stream, handler),
@@ -192,11 +211,19 @@ async fn probe_direct(host: &str, port: u16) -> HostHealthCheckResult {
                 latency_ms: Some(elapsed_ms()),
             }
         }
-        Ok(Err(e)) => HostHealthCheckResult {
-            status: HostHealthStatus::SshFailed,
-            message: format!("SSH handshake failed: {e}"),
-            latency_ms: Some(elapsed_ms()),
-        },
+        Ok(Err(e)) => {
+            let message = match mismatch.lock().ok().and_then(|g| g.clone()) {
+                Some((expected, got)) => format!(
+                    "host key mismatch: expected {expected}, got {got} — refusing to connect"
+                ),
+                None => format!("SSH handshake failed: {e}"),
+            };
+            HostHealthCheckResult {
+                status: HostHealthStatus::SshFailed,
+                message,
+                latency_ms: Some(elapsed_ms()),
+            }
+        }
         Err(_) => HostHealthCheckResult {
             status: HostHealthStatus::SshFailed,
             message: "SSH handshake timed out".to_string(),
@@ -220,41 +247,40 @@ async fn probe_direct(host: &str, port: u16) -> HostHealthCheckResult {
 /// Failure stages are attributed so the result is actionable: problems reaching
 /// or authenticating a jump hop are prefixed `tunnel host …`, while a refused
 /// tunnel to the target maps to `PortClosed`.
-async fn probe_via_jump(target: &HostConfig, jump: &HostConfig) -> HostHealthCheckResult {
+async fn probe_via_jump(
+    target: &HostConfig,
+    jump: &HostConfig,
+    known_hosts: Arc<crate::ssh::known_hosts::KnownHostsStore>,
+) -> HostHealthCheckResult {
     let started = Instant::now();
     let elapsed_ms = || started.elapsed().as_millis() as u64;
     // Throwaway config: no keepalive/inactivity timeout needed for a one-shot probe.
     let russh_config = Arc::new(client::Config::default());
+    let ctx = super::manager::EstablishCtx::probe_only(russh_config.clone(), known_hosts.clone());
 
     // ── 1. Bring up the full jump chain (connect + auth every hop) ─────────
     // Bounded so a tarpit/stalled auth on any hop can't hang the probe. The
     // budget is a small multiple of HEALTH_CHECK_TIMEOUT to accommodate the
     // sequential handshakes a multi-hop chain requires.
     let jump_bringup_budget = HEALTH_CHECK_TIMEOUT.saturating_mul(3);
-    let (jump_handle, _chain) = match timeout(
-        jump_bringup_budget,
-        SshManager::establish(jump, russh_config.clone()),
-    )
-    .await
-    {
-        Ok(Ok(established)) => established,
-        // establish() already prefixes nested hops with "tunnel host …"; add the
-        // immediate hop's identity and surface the underlying reason.
-        Ok(Err(e)) => {
-            return HostHealthCheckResult {
-                status: HostHealthStatus::SshFailed,
-                message: format!("tunnel host {}: {e}", jump.host),
-                latency_ms: Some(elapsed_ms()),
-            };
-        }
-        Err(_) => {
-            return HostHealthCheckResult {
-                status: HostHealthStatus::SshFailed,
-                message: format!("tunnel host {} timed out", jump.host),
-                latency_ms: Some(elapsed_ms()),
-            };
-        }
-    };
+    let (jump_handle, _chain) =
+        match timeout(jump_bringup_budget, SshManager::establish(jump, &ctx)).await {
+            Ok(Ok(established)) => established,
+            Ok(Err(e)) => {
+                return HostHealthCheckResult {
+                    status: HostHealthStatus::SshFailed,
+                    message: format!("tunnel host {}: {e}", jump.host),
+                    latency_ms: Some(elapsed_ms()),
+                };
+            }
+            Err(_) => {
+                return HostHealthCheckResult {
+                    status: HostHealthStatus::SshFailed,
+                    message: format!("tunnel host {} timed out", jump.host),
+                    latency_ms: Some(elapsed_ms()),
+                };
+            }
+        };
 
     // ── 2. Open a direct-tcpip channel through the jump host to the target ─
     let channel = match timeout(
@@ -292,13 +318,11 @@ async fn probe_via_jump(target: &HostConfig, jump: &HostConfig) -> HostHealthChe
     };
 
     // ── 3. SSH transport handshake on the target (no auth) over the tunnel ─
+    let (handler, mismatch) =
+        crate::ssh::handler::SshClientHandler::new(target.host.clone(), target.port, known_hosts);
     let result = match timeout(
         HEALTH_CHECK_TIMEOUT,
-        client::connect_stream(
-            russh_config,
-            channel.into_stream(),
-            super::handler::SshClientHandler,
-        ),
+        client::connect_stream(russh_config, channel.into_stream(), handler),
     )
     .await
     {
@@ -312,11 +336,19 @@ async fn probe_via_jump(target: &HostConfig, jump: &HostConfig) -> HostHealthChe
                 latency_ms: Some(elapsed_ms()),
             }
         }
-        Ok(Err(e)) => HostHealthCheckResult {
-            status: HostHealthStatus::SshFailed,
-            message: format!("SSH handshake failed: {e}"),
-            latency_ms: Some(elapsed_ms()),
-        },
+        Ok(Err(e)) => {
+            let message = match mismatch.lock().ok().and_then(|g| g.clone()) {
+                Some((expected, got)) => format!(
+                    "host key mismatch: expected {expected}, got {got} — refusing to connect"
+                ),
+                None => format!("SSH handshake failed: {e}"),
+            };
+            HostHealthCheckResult {
+                status: HostHealthStatus::SshFailed,
+                message,
+                latency_ms: Some(elapsed_ms()),
+            }
+        }
         Err(_) => HostHealthCheckResult {
             status: HostHealthStatus::SshFailed,
             message: "SSH handshake timed out".to_string(),
@@ -405,11 +437,16 @@ mod tests {
     use super::*;
     use tokio::net::TcpListener;
 
+    fn test_known_hosts() -> Arc<crate::ssh::known_hosts::KnownHostsStore> {
+        let dir = std::env::temp_dir().join(format!("anyscp-test-{}", uuid::Uuid::new_v4()));
+        Arc::new(crate::ssh::known_hosts::KnownHostsStore::load(&dir))
+    }
+
     /// A hostname under the reserved `.invalid` TLD (RFC 6761) never resolves,
     /// so the probe must short-circuit at the DNS stage with no latency reading.
     #[tokio::test]
     async fn probe_reports_dns_failed_for_unresolvable_host() {
-        let result = probe_direct("anyscp-nonexistent.invalid", 22).await;
+        let result = probe_direct("anyscp-nonexistent.invalid", 22, test_known_hosts()).await;
         assert!(
             matches!(result.status, HostHealthStatus::DnsFailed),
             "expected DnsFailed, got {:?} ({})",
@@ -429,7 +466,7 @@ mod tests {
         let port = listener.local_addr().expect("local addr").port();
         drop(listener);
 
-        let result = probe_direct("127.0.0.1", port).await;
+        let result = probe_direct("127.0.0.1", port, test_known_hosts()).await;
         assert!(
             matches!(result.status, HostHealthStatus::PortClosed),
             "expected PortClosed, got {:?} ({})",
@@ -471,7 +508,7 @@ mod tests {
         let target = cfg("198.51.100.1", 22); // never reached
         let jump = cfg("127.0.0.1", jump_port);
 
-        let result = probe_via_jump(&target, &jump).await;
+        let result = probe_via_jump(&target, &jump, test_known_hosts()).await;
         assert!(
             matches!(result.status, HostHealthStatus::SshFailed),
             "expected SshFailed, got {:?} ({})",
@@ -503,7 +540,7 @@ mod tests {
             ..cfg("anyscp-target.invalid", 22)
         };
 
-        let result = probe_via_jump(&target, &mid).await;
+        let result = probe_via_jump(&target, &mid, test_known_hosts()).await;
         assert!(
             matches!(result.status, HostHealthStatus::SshFailed),
             "expected SshFailed, got {:?} ({})",

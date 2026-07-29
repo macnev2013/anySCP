@@ -18,6 +18,14 @@ pub enum SshError {
     #[error("Key parse error: {0}")]
     KeyParseError(String),
 
+    #[error("Host key verification failed for {host}:{port}: the server presented a different key than last time (expected {expected}, got {got}). This can mean the server was reinstalled/rekeyed, or it can mean someone is intercepting the connection. If you're sure this is expected, forget the old key and reconnect.")]
+    HostKeyMismatch {
+        host: String,
+        port: u16,
+        expected: String,
+        got: String,
+    },
+
     #[error("I/O error: {0}")]
     IoError(String),
 
@@ -42,6 +50,7 @@ impl Serialize for SshError {
             SshError::SessionNotFound(_) => "session_not_found",
             SshError::ChannelError(_) => "channel_error",
             SshError::KeyParseError(_) => "key_parse_error",
+            SshError::HostKeyMismatch { .. } => "host_key_mismatch",
             SshError::IoError(_) => "io_error",
             SshError::AlreadyDisconnected => "already_disconnected",
             SshError::Cancelled => "cancelled",

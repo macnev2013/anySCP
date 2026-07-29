@@ -170,11 +170,13 @@ pub fn run() {
             app.manage(s3_manager);
             app.manage(s3_transfer_manager);
 
+            let ssh_manager = SshManager::new(&app_data_dir);
+            app.manage(ssh_manager);
+
             telemetry::init();
 
             Ok(())
         })
-        .manage(SshManager::new())
         .invoke_handler(tauri::generate_handler![
             // SFTP — session & filesystem
             sftp::commands::sftp_open,
@@ -235,6 +237,7 @@ pub fn run() {
             ssh::commands::ssh_cancel_connect,
             ssh::commands::ssh_split_session,
             ssh::commands::ssh_disconnect,
+            ssh::commands::ssh_forget_known_host,
             ssh::commands::ssh_send_input,
             ssh::commands::ssh_resize_pty,
             ssh::commands::list_ssh_keys,

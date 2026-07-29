@@ -4,20 +4,23 @@ use crate::types::{
 use dashmap::DashMap;
 use russh::client;
 use std::future::Future;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use super::handler::SshClientHandler;
-use super::session::SshSession;
+use super::handler::{MismatchSlot, SshClientHandler};
+use super::known_hosts::KnownHostsStore;
+use super::session::{JumpChain, SshSession};
 
 /// The target handle plus the chain of jump-host handles that must outlive it
 /// (deepest hop first, empty for a direct connection).
 type EstablishedConn = (
     client::Handle<SshClientHandler>,
-    Vec<client::Handle<SshClientHandler>>,
+    Vec<Arc<AsyncMutex<client::Handle<SshClientHandler>>>>,
 );
 
 /// Boxed, `Send` future for the recursive [`SshManager::establish`]. Boxing is
@@ -28,12 +31,41 @@ type EstablishFuture<'a> =
 /// A bare (PTY-less) SSH connection used by the SFTP layer.
 struct BareConn {
     /// The authenticated target handle, shared with the SFTP layer.
-    handle: Arc<tokio::sync::Mutex<client::Handle<SshClientHandler>>>,
+    handle: Arc<AsyncMutex<client::Handle<SshClientHandler>>>,
     /// When the target is reached through a ProxyJump chain, the jump-host
     /// handles (one per hop) are stored here so the tunnel underneath stays
     /// open. They are never locked — merely keeping them alive prevents russh
     /// from tearing down the tunnel.
-    _jump_handles: Vec<client::Handle<SshClientHandler>>,
+    _jump_handles: Vec<Arc<AsyncMutex<client::Handle<SshClientHandler>>>>,
+}
+
+#[derive(Clone)]
+struct LiveHandle {
+    session_id: String,
+    handle: Arc<AsyncMutex<client::Handle<SshClientHandler>>>,
+}
+
+pub(crate) struct EstablishCtx {
+    russh_config: Arc<client::Config>,
+    known_hosts: Arc<KnownHostsStore>,
+    live_handles: Arc<DashMap<String, LiveHandle>>,
+}
+
+impl EstablishCtx {
+    pub(crate) fn probe_only(
+        russh_config: Arc<client::Config>,
+        known_hosts: Arc<KnownHostsStore>,
+    ) -> Self {
+        Self {
+            russh_config,
+            known_hosts,
+            live_handles: Arc::new(DashMap::new()),
+        }
+    }
+}
+
+fn host_identity(config: &HostConfig) -> String {
+    format!("{}@{}:{}", config.username, config.host, config.port)
 }
 
 /// Manages all active SSH sessions. Stored as Tauri managed state.
@@ -46,14 +78,66 @@ pub struct SshManager {
     /// running; cancelling its token aborts the attempt before any session is
     /// registered, so no ghost session or lingering handle is left behind.
     pending_connects: DashMap<String, CancellationToken>,
+    known_hosts: Arc<KnownHostsStore>,
+    live_handles: Arc<DashMap<String, LiveHandle>>,
+    session_identities: DashMap<String, String>,
 }
 
 impl SshManager {
-    pub fn new() -> Self {
+    pub fn new(app_data_dir: &Path) -> Self {
         Self {
             sessions: DashMap::new(),
             bare_handles: DashMap::new(),
             pending_connects: DashMap::new(),
+            known_hosts: Arc::new(KnownHostsStore::load(app_data_dir)),
+            live_handles: Arc::new(DashMap::new()),
+            session_identities: DashMap::new(),
+        }
+    }
+
+    pub fn known_hosts(&self) -> Arc<KnownHostsStore> {
+        self.known_hosts.clone()
+    }
+
+    pub fn forget_known_host(&self, host: &str, port: u16) {
+        self.known_hosts.forget(host, port);
+    }
+
+    pub(crate) fn build_ctx(&self, russh_config: Arc<client::Config>) -> EstablishCtx {
+        EstablishCtx {
+            russh_config,
+            known_hosts: self.known_hosts.clone(),
+            live_handles: self.live_handles.clone(),
+        }
+    }
+
+    fn register_live_handle(
+        &self,
+        config: &HostConfig,
+        session_id: &str,
+        handle: Arc<AsyncMutex<client::Handle<SshClientHandler>>>,
+    ) {
+        let identity = host_identity(config);
+        self.live_handles.insert(
+            identity.clone(),
+            LiveHandle {
+                session_id: session_id.to_string(),
+                handle,
+            },
+        );
+        self.session_identities
+            .insert(session_id.to_string(), identity);
+    }
+
+    fn unregister_live_handle(&self, session_id: &str) {
+        if let Some((_, identity)) = self.session_identities.remove(session_id) {
+            let still_owns = self
+                .live_handles
+                .get(&identity)
+                .is_some_and(|entry| entry.session_id == session_id);
+            if still_owns {
+                self.live_handles.remove(&identity);
+            }
         }
     }
 
@@ -124,6 +208,7 @@ impl SshManager {
             keepalive_max: 3,
             ..Default::default()
         });
+        let ctx = self.build_ctx(russh_config);
 
         // Establish the connection — directly or tunnelled through a ProxyJump
         // chain. The jump handles must outlive the target session, so they are
@@ -136,7 +221,7 @@ impl SshManager {
         // Nothing is inserted into `sessions` until this succeeds, so a cancel
         // leaves no ghost session behind.
         let connect_fut = async {
-            let (handle, jump_handles) = Self::establish(&config, russh_config).await?;
+            let (handle, jump_handles) = Self::establish(&config, &ctx).await?;
 
             info!(session_id = %sid, host = %config.host, "SSH authenticated");
 
@@ -167,6 +252,7 @@ impl SshManager {
         }
 
         let session = outcome?;
+        self.register_live_handle(&config, &sid, session.ssh_handle());
         self.sessions.insert(sid.clone(), session);
 
         Ok(session_id)
@@ -191,10 +277,11 @@ impl SshManager {
             inactivity_timeout: None, // SFTP connections stay alive indefinitely
             ..Default::default()
         });
+        let ctx = self.build_ctx(russh_config);
 
         // Establish the connection — directly or tunnelled through a ProxyJump —
         // racing against the cancellation token so the user can abort mid-handshake.
-        let establish_fut = Self::establish(&config, russh_config);
+        let establish_fut = Self::establish(&config, &ctx);
         let established = match &cancel_token {
             Some(token) => tokio::select! {
                 biased;
@@ -212,10 +299,12 @@ impl SshManager {
 
         info!(session_id = %sid, host = %config.host, "SSH authenticated (no PTY, for SFTP)");
 
+        let handle = Arc::new(AsyncMutex::new(handle));
+        self.register_live_handle(&config, &sid, handle.clone());
         self.bare_handles.insert(
             sid.clone(),
             BareConn {
-                handle: Arc::new(tokio::sync::Mutex::new(handle)),
+                handle,
                 _jump_handles: jump_handles,
             },
         );
@@ -238,27 +327,40 @@ impl SshManager {
     ///
     /// Returns a boxed future because the recursion makes the future type
     /// self-referential (an `async fn` calling itself cannot size its own future).
-    pub(crate) fn establish(
-        config: &HostConfig,
-        russh_config: Arc<client::Config>,
-    ) -> EstablishFuture<'_> {
+    pub(crate) fn establish<'a>(
+        config: &'a HostConfig,
+        ctx: &'a EstablishCtx,
+    ) -> EstablishFuture<'a> {
         Box::pin(async move {
             let Some(jump) = config.jump_host.as_deref() else {
                 // Direct connection — no tunnel.
                 let addr = format!("{}:{}", config.host, config.port);
-                let mut handle = client::connect(russh_config, &addr, SshClientHandler)
+                let (handler, mismatch) = Self::make_handler(config, &ctx.known_hosts);
+                let mut handle = client::connect(ctx.russh_config.clone(), &addr, handler)
                     .await
-                    .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
+                    .map_err(|e| Self::classify_connect_err(e, config, &mismatch))?;
                 Self::authenticate_handle(&mut handle, config).await?;
                 return Ok((handle, Vec::new()));
             };
 
-            // 1. Recursively establish the jump connection (it may itself be
-            //    tunnelled through its own ProxyJump). Reaching/auth errors are
-            //    re-labelled so the failing hop is identifiable.
-            let (jump_handle, mut chain) = Self::establish(jump, russh_config.clone())
-                .await
-                .map_err(|e| match e {
+            // 1. Try reusing an already-live connection to the jump host.
+            let identity = host_identity(jump);
+            let reused = ctx.live_handles.get(&identity).map(|e| e.handle.clone());
+            if let Some(shared) = reused {
+                match Self::tunnel_and_connect(&shared, config, ctx).await {
+                    Ok(handle) => return Ok((handle, vec![shared])),
+                    Err(_) => {
+                        // Stale entry
+                        ctx.live_handles.remove(&identity);
+                    }
+                }
+            }
+
+            // 2. Recursively establish the jump connection fresh (it may
+            //    itself be tunnelled through its own ProxyJump). Reaching/auth
+            //    errors are re-labelled so the failing hop is identifiable.
+            let (jump_handle, mut chain) =
+                Self::establish(jump, ctx).await.map_err(|e| match e {
                     SshError::ConnectionFailed(m) => {
                         SshError::ConnectionFailed(format!("tunnel host {}: {m}", jump.host))
                     }
@@ -267,35 +369,71 @@ impl SshManager {
                     }
                     other => other,
                 })?;
+            let jump_handle = Arc::new(AsyncMutex::new(jump_handle));
 
-            // 2. Open a direct-tcpip channel through the jump host to the target.
-            let channel = jump_handle
-                .channel_open_direct_tcpip(
-                    config.host.clone(),
-                    config.port as u32,
-                    "127.0.0.1".to_string(),
-                    0,
-                )
-                .await
-                .map_err(|e| {
-                    SshError::ConnectionFailed(format!(
-                        "failed to open tunnel to {}:{}: {e}",
-                        config.host, config.port
-                    ))
-                })?;
+            // 3. Open a direct-tcpip channel through the jump host and
+            //    authenticate the target over it.
+            let handle = Self::tunnel_and_connect(&jump_handle, config, ctx).await?;
 
-            // 3. Run the target SSH session over the tunnelled channel.
-            let mut handle =
-                client::connect_stream(russh_config, channel.into_stream(), SshClientHandler)
-                    .await
-                    .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
-            Self::authenticate_handle(&mut handle, config).await?;
-
-            // Keep this hop's handle and everything beneath it alive under the
-            // target session.
             chain.push(jump_handle);
             Ok((handle, chain))
         })
+    }
+
+    async fn tunnel_and_connect(
+        jump_handle: &Arc<AsyncMutex<client::Handle<SshClientHandler>>>,
+        config: &HostConfig,
+        ctx: &EstablishCtx,
+    ) -> Result<client::Handle<SshClientHandler>, SshError> {
+        let channel = {
+            let h = jump_handle.lock().await;
+            h.channel_open_direct_tcpip(
+                config.host.clone(),
+                config.port as u32,
+                "127.0.0.1".to_string(),
+                0,
+            )
+            .await
+            .map_err(|e| {
+                SshError::ConnectionFailed(format!(
+                    "failed to open tunnel to {}:{}: {e}",
+                    config.host, config.port
+                ))
+            })?
+        };
+
+        let (handler, mismatch) = Self::make_handler(config, &ctx.known_hosts);
+        let mut handle =
+            client::connect_stream(ctx.russh_config.clone(), channel.into_stream(), handler)
+                .await
+                .map_err(|e| Self::classify_connect_err(e, config, &mismatch))?;
+        Self::authenticate_handle(&mut handle, config).await?;
+        Ok(handle)
+    }
+
+    fn make_handler(
+        config: &HostConfig,
+        known_hosts: &Arc<KnownHostsStore>,
+    ) -> (SshClientHandler, MismatchSlot) {
+        SshClientHandler::new(config.host.clone(), config.port, known_hosts.clone())
+    }
+
+    fn classify_connect_err(
+        e: russh::Error,
+        config: &HostConfig,
+        mismatch: &MismatchSlot,
+    ) -> SshError {
+        if let Ok(guard) = mismatch.lock() {
+            if let Some((expected, got)) = guard.clone() {
+                return SshError::HostKeyMismatch {
+                    host: config.host.clone(),
+                    port: config.port,
+                    expected,
+                    got,
+                };
+            }
+        }
+        SshError::ConnectionFailed(e.to_string())
     }
 
     /// Authenticate an already-connected handle using the config's auth method.
@@ -397,7 +535,7 @@ impl SshManager {
         // the source session. The jump handles are shared (Arc) so the tunnel
         // stays open as long as the parent OR any split pane is alive — closing
         // the parent tab no longer tears the tunnel out from under its children.
-        let (handle, host_config, jump_handles) = {
+        let (handle, host_config, jump_handles): (_, _, JumpChain) = {
             let entry = self
                 .sessions
                 .get(source_session_id)
@@ -459,6 +597,8 @@ impl SshManager {
             },
         );
 
+        self.unregister_live_handle(session_id);
+
         // PTY sessions and bare (SFTP-only) handles live in separate maps —
         // check both so a no-PTY connection (e.g. an explorer connect whose
         // cancel landed after the handshake settled) can be torn down through
@@ -495,11 +635,32 @@ impl SshManager {
 mod tests {
     use super::*;
 
+    fn test_manager() -> SshManager {
+        let dir = std::env::temp_dir().join(format!("anyscp-test-{}", uuid::Uuid::new_v4()));
+        SshManager::new(&dir)
+    }
+
+    fn test_config(host: &str, port: u16, username: &str) -> HostConfig {
+        HostConfig {
+            host: host.to_string(),
+            port,
+            username: username.to_string(),
+            auth_method: AuthMethod::Password {
+                password: "".to_string(),
+            },
+            label: None,
+            keep_alive_interval: None,
+            default_shell: None,
+            startup_command: None,
+            jump_host: None,
+        }
+    }
+
     /// Cancelling an attempt ID that was never registered (or whose attempt
     /// already settled) must report that nothing was found.
     #[test]
     fn cancel_connect_returns_false_for_unknown_attempt() {
-        let manager = SshManager::new();
+        let manager = test_manager();
         assert!(!manager.cancel_connect("no-such-attempt"));
     }
 
@@ -507,7 +668,7 @@ mod tests {
     /// the manager by attempt ID.
     #[test]
     fn cancel_connect_signals_the_registered_token() {
-        let manager = SshManager::new();
+        let manager = test_manager();
         let token = manager.register_pending("attempt-1".to_string());
         assert!(!token.is_cancelled());
 
@@ -519,7 +680,7 @@ mod tests {
     /// no-op: the settled attempt's token must not be signalled.
     #[test]
     fn clear_pending_makes_a_late_cancel_a_no_op() {
-        let manager = SshManager::new();
+        let manager = test_manager();
         let token = manager.register_pending("attempt-1".to_string());
         manager.clear_pending("attempt-1");
 
@@ -531,12 +692,43 @@ mod tests {
     /// new attempt, never the orphaned one.
     #[test]
     fn reregistering_an_attempt_id_replaces_the_token() {
-        let manager = SshManager::new();
+        let manager = test_manager();
         let orphaned = manager.register_pending("attempt-1".to_string());
         let active = manager.register_pending("attempt-1".to_string());
 
         assert!(manager.cancel_connect("attempt-1"));
         assert!(active.is_cancelled());
         assert!(!orphaned.is_cancelled());
+    }
+
+    #[test]
+    fn host_identity_matches_for_equivalent_configs() {
+        let a = test_config("example.com", 22, "root");
+        let b = test_config("example.com", 22, "root");
+        assert_eq!(host_identity(&a), host_identity(&b));
+    }
+
+    #[test]
+    fn host_identity_differs_for_different_targets() {
+        let base = test_config("example.com", 22, "root");
+        assert_ne!(
+            host_identity(&base),
+            host_identity(&test_config("example.com", 2222, "root"))
+        );
+        assert_ne!(
+            host_identity(&base),
+            host_identity(&test_config("other.example.com", 22, "root"))
+        );
+        assert_ne!(
+            host_identity(&base),
+            host_identity(&test_config("example.com", 22, "admin"))
+        );
+    }
+
+    #[test]
+    fn unregister_live_handle_is_a_no_op_for_unknown_session() {
+        let manager = test_manager();
+        manager.unregister_live_handle("no-such-session");
+        assert!(manager.live_handles.is_empty());
     }
 }
