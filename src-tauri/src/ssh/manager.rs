@@ -635,12 +635,14 @@ impl SshManager {
         } else if let Some((_, bare)) = self.bare_handles.remove(session_id) {
             // Best-effort goodbye — dropping the handles closes the connection
             // (and any ProxyJump tunnel beneath it) even if the server is gone.
-            let _ = bare
-                .handle
-                .read()
-                .await
-                .disconnect(russh::Disconnect::ByApplication, "", "en")
-                .await;
+            if Arc::strong_count(&bare.handle) == 1 {
+                let _ = bare
+                    .handle
+                    .read()
+                    .await
+                    .disconnect(russh::Disconnect::ByApplication, "", "en")
+                    .await;
+            }
         } else {
             return Err(SshError::SessionNotFound(session_id.to_string()));
         }
