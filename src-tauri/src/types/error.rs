@@ -43,7 +43,6 @@ impl Serialize for SshError {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("SshError", 2)?;
         let kind = match self {
             SshError::ConnectionFailed(_) => "connection_failed",
             SshError::AuthenticationFailed(_) => "authentication_failed",
@@ -55,8 +54,26 @@ impl Serialize for SshError {
             SshError::AlreadyDisconnected => "already_disconnected",
             SshError::Cancelled => "cancelled",
         };
+        let len = if matches!(self, SshError::HostKeyMismatch { .. }) {
+            6
+        } else {
+            2
+        };
+        let mut state = serializer.serialize_struct("SshError", len)?;
         state.serialize_field("kind", kind)?;
         state.serialize_field("message", &self.to_string())?;
+        if let SshError::HostKeyMismatch {
+            host,
+            port,
+            expected,
+            got,
+        } = self
+        {
+            state.serialize_field("host", host)?;
+            state.serialize_field("port", port)?;
+            state.serialize_field("expected", expected)?;
+            state.serialize_field("got", got)?;
+        }
         state.end()
     }
 }
@@ -90,5 +107,21 @@ mod tests {
         let json = serde_json::to_value(SshError::Cancelled).expect("serialize");
         assert_eq!(json["kind"], "cancelled");
         assert_eq!(json["message"], "Connection cancelled");
+    }
+
+    #[test]
+    fn host_key_mismatch_serializes_structured_fields() {
+        let err = SshError::HostKeyMismatch {
+            host: "example.com".to_string(),
+            port: 22,
+            expected: "SHA256:abc".to_string(),
+            got: "SHA256:xyz".to_string(),
+        };
+        let json = serde_json::to_value(err).expect("serialize");
+        assert_eq!(json["kind"], "host_key_mismatch");
+        assert_eq!(json["host"], "example.com");
+        assert_eq!(json["port"], 22);
+        assert_eq!(json["expected"], "SHA256:abc");
+        assert_eq!(json["got"], "SHA256:xyz");
     }
 }

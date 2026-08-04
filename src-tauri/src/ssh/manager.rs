@@ -363,8 +363,10 @@ impl SshManager {
                     }
                     Err(TunnelError {
                         jump_handle_dead: false,
-                        ..
-                    }) => {}
+                        error,
+                    }) => {
+                        return Err(error);
+                    }
                 }
             }
 
