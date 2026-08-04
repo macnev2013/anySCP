@@ -1,7 +1,8 @@
 use dashmap::DashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Emitter};
+use tokio::sync::mpsc;
 
 use crate::types::SshNewHostKeyPayload;
 
@@ -11,10 +12,33 @@ pub enum HostKeyCheck {
     Mismatch { recorded: String },
 }
 
-pub struct KnownHostsStore {
+pub struct Inner {
     path: PathBuf,
     entries: DashMap<String, String>,
+}
+impl Inner {
+    fn write_now(&self) {
+        let mut out =
+            String::from("# anySCP known_hosts - SHA-256 fingerprints, not OpenSSH-compatible\n");
+        for entry in self.entries.iter() {
+            out.push_str(entry.key());
+            out.push(' ');
+            out.push_str(entry.value());
+            out.push('\n');
+        }
+        if let Some(parent) = self.path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(e) = std::fs::write(&self.path, out) {
+            tracing::warn!("failed to persist known_hosts: {e}");
+        }
+    }
+}
+
+pub struct KnownHostsStore {
+    inner: Arc<Inner>,
     app_handle: OnceLock<AppHandle>,
+    writer: OnceLock<mpsc::UnboundedSender<()>>,
 }
 
 impl KnownHostsStore {
@@ -33,9 +57,9 @@ impl KnownHostsStore {
             }
         }
         Self {
-            path,
-            entries,
+            inner: Arc::new(Inner { path, entries }),
             app_handle: OnceLock::new(),
+            writer: OnceLock::new(),
         }
     }
 
@@ -50,7 +74,7 @@ impl KnownHostsStore {
     pub fn check(&self, host: &str, port: u16, fingerprint: &str) -> HostKeyCheck {
         let key = Self::key(host, port);
 
-        if let Some(recorded) = self.entries.get(&key) {
+        if let Some(recorded) = self.inner.entries.get(&key) {
             return if recorded.as_str() == fingerprint {
                 HostKeyCheck::Known
             } else {
@@ -60,7 +84,7 @@ impl KnownHostsStore {
             };
         }
 
-        self.entries.insert(key, fingerprint.to_string());
+        self.inner.entries.insert(key, fingerprint.to_string());
         self.persist();
 
         if let Some(handle) = self.app_handle.get() {
@@ -77,34 +101,37 @@ impl KnownHostsStore {
     }
 
     pub fn forget(&self, host: &str, port: u16) {
-        self.entries.remove(&Self::key(host, port));
+        self.inner.entries.remove(&Self::key(host, port));
         self.persist();
     }
 
-    fn persist(&self) {
-        let mut out =
-            String::from("# anySCP known_hosts — SHA-256 fingerprints, not OpenSSH-compatible\n");
-        for entry in self.entries.iter() {
-            out.push_str(entry.key());
-            out.push(' ');
-            out.push_str(entry.value());
-            out.push('\n');
+    fn writer_tx(&self) -> Option<mpsc::UnboundedSender<()>> {
+        if let Some(tx) = self.writer.get() {
+            return Some(tx.clone());
         }
-        let path = self.path.clone();
-        let write = move || {
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Err(e) = std::fs::write(&path, out) {
-                tracing::warn!("failed to persist known_hosts: {e}");
-            }
-        };
 
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                handle.spawn_blocking(write);
+        let handle = tokio::runtime::Handle::try_current().ok()?;
+        let (tx, mut rx) = mpsc::unbounded_channel::<()>();
+        if self.writer.set(tx.clone()).is_err() {
+            return self.writer.get().cloned();
+        }
+
+        let inner = self.inner.clone();
+        handle.spawn(async move {
+            while rx.recv().await.is_some() {
+                let inner = inner.clone();
+                let _ = tokio::task::spawn_blocking(move || inner.write_now()).await;
             }
-            Err(_) => write(),
+        });
+        Some(tx)
+    }
+
+    fn persist(&self) {
+        match self.writer_tx() {
+            Some(tx) => {
+                let _ = tx.send(());
+            }
+            None => self.inner.write_now(),
         }
     }
 }
