@@ -8,7 +8,7 @@ pub mod wire;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use crate::ssh::handler::SshClientHandler;
@@ -179,7 +179,7 @@ pub struct ScpSessionWrapper {
     /// future teardown coordination even though transfers only need the handle.
     #[allow(dead_code)]
     pub ssh_session_id: String,
-    pub ssh_handle: Arc<Mutex<russh::client::Handle<SshClientHandler>>>,
+    pub ssh_handle: Arc<RwLock<russh::client::Handle<SshClientHandler>>>,
     /// Remote userland, detected once at open — decides which listing/stat
     /// commands to issue.
     pub flavor: listing::Flavor,

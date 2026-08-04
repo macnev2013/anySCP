@@ -8,7 +8,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::RwLock as AsyncRwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -20,7 +20,7 @@ use super::session::{JumpChain, SshSession};
 /// (deepest hop first, empty for a direct connection).
 type EstablishedConn = (
     client::Handle<SshClientHandler>,
-    Vec<Arc<AsyncMutex<client::Handle<SshClientHandler>>>>,
+    Vec<Arc<AsyncRwLock<client::Handle<SshClientHandler>>>>,
 );
 
 /// Boxed, `Send` future for the recursive [`SshManager::establish`]. Boxing is
@@ -31,18 +31,18 @@ type EstablishFuture<'a> =
 /// A bare (PTY-less) SSH connection used by the SFTP layer.
 struct BareConn {
     /// The authenticated target handle, shared with the SFTP layer.
-    handle: Arc<AsyncMutex<client::Handle<SshClientHandler>>>,
+    handle: Arc<AsyncRwLock<client::Handle<SshClientHandler>>>,
     /// When the target is reached through a ProxyJump chain, the jump-host
     /// handles (one per hop) are stored here so the tunnel underneath stays
     /// open. They are never locked — merely keeping them alive prevents russh
     /// from tearing down the tunnel.
-    _jump_handles: Vec<Arc<AsyncMutex<client::Handle<SshClientHandler>>>>,
+    _jump_handles: Vec<Arc<AsyncRwLock<client::Handle<SshClientHandler>>>>,
 }
 
 #[derive(Clone)]
 struct LiveHandle {
     session_id: String,
-    handle: Arc<AsyncMutex<client::Handle<SshClientHandler>>>,
+    handle: Arc<AsyncRwLock<client::Handle<SshClientHandler>>>,
 }
 
 pub(crate) struct EstablishCtx {
@@ -66,6 +66,11 @@ impl EstablishCtx {
 
 fn host_identity(config: &HostConfig) -> String {
     format!("{}@{}:{}", config.username, config.host, config.port)
+}
+
+struct TunnelError {
+    error: SshError,
+    jump_handle_dead: bool,
 }
 
 /// Manages all active SSH sessions. Stored as Tauri managed state.
@@ -115,7 +120,7 @@ impl SshManager {
         &self,
         config: &HostConfig,
         session_id: &str,
-        handle: Arc<AsyncMutex<client::Handle<SshClientHandler>>>,
+        handle: Arc<AsyncRwLock<client::Handle<SshClientHandler>>>,
     ) {
         let identity = host_identity(config);
         self.live_handles.insert(
@@ -299,7 +304,7 @@ impl SshManager {
 
         info!(session_id = %sid, host = %config.host, "SSH authenticated (no PTY, for SFTP)");
 
-        let handle = Arc::new(AsyncMutex::new(handle));
+        let handle = Arc::new(AsyncRwLock::new(handle));
         self.register_live_handle(&config, &sid, handle.clone());
         self.bare_handles.insert(
             sid.clone(),
@@ -349,10 +354,17 @@ impl SshManager {
             if let Some(shared) = reused {
                 match Self::tunnel_and_connect(&shared, config, ctx).await {
                     Ok(handle) => return Ok((handle, vec![shared])),
-                    Err(_) => {
+                    Err(TunnelError {
+                        jump_handle_dead: true,
+                        ..
+                    }) => {
                         // Stale entry
                         ctx.live_handles.remove(&identity);
                     }
+                    Err(TunnelError {
+                        jump_handle_dead: false,
+                        ..
+                    }) => {}
                 }
             }
 
@@ -369,11 +381,13 @@ impl SshManager {
                     }
                     other => other,
                 })?;
-            let jump_handle = Arc::new(AsyncMutex::new(jump_handle));
+            let jump_handle = Arc::new(AsyncRwLock::new(jump_handle));
 
             // 3. Open a direct-tcpip channel through the jump host and
             //    authenticate the target over it.
-            let handle = Self::tunnel_and_connect(&jump_handle, config, ctx).await?;
+            let handle = Self::tunnel_and_connect(&jump_handle, config, ctx)
+                .await
+                .map_err(|e| e.error)?;
 
             chain.push(jump_handle);
             Ok((handle, chain))
@@ -381,12 +395,12 @@ impl SshManager {
     }
 
     async fn tunnel_and_connect(
-        jump_handle: &Arc<AsyncMutex<client::Handle<SshClientHandler>>>,
+        jump_handle: &Arc<AsyncRwLock<client::Handle<SshClientHandler>>>,
         config: &HostConfig,
         ctx: &EstablishCtx,
-    ) -> Result<client::Handle<SshClientHandler>, SshError> {
+    ) -> Result<client::Handle<SshClientHandler>, TunnelError> {
         let channel = {
-            let h = jump_handle.lock().await;
+            let h = jump_handle.read().await;
             h.channel_open_direct_tcpip(
                 config.host.clone(),
                 config.port as u32,
@@ -394,11 +408,12 @@ impl SshManager {
                 0,
             )
             .await
-            .map_err(|e| {
-                SshError::ConnectionFailed(format!(
+            .map_err(|e| TunnelError {
+                jump_handle_dead: !matches!(e, russh::Error::ChannelOpenFailure(_)),
+                error: SshError::ConnectionFailed(format!(
                     "failed to open tunnel to {}:{}: {e}",
                     config.host, config.port
-                ))
+                )),
             })?
         };
 
@@ -406,8 +421,16 @@ impl SshManager {
         let mut handle =
             client::connect_stream(ctx.russh_config.clone(), channel.into_stream(), handler)
                 .await
-                .map_err(|e| Self::classify_connect_err(e, config, &mismatch))?;
-        Self::authenticate_handle(&mut handle, config).await?;
+                .map_err(|e| TunnelError {
+                    jump_handle_dead: false,
+                    error: Self::classify_connect_err(e, config, &mismatch),
+                })?;
+        Self::authenticate_handle(&mut handle, config)
+            .await
+            .map_err(|error| TunnelError {
+                jump_handle_dead: false,
+                error,
+            })?;
         Ok(handle)
     }
 
@@ -512,8 +535,10 @@ impl SshManager {
     pub fn get_handle(
         &self,
         session_id: &str,
-    ) -> Result<std::sync::Arc<tokio::sync::Mutex<russh::client::Handle<SshClientHandler>>>, SshError>
-    {
+    ) -> Result<
+        std::sync::Arc<tokio::sync::RwLock<russh::client::Handle<SshClientHandler>>>,
+        SshError,
+    > {
         // Check PTY sessions first, then bare handles (SFTP-only)
         if let Some(entry) = self.sessions.get(session_id) {
             return Ok(entry.value().ssh_handle());
@@ -610,7 +635,7 @@ impl SshManager {
             // (and any ProxyJump tunnel beneath it) even if the server is gone.
             let _ = bare
                 .handle
-                .lock()
+                .read()
                 .await
                 .disconnect(russh::Disconnect::ByApplication, "", "en")
                 .await;

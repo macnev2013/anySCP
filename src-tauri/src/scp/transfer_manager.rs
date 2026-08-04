@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use dashmap::DashMap;
 use russh::client::Handle;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{mpsc, Mutex, Semaphore};
+use tokio::sync::{mpsc, RwLock, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
@@ -727,7 +727,7 @@ fn mark_file_done(jobs: &Arc<DashMap<String, TransferJobState>>, job_id: &str) {
 
 // ─── Runners ───────────────────────────────────────────────────────────────────
 
-type Handle_ = Arc<Mutex<Handle<SshClientHandler>>>;
+type Handle_ = Arc<RwLock<Handle<SshClientHandler>>>;
 
 async fn run_upload_file(
     jobs: &Arc<DashMap<String, TransferJobState>>,

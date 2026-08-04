@@ -108,7 +108,7 @@ pub async fn sftp_open(
 
     // 2. Lock only long enough to open the channel, then release immediately.
     let channel = {
-        let handle = handle_arc.lock().await;
+        let handle = handle_arc.read().await;
         handle
             .channel_open_session()
             .await
@@ -124,7 +124,7 @@ pub async fn sftp_open(
         // channel hits EOF — so we'd hang ~30 s instead of failing cleanly.
         // `sudo -n true` exits non-zero immediately when a password is required.
         let mut check = {
-            let handle = handle_arc.lock().await;
+            let handle = handle_arc.read().await;
             handle
                 .channel_open_session()
                 .await

@@ -1,5 +1,9 @@
 use dashmap::DashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use tauri::{AppHandle, Emitter};
+
+use crate::types::SshNewHostKeyPayload;
 
 pub enum HostKeyCheck {
     TrustedOnFirstUse,
@@ -10,6 +14,7 @@ pub enum HostKeyCheck {
 pub struct KnownHostsStore {
     path: PathBuf,
     entries: DashMap<String, String>,
+    app_handle: OnceLock<AppHandle>,
 }
 
 impl KnownHostsStore {
@@ -27,7 +32,15 @@ impl KnownHostsStore {
                 }
             }
         }
-        Self { path, entries }
+        Self {
+            path,
+            entries,
+            app_handle: OnceLock::new(),
+        }
+    }
+
+    pub fn set_app_handle(&self, handle: AppHandle) {
+        let _ = self.app_handle.set(handle);
     }
 
     fn key(host: &str, port: u16) -> String {
@@ -49,6 +62,17 @@ impl KnownHostsStore {
 
         self.entries.insert(key, fingerprint.to_string());
         self.persist();
+
+        if let Some(handle) = self.app_handle.get() {
+            let _ = handle.emit(
+                "ssh:new-host-key",
+                &SshNewHostKeyPayload {
+                    host: host.to_string(),
+                    port,
+                    fingerprint: fingerprint.to_string(),
+                },
+            );
+        }
         HostKeyCheck::TrustedOnFirstUse
     }
 
@@ -66,11 +90,21 @@ impl KnownHostsStore {
             out.push_str(entry.value());
             out.push('\n');
         }
-        if let Some(parent) = self.path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Err(e) = std::fs::write(&self.path, out) {
-            tracing::warn!("failed to persist known_hosts: {e}");
+        let path = self.path.clone();
+        let write = move || {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&path, out) {
+                tracing::warn!("failed to persist known_hosts: {e}");
+            }
+        };
+
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn_blocking(write);
+            }
+            Err(_) => write(),
         }
     }
 }

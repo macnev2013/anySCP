@@ -8,7 +8,7 @@
 //! channel is short-lived: open, exec, drain, close.
 
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 use russh::client::Handle;
 use russh::ChannelMsg;
@@ -21,15 +21,15 @@ use super::{shell_quote, ScpEntry, ScpError};
 // Re-export so callers keep using `exec::StatInfo` / `exec::TreeEntry`.
 pub use super::listing::{StatInfo, TreeEntry};
 
-type SshHandle = Arc<Mutex<Handle<SshClientHandler>>>;
+type SshHandle = Arc<RwLock<Handle<SshClientHandler>>>;
 
 /// Run `command` on the remote. Returns `(stdout, stderr, exit_code)`.
 pub async fn ssh_exec(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     command: &str,
 ) -> Result<(Vec<u8>, Vec<u8>, i32), ScpError> {
     let mut channel = {
-        let h = handle.lock().await;
+        let h = handle.read().await;
         h.channel_open_session()
             .await
             .map_err(|e| ScpError::ChannelError(e.to_string()))?
@@ -86,7 +86,7 @@ fn fold_exec_msg(
 /// Run `command` and require exit code 0. Returns stdout. Errors include
 /// the captured stderr for diagnosis.
 pub async fn ssh_exec_ok(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     command: &str,
 ) -> Result<Vec<u8>, ScpError> {
     let (stdout, stderr, exit) = ssh_exec(handle, command).await?;
@@ -102,7 +102,7 @@ pub async fn ssh_exec_ok(
 
 /// As [`ssh_exec_ok`] but expects UTF-8 stdout. Trims the trailing newline.
 pub async fn ssh_exec_str(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     command: &str,
 ) -> Result<String, ScpError> {
     let stdout = ssh_exec_ok(handle, command).await?;
@@ -117,7 +117,7 @@ pub async fn ssh_exec_str(
 // ─── Filesystem ops ──────────────────────────────────────────────────────────
 
 /// Resolve the remote home directory by echoing `$HOME`.
-pub async fn home_dir(handle: Arc<Mutex<Handle<SshClientHandler>>>) -> Result<String, ScpError> {
+pub async fn home_dir(handle: Arc<RwLock<Handle<SshClientHandler>>>) -> Result<String, ScpError> {
     let out = ssh_exec_str(handle, r#"printf '%s' "$HOME""#).await?;
     if out.is_empty() {
         return Err(ScpError::RemoteIoError("$HOME is empty".into()));
@@ -129,7 +129,7 @@ pub async fn home_dir(handle: Arc<Mutex<Handle<SshClientHandler>>>) -> Result<St
 /// the path bar to normalise user input; not yet wired into a command.
 #[allow(dead_code)]
 pub async fn realpath(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     path: &str,
 ) -> Result<String, ScpError> {
     // -m is GNU-only and tolerates non-existent components. Fall back to
@@ -143,7 +143,7 @@ pub async fn realpath(
 
 /// `mkdir -p` on the remote.
 pub async fn mkdir_p(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     path: &str,
 ) -> Result<(), ScpError> {
     let cmd = format!("mkdir -p -- {}", shell_quote(path));
@@ -153,7 +153,7 @@ pub async fn mkdir_p(
 
 /// `touch` a file (also creates parent dirs if needed via `mkdir -p`).
 pub async fn touch(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     path: &str,
 ) -> Result<(), ScpError> {
     // Resolve parent. If the path has no slash, no parent is needed.
@@ -179,7 +179,7 @@ pub async fn touch(
 
 /// Remove a file (`rm`) or directory (`rm -rf`).
 pub async fn remove(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     path: &str,
     is_dir: bool,
 ) -> Result<(), ScpError> {
@@ -194,7 +194,7 @@ pub async fn remove(
 
 /// `mv src dst`.
 pub async fn rename(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     src: &str,
     dst: &str,
 ) -> Result<(), ScpError> {
@@ -206,7 +206,7 @@ pub async fn rename(
 /// `cp -r src dst` (no overwrite of existing destination — `cp` itself
 /// handles that with the same semantics as for files).
 pub async fn copy(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     src: &str,
     dst: &str,
 ) -> Result<(), ScpError> {
@@ -222,7 +222,7 @@ pub async fn copy(
 /// `chmod <octal> <path>`. `mode` is the octal permission value as a plain
 /// number; only the lower 12 bits are applied (masked to `0o7777`).
 pub async fn chmod(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     path: &str,
     mode: u32,
 ) -> Result<(), ScpError> {
@@ -237,7 +237,7 @@ pub async fn chmod(
 /// means full success. A non-zero exit that produced *no* diagnostics is a hard
 /// failure (see [`interpret_recursive_chmod`]).
 pub async fn chmod_recursive(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     path: &str,
     mode: u32,
 ) -> Result<Vec<String>, ScpError> {
@@ -343,7 +343,7 @@ async fn stat_ls(handle: SshHandle, path: &str) -> Result<Option<StatInfo>, ScpE
 
 /// Whether a remote path exists. Used by deduplicate_name for copy/move.
 pub async fn exists(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     path: &str,
 ) -> Result<bool, ScpError> {
     // `test -e` exits 0 if path exists, 1 otherwise. Any other exit is a
@@ -548,7 +548,7 @@ pub async fn dir_stats(
 /// Pick a name in `target_dir` that doesn't collide. Same semantics as the
 /// SFTP equivalent: appends ` (1)`, ` (2)`, ... before the file extension.
 pub async fn deduplicate_name(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     target_dir: &str,
     name: &str,
 ) -> Result<String, ScpError> {

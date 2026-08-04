@@ -171,6 +171,7 @@ pub fn run() {
             app.manage(s3_transfer_manager);
 
             let ssh_manager = SshManager::new(&app_data_dir);
+            ssh_manager.known_hosts().set_app_handle(app.handle().clone());
             app.manage(ssh_manager);
 
             telemetry::init();

@@ -94,7 +94,7 @@ pub async fn scp_close(
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 type SshHandle =
-    Arc<tokio::sync::Mutex<russh::client::Handle<crate::ssh::handler::SshClientHandler>>>;
+    Arc<tokio::sync::RwLock<russh::client::Handle<crate::ssh::handler::SshClientHandler>>>;
 
 /// Resolve the SSH handle behind an SCP session id.
 fn handle_for(scp_manager: &Arc<ScpManager>, scp_session_id: &str) -> Result<SshHandle, ScpError> {

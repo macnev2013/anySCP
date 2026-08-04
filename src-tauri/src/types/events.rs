@@ -14,3 +14,10 @@ pub struct SshStatusPayload {
     pub session_id: String,
     pub status: super::session::ConnectionStatus,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshNewHostKeyPayload {
+    pub host: String,
+    pub port: u16,
+    pub fingerprint: String,
+}

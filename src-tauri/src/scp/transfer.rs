@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use russh::client::Handle;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use crate::ssh::handler::SshClientHandler;
@@ -30,7 +30,7 @@ const DEFAULT_FILE_MODE: u32 = 0o644;
 /// `on_progress` is called with the cumulative byte count after each chunk.
 /// The remote parent directory must already exist (callers handle `mkdir -p`).
 pub async fn upload_file<F>(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     local_path: &Path,
     remote_path: &str,
     cancel: &CancellationToken,
@@ -58,7 +58,7 @@ where
 
     // Open a channel and start the remote sink. `-t` = "to" (receive).
     let channel = {
-        let h = handle.lock().await;
+        let h = handle.read().await;
         h.channel_open_session()
             .await
             .map_err(|e| ScpError::ChannelError(e.to_string()))?
@@ -107,7 +107,7 @@ where
 
 /// Download one remote file (`remote_path`) to `local_path` via `scp -f`.
 pub async fn download_file<F>(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     remote_path: &str,
     local_path: &Path,
     cancel: &CancellationToken,
@@ -117,7 +117,7 @@ where
     F: FnMut(u64),
 {
     let channel = {
-        let h = handle.lock().await;
+        let h = handle.read().await;
         h.channel_open_session()
             .await
             .map_err(|e| ScpError::ChannelError(e.to_string()))?

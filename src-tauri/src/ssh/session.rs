@@ -3,7 +3,7 @@ use russh::client::Handle;
 use russh::ChannelMsg;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, RwLock};
 
 use super::handler::SshClientHandler;
 
@@ -28,10 +28,10 @@ pub struct SplitConfig {
     pub default_shell: Option<String>,
 }
 
-pub type JumpChain = Arc<Vec<Arc<Mutex<Handle<SshClientHandler>>>>>;
+pub type JumpChain = Arc<Vec<Arc<RwLock<Handle<SshClientHandler>>>>>;
 
 pub struct SshSession {
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: Arc<RwLock<Handle<SshClientHandler>>>,
     cmd_tx: mpsc::UnboundedSender<SessionCmd>,
     reader_task: tokio::task::JoinHandle<()>,
     #[allow(dead_code)]
@@ -53,7 +53,7 @@ impl SshSession {
     // ProxyJump support added `jump_handles`, pushing this one over the 7-arg lint.
     #[allow(clippy::too_many_arguments)]
     async fn spawn_pty_session(
-        handle: Arc<Mutex<Handle<SshClientHandler>>>,
+        handle: Arc<RwLock<Handle<SshClientHandler>>>,
         jump_handles: JumpChain,
         session_id: String,
         cols: u32,
@@ -63,7 +63,7 @@ impl SshSession {
         startup_command: Option<String>,
     ) -> Result<Self, SshError> {
         let channel = handle
-            .lock()
+            .read()
             .await
             .channel_open_session()
             .await
@@ -191,7 +191,7 @@ impl SshSession {
         startup_command: Option<String>,
     ) -> Result<Self, SshError> {
         // Wrap the handle immediately so it can be shared with SFTP later.
-        let handle = Arc::new(Mutex::new(handle));
+        let handle = Arc::new(RwLock::new(handle));
         Self::spawn_pty_session(
             handle,
             jump_handles,
@@ -208,7 +208,7 @@ impl SshSession {
     /// Open a new PTY channel on the same authenticated connection.
     /// Used for split panes — avoids re-authentication.
     pub async fn open_split_pty(
-        handle: Arc<Mutex<Handle<SshClientHandler>>>,
+        handle: Arc<RwLock<Handle<SshClientHandler>>>,
         jump_handles: JumpChain,
         session_id: String,
         cols: u32,
@@ -231,7 +231,7 @@ impl SshSession {
 
     /// Return the shared Handle so the SFTP layer can lock it briefly to open
     /// its own channel on the same authenticated connection.
-    pub fn ssh_handle(&self) -> Arc<Mutex<Handle<SshClientHandler>>> {
+    pub fn ssh_handle(&self) -> Arc<RwLock<Handle<SshClientHandler>>> {
         self.handle.clone()
     }
 
