@@ -1,4 +1,4 @@
-use dashmap::DashMap;
+use dashmap::{mapref::entry::Entry, DashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Emitter};
@@ -74,30 +74,32 @@ impl KnownHostsStore {
     pub fn check(&self, host: &str, port: u16, fingerprint: &str) -> HostKeyCheck {
         let key = Self::key(host, port);
 
-        if let Some(recorded) = self.inner.entries.get(&key) {
-            return if recorded.as_str() == fingerprint {
-                HostKeyCheck::Known
-            } else {
-                HostKeyCheck::Mismatch {
-                    recorded: recorded.clone(),
+        match self.inner.entries.entry(key) {
+            Entry::Occupied(occupied) => {
+                let recorded = occupied.get().clone();
+                if recorded == fingerprint {
+                    HostKeyCheck::Known
+                } else {
+                    HostKeyCheck::Mismatch { recorded }
                 }
-            };
-        }
+            }
+            Entry::Vacant(vacant) => {
+                vacant.insert(fingerprint.to_string());
+                self.persist();
 
-        self.inner.entries.insert(key, fingerprint.to_string());
-        self.persist();
-
-        if let Some(handle) = self.app_handle.get() {
-            let _ = handle.emit(
-                "ssh:new-host-key",
-                &SshNewHostKeyPayload {
-                    host: host.to_string(),
-                    port,
-                    fingerprint: fingerprint.to_string(),
-                },
-            );
+                if let Some(handle) = self.app_handle.get() {
+                    let _ = handle.emit(
+                        "ssh:new-host-key",
+                        &SshNewHostKeyPayload {
+                            host: host.to_string(),
+                            port,
+                            fingerprint: fingerprint.to_string(),
+                        },
+                    );
+                }
+                HostKeyCheck::TrustedOnFirstUse
+            }
         }
-        HostKeyCheck::TrustedOnFirstUse
     }
 
     pub fn forget(&self, host: &str, port: u16) {

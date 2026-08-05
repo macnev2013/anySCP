@@ -123,6 +123,18 @@ impl SshManager {
         handle: Arc<AsyncRwLock<client::Handle<SshClientHandler>>>,
     ) {
         let identity = host_identity(config);
+
+        if let Some(existing) = self.live_handles.get(&identity) {
+            let existing_owner = existing.session_id.clone();
+            drop(existing);
+            let existing_still_live = self.sessions.contains_key(&existing_owner)
+                || self.bare_handles.contains_key(&existing_owner);
+            if existing_owner != session_id && existing_still_live {
+                self.session_identities
+                    .insert(session_id.to_string(), identity);
+                return;
+            }
+        }
         self.live_handles.insert(
             identity.clone(),
             LiveHandle {
