@@ -49,6 +49,8 @@ pub(crate) struct EstablishCtx {
     russh_config: Arc<client::Config>,
     known_hosts: Arc<KnownHostsStore>,
     live_handles: Arc<DashMap<String, LiveHandle>>,
+    jump_cache:
+        Arc<DashMap<String, std::sync::Weak<AsyncRwLock<client::Handle<SshClientHandler>>>>>,
 }
 
 impl EstablishCtx {
@@ -60,6 +62,7 @@ impl EstablishCtx {
             russh_config,
             known_hosts,
             live_handles: Arc::new(DashMap::new()),
+            jump_cache: Arc::new(DashMap::new()),
         }
     }
 }
@@ -86,6 +89,8 @@ pub struct SshManager {
     known_hosts: Arc<KnownHostsStore>,
     live_handles: Arc<DashMap<String, LiveHandle>>,
     session_identities: DashMap<String, String>,
+    jump_cache:
+        Arc<DashMap<String, std::sync::Weak<AsyncRwLock<client::Handle<SshClientHandler>>>>>,
 }
 
 impl SshManager {
@@ -97,6 +102,7 @@ impl SshManager {
             known_hosts: Arc::new(KnownHostsStore::load(app_data_dir)),
             live_handles: Arc::new(DashMap::new()),
             session_identities: DashMap::new(),
+            jump_cache: Arc::new(DashMap::new()),
         }
     }
 
@@ -113,6 +119,7 @@ impl SshManager {
             russh_config,
             known_hosts: self.known_hosts.clone(),
             live_handles: self.live_handles.clone(),
+            jump_cache: self.jump_cache.clone(),
         }
     }
 
@@ -390,7 +397,11 @@ impl SshManager {
 
             // 1. Try reusing an already-live connection to the jump host.
             let identity = host_identity(jump);
-            let reused = ctx.live_handles.get(&identity).map(|e| e.handle.clone());
+            let reused = ctx
+                .live_handles
+                .get(&identity)
+                .map(|e| e.handle.clone())
+                .or_else(|| ctx.jump_cache.get(&identity).and_then(|w| w.upgrade()));
             if let Some(shared) = reused {
                 match Self::tunnel_and_connect(&shared, config, ctx).await {
                     Ok(handle) => return Ok((handle, vec![shared])),
@@ -400,6 +411,7 @@ impl SshManager {
                     }) => {
                         // Stale entry
                         ctx.live_handles.remove(&identity);
+                        ctx.jump_cache.remove(&identity);
                     }
                     Err(TunnelError {
                         jump_handle_dead: false,
@@ -424,6 +436,9 @@ impl SshManager {
                     other => other,
                 })?;
             let jump_handle = Arc::new(AsyncRwLock::new(jump_handle));
+
+            ctx.jump_cache
+                .insert(identity.clone(), Arc::downgrade(&jump_handle));
 
             // 3. Open a direct-tcpip channel through the jump host and
             //    authenticate the target over it.
