@@ -397,11 +397,16 @@ impl SshManager {
 
             // 1. Try reusing an already-live connection to the jump host.
             let identity = host_identity(jump);
-            let reused = ctx
-                .live_handles
-                .get(&identity)
-                .map(|e| e.handle.clone())
-                .or_else(|| ctx.jump_cache.get(&identity).and_then(|w| w.upgrade()));
+            let reused = match ctx.live_handles.get(&identity).map(|e| e.handle.clone()) {
+                Some(shared) => Some(shared),
+                None => {
+                    let upgraded = ctx.jump_cache.get(&identity).and_then(|w| w.upgrade());
+                    if upgraded.is_none() {
+                        ctx.jump_cache.remove(&identity);
+                    }
+                    upgraded
+                }
+            };
             if let Some(shared) = reused {
                 match Self::tunnel_and_connect(&shared, config, ctx).await {
                     Ok(handle) => return Ok((handle, vec![shared])),
@@ -437,6 +442,7 @@ impl SshManager {
                 })?;
             let jump_handle = Arc::new(AsyncRwLock::new(jump_handle));
 
+            ctx.jump_cache.retain(|_, w| w.strong_count() > 0);
             ctx.jump_cache
                 .insert(identity.clone(), Arc::downgrade(&jump_handle));
 

@@ -335,6 +335,22 @@ pub fn run() {
             // Build info
             is_release_build,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                static EXITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+                if EXITING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                api.prevent_exit();
+                let known_hosts = app_handle.state::<SshManager>().known_hosts();
+                let app_handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    known_hosts.flush().await;
+                    app_handle.exit(0);
+                });
+            }
+        });
 }

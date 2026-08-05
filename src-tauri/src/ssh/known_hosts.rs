@@ -38,7 +38,12 @@ impl Inner {
 pub struct KnownHostsStore {
     inner: Arc<Inner>,
     app_handle: OnceLock<AppHandle>,
-    writer: OnceLock<mpsc::UnboundedSender<()>>,
+    writer: OnceLock<mpsc::UnboundedSender<WriteMsg>>,
+}
+
+enum WriteMsg {
+    Write,
+    Flush(tokio::sync::oneshot::Sender<()>),
 }
 
 impl KnownHostsStore {
@@ -107,22 +112,25 @@ impl KnownHostsStore {
         self.persist();
     }
 
-    fn writer_tx(&self) -> Option<mpsc::UnboundedSender<()>> {
+    fn writer_tx(&self) -> Option<mpsc::UnboundedSender<WriteMsg>> {
         if let Some(tx) = self.writer.get() {
             return Some(tx.clone());
         }
 
         let handle = tokio::runtime::Handle::try_current().ok()?;
-        let (tx, mut rx) = mpsc::unbounded_channel::<()>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<WriteMsg>();
         if self.writer.set(tx.clone()).is_err() {
             return self.writer.get().cloned();
         }
 
         let inner = self.inner.clone();
         handle.spawn(async move {
-            while rx.recv().await.is_some() {
+            while let Some(msg) = rx.recv().await {
                 let inner = inner.clone();
                 let _ = tokio::task::spawn_blocking(move || inner.write_now()).await;
+                if let WriteMsg::Flush(ack) = msg {
+                    let _ = ack.send(());
+                }
             }
         });
         Some(tx)
@@ -131,10 +139,21 @@ impl KnownHostsStore {
     fn persist(&self) {
         match self.writer_tx() {
             Some(tx) => {
-                let _ = tx.send(());
+                let _ = tx.send(WriteMsg::Write);
             }
             None => self.inner.write_now(),
         }
+    }
+
+    pub async fn flush(&self) {
+        let Some(tx) = self.writer_tx() else {
+            return;
+        };
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        if tx.send(WriteMsg::Flush(ack_tx)).is_err() {
+            return;
+        }
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), ack_rx).await;
     }
 }
 
@@ -207,6 +226,18 @@ mod tests {
             reloaded.check("example.com", 22, "SHA256:abc"),
             HostKeyCheck::Known
         ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn flush_waits_for_the_write_to_land_on_disk() {
+        let dir = std::env::temp_dir().join(format!("anyscp-test-{}", uuid::Uuid::new_v4()));
+        let store = KnownHostsStore::load(&dir);
+        store.check("example.com", 22, "SHA256:abc");
+        store.flush().await;
+
+        let contents = std::fs::read_to_string(dir.join("known_hosts")).expect("file written");
+        assert!(contents.contains("example.com:22 SHA256:abc"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
