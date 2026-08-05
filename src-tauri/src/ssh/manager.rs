@@ -122,8 +122,15 @@ impl SshManager {
         session_id: &str,
         handle: Arc<AsyncRwLock<client::Handle<SshClientHandler>>>,
     ) {
-        let identity = host_identity(config);
+        self.register_live_handle_for_identity(host_identity(config), session_id, handle);
+    }
 
+    fn register_live_handle_for_identity(
+        &self,
+        identity: String,
+        session_id: &str,
+        handle: Arc<AsyncRwLock<client::Handle<SshClientHandler>>>,
+    ) {
         if let Some(existing) = self.live_handles.get(&identity) {
             let existing_owner = existing.session_id.clone();
             drop(existing);
@@ -152,9 +159,30 @@ impl SshManager {
                 .live_handles
                 .get(&identity)
                 .is_some_and(|entry| entry.session_id == session_id);
-            if still_owns {
-                self.live_handles.remove(&identity);
+            if !still_owns {
+                return;
             }
+
+            let candidate = self
+                .session_identities
+                .iter()
+                .find(|e| *e.value() == identity && e.key() != session_id)
+                .map(|e| e.key().clone());
+
+            if let Some(candidate_id) = candidate {
+                if let Ok(handle) = self.get_handle(&candidate_id) {
+                    self.live_handles.insert(
+                        identity,
+                        LiveHandle {
+                            session_id: candidate_id,
+                            handle,
+                        },
+                    );
+                    return;
+                }
+            }
+
+            self.live_handles.remove(&identity);
         }
     }
 
@@ -574,7 +602,7 @@ impl SshManager {
         // the source session. The jump handles are shared (Arc) so the tunnel
         // stays open as long as the parent OR any split pane is alive — closing
         // the parent tab no longer tears the tunnel out from under its children.
-        let (handle, host_config, jump_handles): (_, _, JumpChain) = {
+        let (handle, host_config, jump_handles, identity): (_, _, JumpChain, Option<String>) = {
             let entry = self
                 .sessions
                 .get(source_session_id)
@@ -583,6 +611,9 @@ impl SshManager {
                 entry.value().ssh_handle(),
                 entry.value().host_config(),
                 entry.value().jump_handles(),
+                self.session_identities
+                    .get(source_session_id)
+                    .map(|e| e.value().clone()),
             )
         };
 
@@ -599,6 +630,10 @@ impl SshManager {
             host_config.default_shell,
         )
         .await?;
+
+        if let Some(identity) = identity {
+            self.register_live_handle_for_identity(identity, &sid, session.ssh_handle());
+        }
 
         self.sessions.insert(sid, session);
         Ok(new_id)
