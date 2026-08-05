@@ -29,8 +29,13 @@ impl Inner {
         if let Some(parent) = self.path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        if let Err(e) = std::fs::write(&self.path, out) {
-            tracing::warn!("failed to persist known_hosts: {e}");
+        let tmp_path = self.path.with_extension("tmp");
+        if let Err(e) = std::fs::write(&tmp_path, &out) {
+            tracing::warn!("failed to persist known_hosts (temp write): {e}");
+            return;
+        }
+        if let Err(e) = std::fs::rename(&tmp_path, &self.path) {
+            tracing::warn!("failed to persist known_hosts (rename): {e}");
         }
     }
 }
