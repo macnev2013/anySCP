@@ -139,6 +139,8 @@ pub struct TransferEvent {
     pub eta_secs: Option<u64>,
     /// Unix timestamp in milliseconds.
     pub created_at: u64,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 /// Serialisable snapshot returned by `sftp_list_transfers`.
@@ -157,6 +159,8 @@ pub struct TransferInfo {
     pub speed_bps: u64,
     pub eta_secs: Option<u64>,
     pub created_at: u64,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 // ─── Manager ─────────────────────────────────────────────────────────────────

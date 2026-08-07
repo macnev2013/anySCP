@@ -38,14 +38,11 @@ export interface TransferEvent {
   speed_bps: number;
   eta_secs: number | null;
   created_at: number;
+  warnings?: string;
 }
 
 export type TransferStatusValue =
-  | "Queued"
-  | "InProgress"
-  | "Completed"
-  | { Failed: string }
-  | "Cancelled";
+  "Queued" | "InProgress" | "Completed" | { Failed: string } | "Cancelled";
 
 // ─── Deprecated ───────────────────────────────────────────────────────────────
 
@@ -66,7 +63,4 @@ export interface TransferProgress {
  * @deprecated Use TransferStatusValue instead. Kept for backward compatibility.
  */
 export type TransferStatus =
-  | "InProgress"
-  | "Completed"
-  | { Failed: string }
-  | "Cancelled";
+  "InProgress" | "Completed" | { Failed: string } | "Cancelled";

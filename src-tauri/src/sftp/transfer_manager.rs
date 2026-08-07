@@ -64,6 +64,7 @@ pub struct TransferJobState {
     pub last_emit: Instant,
     pub speed_window_bytes: u64,
     pub speed_window_start: Instant,
+    pub warnings: Vec<String>,
 }
 
 impl TransferJobState {
@@ -84,6 +85,7 @@ impl TransferJobState {
             speed_bps: self.speed_bps,
             eta_secs,
             created_at: self.created_at,
+            warnings: self.warnings.clone(),
         }
     }
 
@@ -104,6 +106,7 @@ impl TransferJobState {
             speed_bps: self.speed_bps,
             eta_secs,
             created_at: self.created_at,
+            warnings: self.warnings.clone(),
         }
     }
 }
@@ -294,6 +297,7 @@ impl TransferManager {
                 last_emit: now_instant,
                 speed_window_bytes: 0,
                 speed_window_start: now_instant,
+                warnings: Vec::new(),
             };
 
             self.jobs.insert(transfer_id.clone(), job);
@@ -387,6 +391,7 @@ impl TransferManager {
                 last_emit: now_instant,
                 speed_window_bytes: 0,
                 speed_window_start: now_instant,
+                warnings: Vec::new(),
             };
 
             self.jobs.insert(transfer_id.clone(), job);
@@ -1461,32 +1466,47 @@ async fn download_dir_recursive(
         let local_child = local_dir.join(&name);
 
         let attrs = entry.metadata();
-        if attrs.file_type() == russh_sftp::protocol::FileType::Dir {
-            tokio::fs::create_dir_all(&local_child)
+        let result: Result<(), SftpError> =
+            if attrs.file_type() == russh_sftp::protocol::FileType::Dir {
+                match tokio::fs::create_dir_all(&local_child).await {
+                    Ok(()) => {
+                        Box::pin(download_dir_recursive(
+                            jobs,
+                            job_id,
+                            sftp_arc,
+                            &remote_child,
+                            &local_child,
+                            cancel_token,
+                            app_handle,
+                        ))
+                        .await
+                    }
+                    Err(e) => Err(SftpError::LocalIoError(e.to_string())),
+                }
+            } else {
+                run_download_file(
+                    jobs,
+                    job_id,
+                    sftp_arc,
+                    &remote_child,
+                    &local_child,
+                    cancel_token,
+                    app_handle,
+                )
                 .await
-                .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
-
-            Box::pin(download_dir_recursive(
-                jobs,
-                job_id,
-                sftp_arc,
-                &remote_child,
-                &local_child,
-                cancel_token,
-                app_handle,
-            ))
-            .await?;
-        } else {
-            run_download_file(
-                jobs,
-                job_id,
-                sftp_arc,
-                &remote_child,
-                &local_child,
-                cancel_token,
-                app_handle,
-            )
-            .await?;
+            };
+        if let Err(e) = result {
+            if matches!(e, SftpError::TransferCancelled) {
+                return Err(e);
+            }
+            tracing::warn!(
+                remove = %remote_child,
+                error = %e,
+                "skipping unreadable entry during recursive download"
+            );
+            if let Some(mut job) = jobs.get_mut(job_id) {
+                job.warnings.push(format!("{remote_child}: {e}"));
+            }
         }
     }
 
@@ -1550,6 +1570,7 @@ mod tests {
             last_emit: now,
             speed_window_bytes: 0,
             speed_window_start: now,
+            warnings: Vec::new(),
         };
 
         let info = job.to_info();
@@ -1583,6 +1604,7 @@ mod tests {
             last_emit: now,
             speed_window_bytes: 0,
             speed_window_start: now,
+            warnings: Vec::new(),
         };
 
         let info = job.to_info();
@@ -1614,6 +1636,7 @@ mod tests {
             last_emit: now,
             speed_window_bytes: 0,
             speed_window_start: now,
+            warnings: Vec::new(),
         };
 
         let info = job.to_info();
