@@ -1496,7 +1496,7 @@ async fn download_dir_recursive(
                 .await
             };
         if let Err(e) = result {
-            if matches!(e, SftpError::TransferCancelled) {
+            if matches!(e, SftpError::TransferCancelled | SftpError::LocalIoError(_)) {
                 return Err(e);
             }
             tracing::warn!(

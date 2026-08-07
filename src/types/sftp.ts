@@ -38,7 +38,7 @@ export interface TransferEvent {
   speed_bps: number;
   eta_secs: number | null;
   created_at: number;
-  warnings?: string;
+  warnings?: string[];
 }
 
 export type TransferStatusValue =
