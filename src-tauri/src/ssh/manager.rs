@@ -306,10 +306,23 @@ impl SshManager {
         config: &HostConfig,
     ) -> Result<(), SshError> {
         let authenticated = match &config.auth_method {
-            AuthMethod::Password { password } => handle
-                .authenticate_password(&config.username, password)
-                .await
-                .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?,
+            AuthMethod::Password { password } => {
+                let via_password = handle
+                    .authenticate_password(&config.username, password)
+                    .await
+                    .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
+
+                if via_password {
+                    true
+                } else {
+                    Self::authenticate_password_via_keyboard_interactive(
+                        handle,
+                        &config.username,
+                        password,
+                    )
+                    .await?
+                }
+            }
             AuthMethod::PrivateKey {
                 key_path,
                 passphrase,
@@ -349,6 +362,41 @@ impl SshManager {
             ));
         }
         Ok(())
+    }
+
+    async fn authenticate_password_via_keyboard_interactive(
+        handle: &mut client::Handle<SshClientHandler>,
+        username: &str,
+        password: &str,
+    ) -> Result<bool, SshError> {
+        use russh::client::KeyboardInteractiveAuthResponse as KbResponse;
+
+        let mut response = handle
+            .authenticate_keyboard_interactive_start(username, None::<String>)
+            .await
+            .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
+
+        for _ in 0..16 {
+            match response {
+                KbResponse::Success => return Ok(true),
+                KbResponse::Failure => return Ok(false),
+                KbResponse::InfoRequest { prompts, .. } => {
+                    if prompts.is_empty() {
+                        response = handle
+                            .authenticate_keyboard_interactive_respond(Vec::new())
+                            .await
+                            .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
+                    } else {
+                        let responses = vec![password.to_string(); prompts.len()];
+                        response = handle
+                            .authenticate_keyboard_interactive_respond(responses)
+                            .await
+                            .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
+                    }
+                }
+            }
+        }
+        Ok(false)
     }
 
     async fn auth_with_key_data(
