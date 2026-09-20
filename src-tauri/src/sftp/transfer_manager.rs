@@ -21,12 +21,14 @@ use super::{
     TransferStatus,
 };
 
-/// Three reconnect attempts over seven seconds. The delay is cancellable, so a
-/// user pause or cancel never waits for the backoff schedule to finish.
-const AUTO_RETRY_DELAYS: [Duration; 3] = [
+/// Five reconnect attempts over 83 seconds. The delay is cancellable, so a user
+/// pause or cancel never waits for the backoff schedule to finish.
+const AUTO_RETRY_DELAYS: [Duration; 5] = [
     Duration::from_secs(1),
     Duration::from_secs(2),
-    Duration::from_secs(4),
+    Duration::from_secs(5),
+    Duration::from_secs(15),
+    Duration::from_secs(60),
 ];
 
 // ─── Job state ───────────────────────────────────────────────────────────────
