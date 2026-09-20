@@ -145,7 +145,7 @@ pub async fn pf_start_tunnel(
     remote_host: String,
     remote_port: u32,
     pf_manager: State<'_, Arc<PortForwardManager>>,
-    ssh_manager: State<'_, SshManager>,
+    ssh_manager: State<'_, Arc<SshManager>>,
     db: State<'_, Arc<HostDb>>,
 ) -> Result<TunnelStatus, crate::types::SshError> {
     use crate::types::AuthMethod;

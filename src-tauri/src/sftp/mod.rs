@@ -1,11 +1,18 @@
 pub mod commands;
+mod connection;
+mod file_transfer;
 pub mod transfer_manager;
 
 use dashmap::DashMap;
+use russh_sftp::client::error::Error as ClientError;
+use russh_sftp::protocol::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+
+use crate::ssh::manager::SshManager;
+use crate::types::{HostConfig, SshError};
 
 // ─── Error ───────────────────────────────────────────────────────────────────
 
@@ -19,6 +26,8 @@ pub enum SftpError {
     ProtocolError(String),
     #[error("Remote I/O error: {0}")]
     RemoteIoError(String),
+    #[error("Transport error: {0}")]
+    TransportError(String),
     #[error("Local I/O error: {0}")]
     LocalIoError(String),
     #[error("Transfer cancelled")]
@@ -48,6 +57,7 @@ impl Serialize for SftpError {
             SftpError::SshSessionNotFound(_) => "ssh_session_not_found",
             SftpError::ProtocolError(_) => "protocol_error",
             SftpError::RemoteIoError(_) => "remote_io_error",
+            SftpError::TransportError(_) => "transport_error",
             SftpError::LocalIoError(_) => "local_io_error",
             SftpError::TransferCancelled => "transfer_cancelled",
             SftpError::InvalidPath(_) => "invalid_path",
@@ -59,6 +69,93 @@ impl Serialize for SftpError {
         state.serialize_field("message", &self.to_string())?;
         state.end()
     }
+}
+
+impl SftpError {
+    pub(crate) fn is_transient(&self) -> bool {
+        matches!(self, Self::TransportError(_))
+    }
+}
+
+impl From<SshError> for SftpError {
+    fn from(error: SshError) -> Self {
+        match error {
+            SshError::ConnectionFailed(message)
+            | SshError::ChannelError(message)
+            | SshError::IoError(message) => Self::TransportError(message),
+            SshError::AuthenticationFailed(message) | SshError::KeyParseError(message) => {
+                Self::ProtocolError(message)
+            }
+            SshError::SessionNotFound(message) => Self::SshSessionNotFound(message),
+            SshError::AlreadyDisconnected => {
+                Self::TransportError("SSH session already disconnected".to_string())
+            }
+            SshError::Cancelled => Self::TransferCancelled,
+        }
+    }
+}
+
+pub(crate) fn map_client_error(error: ClientError) -> SftpError {
+    match error {
+        ClientError::IO(message) => SftpError::TransportError(message),
+        ClientError::Timeout => SftpError::TransportError("SFTP request timed out".to_string()),
+        ClientError::Status(status)
+            if matches!(
+                status.status_code,
+                StatusCode::NoConnection | StatusCode::ConnectionLost
+            ) =>
+        {
+            SftpError::TransportError(format!("{}: {}", status.status_code, status.error_message))
+        }
+        other => {
+            let message = other.to_string();
+            if is_transport_message(&message) {
+                SftpError::TransportError(message)
+            } else {
+                SftpError::RemoteIoError(message)
+            }
+        }
+    }
+}
+
+pub(crate) fn map_remote_io(error: std::io::Error) -> SftpError {
+    let transient_kind = matches!(
+        error.kind(),
+        std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::NotConnected
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::UnexpectedEof
+    );
+    let message = error.to_string();
+    if transient_kind || is_transport_message(&message) {
+        SftpError::TransportError(message)
+    } else {
+        SftpError::RemoteIoError(message)
+    }
+}
+
+/// `russh-sftp::client::fs::File` currently erases its typed client error and
+/// returns `io::ErrorKind::Other`, leaving only the display message. Keep the
+/// compatibility match here rather than spreading string checks through the
+/// transfer engine.
+fn is_transport_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "broken pipe",
+        "channel closed",
+        "connection aborted",
+        "connection lost",
+        "connection reset",
+        "no connection",
+        "not connected",
+        "timed out",
+        "timeout",
+        "unexpected eof",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
 }
 
 // ─── Data types ──────────────────────────────────────────────────────────────
@@ -115,6 +212,7 @@ pub enum TransferDirection {
 pub enum TransferStatus {
     Queued,
     InProgress,
+    Paused,
     Completed,
     Failed(String),
     Cancelled,
@@ -137,6 +235,7 @@ pub struct TransferEvent {
     pub files_total: u32,
     pub speed_bps: u64,
     pub eta_secs: Option<u64>,
+    pub resume_supported: bool,
     /// Unix timestamp in milliseconds.
     pub created_at: u64,
 }
@@ -156,6 +255,7 @@ pub struct TransferInfo {
     pub files_total: u32,
     pub speed_bps: u64,
     pub eta_secs: Option<u64>,
+    pub resume_supported: bool,
     pub created_at: u64,
 }
 
@@ -163,8 +263,16 @@ pub struct TransferInfo {
 
 pub struct SftpSessionWrapper {
     pub sftp: Arc<Mutex<russh_sftp::client::SftpSession>>,
-    #[allow(dead_code)]
     pub ssh_session_id: String,
+    pub host_config: HostConfig,
+    pub use_sudo: bool,
+    pub generation: u64,
+    pub reconnect_lock: Arc<Mutex<()>>,
+}
+
+pub struct SftpTransferSession {
+    pub sftp: Arc<Mutex<russh_sftp::client::SftpSession>>,
+    pub generation: u64,
 }
 
 pub struct SftpManager {
@@ -191,6 +299,72 @@ impl SftpManager {
         self.sessions
             .get(id)
             .ok_or_else(|| SftpError::SessionNotFound(id.to_string()))
+    }
+
+    pub fn transfer_session(&self, id: &str) -> Result<SftpTransferSession, SftpError> {
+        let session = self.get_session(id)?;
+        Ok(SftpTransferSession {
+            sftp: session.sftp.clone(),
+            generation: session.generation,
+        })
+    }
+
+    /// Reconnect and replace an SFTP session only if no other transfer has
+    /// already replaced the failed generation.
+    pub async fn reconnect_if_generation(
+        &self,
+        id: &str,
+        failed_generation: u64,
+        ssh_manager: &SshManager,
+        cancel: &CancellationToken,
+    ) -> Result<u64, SftpError> {
+        let reconnect_lock = self.get_session(id)?.reconnect_lock.clone();
+        let _guard = reconnect_lock.lock().await;
+
+        let (current_generation, old_ssh_session_id, host_config, use_sudo) = {
+            let session = self.get_session(id)?;
+            (
+                session.generation,
+                session.ssh_session_id.clone(),
+                session.host_config.clone(),
+                session.use_sudo,
+            )
+        };
+        if current_generation != failed_generation {
+            return Ok(current_generation);
+        }
+
+        let new_ssh_session_id = tokio::select! {
+            _ = cancel.cancelled() => return Err(SftpError::TransferCancelled),
+            result = ssh_manager.connect_no_pty(host_config, None) => result.map_err(SftpError::from)?,
+        };
+        let handle = ssh_manager
+            .get_handle(&new_ssh_session_id.0)
+            .map_err(SftpError::from)?;
+        let open_result = tokio::select! {
+            _ = cancel.cancelled() => Err(SftpError::TransferCancelled),
+            result = connection::open_sftp_session(&handle, use_sudo) => result,
+        };
+        let new_sftp = match open_result {
+            Ok(session) => session,
+            Err(error) => {
+                ssh_manager.remove_bare(&new_ssh_session_id.0);
+                return Err(error);
+            }
+        };
+
+        let next_generation = current_generation + 1;
+        let Some(mut session) = self.sessions.get_mut(id) else {
+            ssh_manager.remove_bare(&new_ssh_session_id.0);
+            return Err(SftpError::SessionNotFound(id.to_string()));
+        };
+        session.sftp = Arc::new(Mutex::new(new_sftp));
+        session.ssh_session_id = new_ssh_session_id.0;
+        session.generation = next_generation;
+        drop(session);
+
+        ssh_manager.remove_bare(&old_ssh_session_id);
+        Ok(next_generation)
     }
 
     pub fn remove_session(&self, id: &str) {
@@ -319,5 +493,41 @@ mod tests {
                 "should reject {name:?}"
             );
         }
+    }
+
+    #[test]
+    fn connection_interruptions_are_transient() {
+        for kind in [
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::ConnectionAborted,
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::NotConnected,
+            std::io::ErrorKind::TimedOut,
+            std::io::ErrorKind::UnexpectedEof,
+        ] {
+            assert!(map_remote_io(std::io::Error::from(kind)).is_transient());
+        }
+        assert!(map_client_error(ClientError::Timeout).is_transient());
+        assert!(
+            map_client_error(ClientError::Status(russh_sftp::protocol::Status {
+                id: 1,
+                status_code: StatusCode::ConnectionLost,
+                error_message: "connection reset".to_string(),
+                language_tag: String::new(),
+            }))
+            .is_transient()
+        );
+        assert!(
+            map_remote_io(std::io::Error::other("I/O: Connection reset by peer")).is_transient()
+        );
+    }
+
+    #[test]
+    fn local_and_remote_data_errors_are_not_auto_retried() {
+        assert!(
+            !map_remote_io(std::io::Error::from(std::io::ErrorKind::PermissionDenied,))
+                .is_transient()
+        );
+        assert!(!SftpError::LocalIoError("disk full".to_string()).is_transient());
     }
 }

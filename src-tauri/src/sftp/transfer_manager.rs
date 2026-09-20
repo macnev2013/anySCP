@@ -2,28 +2,32 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
-use russh_sftp::protocol::OpenFlags;
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
+use crate::ssh::manager::SshManager;
 use crate::transfer_common::{
     apply_concurrency, eta_secs, record_finished, record_progress, FinishedStatus, ProgressFields,
 };
 
+use super::file_transfer::{self, DownloadCheckpoint, UploadCheckpoint};
 use super::{
     validate_remote_name, SftpError, SftpManager, TransferDirection, TransferEvent, TransferInfo,
     TransferStatus,
 };
 
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-const CHUNK_SIZE: usize = 256 * 1024; // 256 KB
+/// Three reconnect attempts over seven seconds. The delay is cancellable, so a
+/// user pause or cancel never waits for the backoff schedule to finish.
+const AUTO_RETRY_DELAYS: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
 
 // ─── Job state ───────────────────────────────────────────────────────────────
 
@@ -31,6 +35,7 @@ pub enum TransferJobKind {
     UploadFile {
         local_path: PathBuf,
         remote_path: String,
+        checkpoint: UploadCheckpoint,
     },
     UploadDir {
         local_path: PathBuf,
@@ -39,10 +44,36 @@ pub enum TransferJobKind {
     DownloadFile {
         remote_path: String,
         local_path: PathBuf,
+        checkpoint: DownloadCheckpoint,
     },
     DownloadDir {
         remote_path: String,
         local_dir: PathBuf,
+    },
+}
+
+impl TransferJobKind {
+    fn resume_supported(&self) -> bool {
+        matches!(self, Self::UploadFile { .. } | Self::DownloadFile { .. })
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StopRequest {
+    None,
+    Pause,
+    Cancel,
+}
+
+enum PartialArtifact {
+    Upload {
+        sftp_session_id: String,
+        remote_path: String,
+        checkpoint: UploadCheckpoint,
+    },
+    Download {
+        local_path: PathBuf,
+        checkpoint: DownloadCheckpoint,
     },
 }
 
@@ -59,6 +90,7 @@ pub struct TransferJobState {
     pub files_total: u32,
     pub speed_bps: u64,
     pub cancel_token: CancellationToken,
+    stop_request: StopRequest,
     pub error: Option<String>,
     pub created_at: u64,
     pub last_emit: Instant,
@@ -83,6 +115,7 @@ impl TransferJobState {
             files_total: self.files_total,
             speed_bps: self.speed_bps,
             eta_secs,
+            resume_supported: self.kind.resume_supported(),
             created_at: self.created_at,
         }
     }
@@ -103,8 +136,21 @@ impl TransferJobState {
             files_total: self.files_total,
             speed_bps: self.speed_bps,
             eta_secs,
+            resume_supported: self.kind.resume_supported(),
             created_at: self.created_at,
         }
+    }
+
+    fn queue_again(&mut self) {
+        let now = Instant::now();
+        self.status = TransferStatus::Queued;
+        self.speed_bps = 0;
+        self.error = None;
+        self.cancel_token = CancellationToken::new();
+        self.stop_request = StopRequest::None;
+        self.last_emit = now;
+        self.speed_window_bytes = 0;
+        self.speed_window_start = now;
     }
 }
 
@@ -135,6 +181,7 @@ pub struct TransferManager {
     queue_tx: mpsc::UnboundedSender<String>,
     semaphore: Arc<Semaphore>,
     sftp_manager: Arc<SftpManager>,
+    ssh_manager: Arc<SshManager>,
     app_handle: AppHandle,
     max_concurrent: Arc<AtomicU32>,
     /// Holds the queue receiver until the worker loop is spawned (lazy init).
@@ -142,7 +189,11 @@ pub struct TransferManager {
 }
 
 impl TransferManager {
-    pub fn new(sftp_manager: Arc<SftpManager>, app_handle: AppHandle) -> Self {
+    pub fn new(
+        sftp_manager: Arc<SftpManager>,
+        ssh_manager: Arc<SshManager>,
+        app_handle: AppHandle,
+    ) -> Self {
         let (queue_tx, queue_rx) = mpsc::unbounded_channel::<String>();
         let jobs: Arc<DashMap<String, TransferJobState>> = Arc::new(DashMap::new());
         let finished_order = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
@@ -159,6 +210,7 @@ impl TransferManager {
             queue_tx,
             semaphore,
             sftp_manager,
+            ssh_manager,
             app_handle,
             max_concurrent,
             worker_rx,
@@ -173,6 +225,7 @@ impl TransferManager {
             let finished_order = self.finished_order.clone();
             let semaphore = self.semaphore.clone();
             let sftp_manager = self.sftp_manager.clone();
+            let ssh_manager = self.ssh_manager.clone();
             let app_handle = self.app_handle.clone();
 
             tokio::spawn(async move {
@@ -186,6 +239,7 @@ impl TransferManager {
                     let jobs = jobs.clone();
                     let finished_order = finished_order.clone();
                     let sftp_manager = sftp_manager.clone();
+                    let ssh_manager = ssh_manager.clone();
                     let app_handle = app_handle.clone();
 
                     tokio::spawn(async move {
@@ -194,6 +248,7 @@ impl TransferManager {
                             &finished_order,
                             &job_id,
                             &sftp_manager,
+                            &ssh_manager,
                             &app_handle,
                         )
                         .await;
@@ -270,6 +325,7 @@ impl TransferManager {
                     TransferJobKind::UploadFile {
                         local_path: local_path.clone(),
                         remote_path,
+                        checkpoint: UploadCheckpoint::new(&meta),
                     },
                     meta.len(),
                     1u32,
@@ -289,6 +345,7 @@ impl TransferManager {
                 files_total,
                 speed_bps: 0,
                 cancel_token: CancellationToken::new(),
+                stop_request: StopRequest::None,
                 error: None,
                 created_at: now,
                 last_emit: now_instant,
@@ -363,6 +420,7 @@ impl TransferManager {
                     TransferJobKind::DownloadFile {
                         remote_path: remote_path.clone(),
                         local_path: local_dest,
+                        checkpoint: DownloadCheckpoint::new(size, attrs.mtime),
                     },
                     size,
                     1u32,
@@ -382,6 +440,7 @@ impl TransferManager {
                 files_total,
                 speed_bps: 0,
                 cancel_token: CancellationToken::new(),
+                stop_request: StopRequest::None,
                 error: None,
                 created_at: now,
                 last_emit: now_instant,
@@ -429,6 +488,15 @@ impl TransferManager {
             SftpError::SessionNotFound(format!("transfer not found: {transfer_id}"))
         })?;
 
+        if !matches!(
+            job.status,
+            TransferStatus::Queued | TransferStatus::InProgress
+        ) {
+            return Err(SftpError::ProtocolError(format!(
+                "transfer {transfer_id} cannot be cancelled from its current state"
+            )));
+        }
+        job.stop_request = StopRequest::Cancel;
         job.cancel_token.cancel();
 
         // If still queued, mark cancelled immediately (the worker will no-op).
@@ -443,38 +511,58 @@ impl TransferManager {
         Ok(())
     }
 
-    /// Retry a failed transfer by resetting its state and re-queuing it.
+    /// Pause an in-progress resumable transfer after its current chunk.
     #[instrument(skip(self), fields(transfer_id = %transfer_id))]
-    pub fn retry(&self, transfer_id: &str) -> Result<(), SftpError> {
+    pub fn pause(&self, transfer_id: &str) -> Result<(), SftpError> {
+        let mut job = self.jobs.get_mut(transfer_id).ok_or_else(|| {
+            SftpError::SessionNotFound(format!("transfer not found: {transfer_id}"))
+        })?;
+        if !job.kind.resume_supported() {
+            return Err(SftpError::ProtocolError(
+                "only single-file SFTP transfers can be paused".to_string(),
+            ));
+        }
+        if job.status != TransferStatus::InProgress {
+            return Err(SftpError::ProtocolError(format!(
+                "transfer {transfer_id} is not in progress"
+            )));
+        }
+        job.stop_request = StopRequest::Pause;
+        job.cancel_token.cancel();
+        Ok(())
+    }
+
+    /// Resume a paused or failed single-file transfer from its checkpoint.
+    #[instrument(skip(self), fields(transfer_id = %transfer_id))]
+    pub fn resume(&self, transfer_id: &str) -> Result<(), SftpError> {
         self.ensure_worker_spawned();
         {
             let mut job = self.jobs.get_mut(transfer_id).ok_or_else(|| {
                 SftpError::SessionNotFound(format!("transfer not found: {transfer_id}"))
             })?;
 
+            if !job.kind.resume_supported() {
+                return Err(SftpError::ProtocolError(
+                    "only single-file SFTP transfers can be resumed".to_string(),
+                ));
+            }
             match &job.status {
-                TransferStatus::Failed(_) | TransferStatus::Cancelled => {}
+                TransferStatus::Failed(_) | TransferStatus::Paused => {}
                 _ => {
                     return Err(SftpError::ProtocolError(format!(
-                        "transfer {transfer_id} is not in a failed/cancelled state"
+                        "transfer {transfer_id} is not paused or failed"
                     )));
                 }
             }
 
-            job.status = TransferStatus::Queued;
-            job.bytes_transferred = 0;
-            job.files_done = 0;
-            job.speed_bps = 0;
-            job.error = None;
-            job.cancel_token = CancellationToken::new();
-            job.last_emit = Instant::now();
-            job.speed_window_bytes = 0;
-            job.speed_window_start = Instant::now();
+            job.queue_again();
 
             let event = job.to_event();
             drop(job);
             let _ = self.app_handle.emit("sftp:transfer", event);
         }
+
+        self.forget_finished(transfer_id);
 
         self.queue_tx
             .send(transfer_id.to_string())
@@ -483,19 +571,113 @@ impl TransferManager {
         Ok(())
     }
 
+    /// Retry directory transfers from the beginning; single files resume.
+    #[instrument(skip(self), fields(transfer_id = %transfer_id))]
+    pub fn retry(&self, transfer_id: &str) -> Result<(), SftpError> {
+        let resumable = self
+            .jobs
+            .get(transfer_id)
+            .ok_or_else(|| {
+                SftpError::SessionNotFound(format!("transfer not found: {transfer_id}"))
+            })?
+            .kind
+            .resume_supported();
+        if resumable {
+            return self.resume(transfer_id);
+        }
+
+        self.ensure_worker_spawned();
+        {
+            let mut job = self.jobs.get_mut(transfer_id).ok_or_else(|| {
+                SftpError::SessionNotFound(format!("transfer not found: {transfer_id}"))
+            })?;
+            if !matches!(
+                job.status,
+                TransferStatus::Failed(_) | TransferStatus::Cancelled
+            ) {
+                return Err(SftpError::ProtocolError(format!(
+                    "transfer {transfer_id} is not in a failed/cancelled state"
+                )));
+            }
+            job.bytes_transferred = 0;
+            job.files_done = 0;
+            job.queue_again();
+            let event = job.to_event();
+            drop(job);
+            let _ = self.app_handle.emit("sftp:transfer", event);
+        }
+        self.forget_finished(transfer_id);
+        self.queue_tx
+            .send(transfer_id.to_string())
+            .map_err(|e| SftpError::ChannelError(e.to_string()))?;
+        Ok(())
+    }
+
     /// Snapshot of every known transfer job.
     pub fn list_all(&self) -> Vec<TransferInfo> {
         self.jobs.iter().map(|r| r.value().to_info()).collect()
     }
 
-    /// Remove completed, failed, and cancelled jobs from the registry.
-    pub fn clear_finished(&self) {
-        self.jobs.retain(|_, job| {
-            !matches!(
-                &job.status,
-                TransferStatus::Completed | TransferStatus::Failed(_) | TransferStatus::Cancelled
-            )
-        });
+    /// Remove a settled transfer and its resumable partial artifact.
+    pub async fn discard(&self, transfer_id: &str) -> Result<(), SftpError> {
+        let artifact = {
+            let job = self.jobs.get(transfer_id).ok_or_else(|| {
+                SftpError::SessionNotFound(format!("transfer not found: {transfer_id}"))
+            })?;
+            if !matches!(
+                job.status,
+                TransferStatus::Paused
+                    | TransferStatus::Completed
+                    | TransferStatus::Failed(_)
+                    | TransferStatus::Cancelled
+            ) {
+                return Err(SftpError::ProtocolError(format!(
+                    "transfer {transfer_id} is still active"
+                )));
+            }
+            if matches!(
+                job.status,
+                TransferStatus::Paused | TransferStatus::Failed(_) | TransferStatus::Cancelled
+            ) {
+                partial_artifact(&job)
+            } else {
+                None
+            }
+        };
+
+        if let Some(artifact) = artifact {
+            discard_partial(&self.sftp_manager, transfer_id, artifact).await?;
+        }
+        self.jobs.remove(transfer_id);
+        self.forget_finished(transfer_id);
+        Ok(())
+    }
+
+    /// Clear settled jobs that do not retain a resumable checkpoint.
+    pub async fn clear_finished(&self) -> Result<(), SftpError> {
+        let ids: Vec<String> = self
+            .jobs
+            .iter()
+            .filter(|entry| {
+                let terminal = matches!(
+                    &entry.status,
+                    TransferStatus::Completed
+                        | TransferStatus::Failed(_)
+                        | TransferStatus::Cancelled
+                );
+                let retained_checkpoint = entry.kind.resume_supported()
+                    && matches!(
+                        &entry.status,
+                        TransferStatus::Failed(_) | TransferStatus::Cancelled
+                    );
+                terminal && !retained_checkpoint
+            })
+            .map(|entry| entry.transfer_id.clone())
+            .collect();
+        for id in ids {
+            self.discard(&id).await?;
+        }
+        Ok(())
     }
 
     /// Adjust the maximum number of concurrent transfers.
@@ -505,6 +687,62 @@ impl TransferManager {
     pub fn set_max_concurrent(&self, n: u32) {
         apply_concurrency(&self.semaphore, &self.max_concurrent, n);
     }
+
+    fn forget_finished(&self, transfer_id: &str) {
+        self.finished_order
+            .lock()
+            .expect("finished_order mutex poisoned")
+            .retain(|id| id != transfer_id);
+    }
+}
+
+fn partial_artifact(job: &TransferJobState) -> Option<PartialArtifact> {
+    match &job.kind {
+        TransferJobKind::UploadFile {
+            remote_path,
+            checkpoint,
+            ..
+        } if checkpoint.has_partial() => Some(PartialArtifact::Upload {
+            sftp_session_id: job.sftp_session_id.clone(),
+            remote_path: remote_path.clone(),
+            checkpoint: checkpoint.clone(),
+        }),
+        TransferJobKind::DownloadFile {
+            local_path,
+            checkpoint,
+            ..
+        } if checkpoint.has_partial() => Some(PartialArtifact::Download {
+            local_path: local_path.clone(),
+            checkpoint: checkpoint.clone(),
+        }),
+        _ => None,
+    }
+}
+
+async fn discard_partial(
+    sftp_manager: &Arc<SftpManager>,
+    transfer_id: &str,
+    artifact: PartialArtifact,
+) -> Result<(), SftpError> {
+    match artifact {
+        PartialArtifact::Upload {
+            sftp_session_id,
+            remote_path,
+            checkpoint,
+        } => {
+            let sftp = sftp_manager.get_session(&sftp_session_id)?.sftp.clone();
+            file_transfer::discard_upload(&sftp, &remote_path, transfer_id).await?;
+            checkpoint.clear_partial();
+        }
+        PartialArtifact::Download {
+            local_path,
+            checkpoint,
+        } => {
+            file_transfer::discard_download(&local_path, transfer_id).await?;
+            checkpoint.clear_partial();
+        }
+    }
+    Ok(())
 }
 
 // ─── Remote directory statistics ─────────────────────────────────────────────
@@ -624,21 +862,19 @@ async fn execute_transfer(
     finished_order: &Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
     job_id: &str,
     sftp_manager: &Arc<SftpManager>,
+    ssh_manager: &Arc<SshManager>,
     app_handle: &AppHandle,
 ) {
     // Check if it was cancelled before we even got the semaphore permit.
     {
         if let Some(job) = jobs.get(job_id) {
             if job.cancel_token.is_cancelled() {
+                let status = match job.stop_request {
+                    StopRequest::Pause => TransferStatus::Paused,
+                    StopRequest::None | StopRequest::Cancel => TransferStatus::Cancelled,
+                };
                 drop(job);
-                set_job_status(
-                    jobs,
-                    finished_order,
-                    job_id,
-                    TransferStatus::Cancelled,
-                    None,
-                    app_handle,
-                );
+                set_job_status(jobs, finished_order, job_id, status, None, app_handle);
                 return;
             }
         } else {
@@ -656,35 +892,9 @@ async fn execute_transfer(
         app_handle,
     );
 
-    // Retrieve the SFTP session arc — bail with an error if the session is gone.
-    let sftp_arc = {
-        let sftp_session_id = {
-            let job = match jobs.get(job_id) {
-                Some(j) => j,
-                None => return,
-            };
-            job.sftp_session_id.clone()
-        };
-
-        match sftp_manager.get_session(&sftp_session_id) {
-            Ok(session_ref) => session_ref.sftp.clone(),
-            Err(e) => {
-                set_job_status(
-                    jobs,
-                    finished_order,
-                    job_id,
-                    TransferStatus::Failed(e.to_string()),
-                    Some(e.to_string()),
-                    app_handle,
-                );
-                return;
-            }
-        }
-    };
-
     // We need to move the job *kind* out to avoid holding the DashMap lock
     // across await points. We reconstruct a temporary descriptor.
-    let (kind_desc, cancel_token) = {
+    let (sftp_session_id, kind_desc, cancel_token) = {
         let job = match jobs.get(job_id) {
             Some(j) => j,
             None => return,
@@ -695,9 +905,11 @@ async fn execute_transfer(
             TransferJobKind::UploadFile {
                 local_path,
                 remote_path,
+                checkpoint,
             } => KindDesc::UploadFile {
                 local_path: local_path.clone(),
                 remote_path: remote_path.clone(),
+                checkpoint: checkpoint.clone(),
             },
             TransferJobKind::UploadDir {
                 local_path,
@@ -709,10 +921,11 @@ async fn execute_transfer(
             TransferJobKind::DownloadFile {
                 remote_path,
                 local_path,
-                ..
+                checkpoint,
             } => KindDesc::DownloadFile {
                 remote_path: remote_path.clone(),
                 local_path: local_path.clone(),
+                checkpoint: checkpoint.clone(),
             },
             TransferJobKind::DownloadDir {
                 remote_path,
@@ -722,71 +935,70 @@ async fn execute_transfer(
                 local_dir: local_dir.clone(),
             },
         };
-        (desc, cancel_token)
+        (job.sftp_session_id.clone(), desc, cancel_token)
     };
 
-    let result = match kind_desc {
-        KindDesc::UploadFile {
-            local_path,
-            remote_path,
-        } => {
-            run_upload_file(
+    let transfer_session = match sftp_manager.transfer_session(&sftp_session_id) {
+        Ok(session) => session,
+        Err(error) => {
+            set_job_status(
                 jobs,
+                finished_order,
                 job_id,
-                &sftp_arc,
-                &local_path,
-                &remote_path,
-                &cancel_token,
+                TransferStatus::Failed(error.to_string()),
+                Some(error.to_string()),
                 app_handle,
-            )
-            .await
-        }
-        KindDesc::UploadDir {
-            local_path,
-            remote_dir,
-        } => {
-            run_upload_dir(
-                jobs,
-                job_id,
-                &sftp_arc,
-                &local_path,
-                &remote_dir,
-                &cancel_token,
-                app_handle,
-            )
-            .await
-        }
-        KindDesc::DownloadFile {
-            remote_path,
-            local_path,
-        } => {
-            run_download_file(
-                jobs,
-                job_id,
-                &sftp_arc,
-                &remote_path,
-                &local_path,
-                &cancel_token,
-                app_handle,
-            )
-            .await
-        }
-        KindDesc::DownloadDir {
-            remote_path,
-            local_dir,
-        } => {
-            run_download_dir(
-                jobs,
-                job_id,
-                &sftp_arc,
-                &remote_path,
-                &local_dir,
-                &cancel_token,
-                app_handle,
-            )
-            .await
+            );
+            return;
         }
     };
+    let mut generation = transfer_session.generation;
+    let mut result = run_transfer_attempt(
+        jobs,
+        job_id,
+        &transfer_session.sftp,
+        &kind_desc,
+        &cancel_token,
+        app_handle,
+    )
+    .await;
+
+    if kind_desc.resume_supported() {
+        for (retry_index, delay) in AUTO_RETRY_DELAYS.iter().enumerate() {
+            if !result.as_ref().is_err_and(SftpError::is_transient) {
+                break;
+            }
+
+            tracing::warn!(
+                transfer_id = %job_id,
+                attempt = retry_index + 1,
+                delay_ms = delay.as_millis(),
+                "transient SFTP transfer failure; reconnecting before retry"
+            );
+            result = async {
+                wait_for_retry(*delay, &cancel_token).await?;
+                generation = sftp_manager
+                    .reconnect_if_generation(
+                        &sftp_session_id,
+                        generation,
+                        ssh_manager,
+                        &cancel_token,
+                    )
+                    .await?;
+                let session = sftp_manager.transfer_session(&sftp_session_id)?;
+                run_transfer_attempt(
+                    jobs,
+                    job_id,
+                    &session.sftp,
+                    &kind_desc,
+                    &cancel_token,
+                    app_handle,
+                )
+                .await
+            }
+            .await;
+        }
+    }
 
     // Snapshot job metrics before setting terminal status.
     let (job_direction, job_total_bytes, job_files_total, job_bytes_transferred) = {
@@ -825,14 +1037,44 @@ async fn execute_transfer(
                 app_handle,
             );
         }
-        Err(SftpError::TransferCancelled) => set_job_status(
-            jobs,
-            finished_order,
-            job_id,
-            TransferStatus::Cancelled,
-            None,
-            app_handle,
-        ),
+        Err(SftpError::TransferCancelled) => {
+            let stop_request = jobs
+                .get(job_id)
+                .map(|job| job.stop_request)
+                .unwrap_or(StopRequest::Cancel);
+            match stop_request {
+                StopRequest::Pause => set_job_status(
+                    jobs,
+                    finished_order,
+                    job_id,
+                    TransferStatus::Paused,
+                    None,
+                    app_handle,
+                ),
+                StopRequest::Cancel => {
+                    let artifact = jobs.get(job_id).and_then(|job| partial_artifact(&job));
+                    if let Some(artifact) = artifact {
+                        let _ = discard_partial(sftp_manager, job_id, artifact).await;
+                    }
+                    set_job_status(
+                        jobs,
+                        finished_order,
+                        job_id,
+                        TransferStatus::Cancelled,
+                        None,
+                        app_handle,
+                    );
+                }
+                StopRequest::None => set_job_status(
+                    jobs,
+                    finished_order,
+                    job_id,
+                    TransferStatus::Failed("transfer interrupted".to_string()),
+                    Some("transfer interrupted".to_string()),
+                    app_handle,
+                ),
+            }
+        }
         Err(e) => {
             crate::telemetry::capture(
                 "transfer_failed",
@@ -856,10 +1098,12 @@ async fn execute_transfer(
 }
 
 // An owned copy of the discriminant so we can release the DashMap reference.
+#[derive(Clone)]
 enum KindDesc {
     UploadFile {
         local_path: PathBuf,
         remote_path: String,
+        checkpoint: UploadCheckpoint,
     },
     UploadDir {
         local_path: PathBuf,
@@ -868,11 +1112,99 @@ enum KindDesc {
     DownloadFile {
         remote_path: String,
         local_path: PathBuf,
+        checkpoint: DownloadCheckpoint,
     },
     DownloadDir {
         remote_path: String,
         local_dir: PathBuf,
     },
+}
+
+impl KindDesc {
+    fn resume_supported(&self) -> bool {
+        matches!(self, Self::UploadFile { .. } | Self::DownloadFile { .. })
+    }
+}
+
+async fn wait_for_retry(delay: Duration, cancel: &CancellationToken) -> Result<(), SftpError> {
+    tokio::select! {
+        _ = tokio::time::sleep(delay) => Ok(()),
+        _ = cancel.cancelled() => Err(SftpError::TransferCancelled),
+    }
+}
+
+async fn run_transfer_attempt(
+    jobs: &Arc<DashMap<String, TransferJobState>>,
+    job_id: &str,
+    sftp: &Arc<tokio::sync::Mutex<russh_sftp::client::SftpSession>>,
+    kind: &KindDesc,
+    cancel: &CancellationToken,
+    app_handle: &AppHandle,
+) -> Result<(), SftpError> {
+    match kind {
+        KindDesc::UploadFile {
+            local_path,
+            remote_path,
+            checkpoint,
+        } => {
+            run_upload_file(
+                FileTransferContext {
+                    jobs,
+                    job_id,
+                    sftp,
+                    cancel,
+                    app_handle,
+                },
+                local_path,
+                remote_path,
+                UploadMode::Resumable(checkpoint.clone()),
+            )
+            .await
+        }
+        KindDesc::UploadDir {
+            local_path,
+            remote_dir,
+        } => {
+            run_upload_dir(
+                jobs, job_id, sftp, local_path, remote_dir, cancel, app_handle,
+            )
+            .await
+        }
+        KindDesc::DownloadFile {
+            remote_path,
+            local_path,
+            checkpoint,
+        } => {
+            run_download_file(
+                FileTransferContext {
+                    jobs,
+                    job_id,
+                    sftp,
+                    cancel,
+                    app_handle,
+                },
+                remote_path,
+                local_path,
+                DownloadMode::Resumable(checkpoint.clone()),
+            )
+            .await
+        }
+        KindDesc::DownloadDir {
+            remote_path,
+            local_dir,
+        } => {
+            run_download_dir(
+                jobs,
+                job_id,
+                sftp,
+                remote_path,
+                local_dir,
+                cancel,
+                app_handle,
+            )
+            .await
+        }
+    }
 }
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
@@ -927,10 +1259,6 @@ fn update_progress(
     cancel_token: &CancellationToken,
     app_handle: &AppHandle,
 ) -> Result<(), SftpError> {
-    if cancel_token.is_cancelled() {
-        return Err(SftpError::TransferCancelled);
-    }
-
     if let Some(mut job) = jobs.get_mut(job_id) {
         let should_emit = record_progress(&mut *job, new_bytes);
         if should_emit {
@@ -939,56 +1267,11 @@ fn update_progress(
             let _ = app_handle.emit("sftp:transfer", event);
         }
     }
-
-    Ok(())
-}
-
-// ─── Upload: single file ──────────────────────────────────────────────────────
-
-/// Maximum number of concurrent region writers per file. Each writer keeps one
-/// SFTP write request in flight, so this bounds the pipeline depth over the
-/// session.
-const PIPELINE_DEPTH: u64 = 4;
-
-/// Split a file of `file_size` bytes into up to [`PIPELINE_DEPTH`] contiguous
-/// `[start, end)` regions. Files smaller than two chunks aren't worth the
-/// extra open/close round-trips and get a single region; an empty file gets
-/// none.
-fn plan_upload_regions(file_size: u64) -> Vec<(u64, u64)> {
-    if file_size == 0 {
-        return Vec::new();
-    }
-    let depth = if file_size < CHUNK_SIZE as u64 * 2 {
-        1
+    if cancel_token.is_cancelled() {
+        Err(SftpError::TransferCancelled)
     } else {
-        PIPELINE_DEPTH.min(file_size / CHUNK_SIZE as u64 + 1)
-    };
-    let region_size = file_size.div_ceil(depth);
-    (0..depth)
-        .map(|i| (i * region_size, ((i + 1) * region_size).min(file_size)))
-        .filter(|(start, end)| start < end)
-        .collect()
-}
-
-/// A failed region upload, tagged with whether every byte of the region had
-/// already been written and acked when the failure happened. Distinguishes a
-/// partial remote file (must be removed) from a complete one whose handle
-/// merely failed to close (must NOT be removed — that would be data loss).
-struct RegionError {
-    err: SftpError,
-    write_complete: bool,
-}
-
-/// State shared by the concurrent region writers of one file upload.
-struct UploadFileCtx {
-    sftp_arc: Arc<tokio::sync::Mutex<russh_sftp::client::SftpSession>>,
-    local_path: PathBuf,
-    remote_path: String,
-    /// WRITE-only when the file was pre-created empty; CREATE|TRUNCATE|WRITE
-    /// when a single region owns the file end-to-end.
-    open_flags: OpenFlags,
-    cancel_token: CancellationToken,
-    progress_tx: mpsc::UnboundedSender<u64>,
+        Ok(())
+    }
 }
 
 fn mark_file_done(
@@ -1004,236 +1287,77 @@ fn mark_file_done(
     }
 }
 
-/// Fold per-region outcomes into the first error to surface and whether the
-/// remote file must be removed. Removal happens only when bytes are actually
-/// missing: if every region wrote fully and only a close failed, the file is
-/// complete and deleting it would be data loss.
-fn fold_region_results(results: Vec<Result<(), RegionError>>) -> (Option<SftpError>, bool) {
-    let mut first_err = None;
-    let mut remove_partial = false;
-    for r in results {
-        if let Err(RegionError {
-            err,
-            write_complete,
-        }) = r
-        {
-            remove_partial |= !write_complete;
-            first_err.get_or_insert(err);
-        }
+#[derive(Clone, Copy)]
+struct FileTransferContext<'a> {
+    jobs: &'a Arc<DashMap<String, TransferJobState>>,
+    job_id: &'a str,
+    sftp: &'a Arc<tokio::sync::Mutex<russh_sftp::client::SftpSession>>,
+    cancel: &'a CancellationToken,
+    app_handle: &'a AppHandle,
+}
+
+enum UploadMode {
+    Fresh,
+    Resumable(UploadCheckpoint),
+}
+
+enum DownloadMode {
+    Fresh,
+    Resumable(DownloadCheckpoint),
+}
+
+impl FileTransferContext<'_> {
+    fn progress_channel(&self) -> (mpsc::UnboundedSender<u64>, tokio::task::JoinHandle<()>) {
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<u64>();
+        let jobs = self.jobs.clone();
+        let job_id = self.job_id.to_string();
+        let cancel = self.cancel.clone();
+        let app_handle = self.app_handle.clone();
+        let aggregator = tokio::spawn(async move {
+            while let Some(bytes) = progress_rx.recv().await {
+                let _ = update_progress(&jobs, &job_id, bytes, &cancel, &app_handle);
+            }
+        });
+        (progress_tx, aggregator)
     }
-    (first_err, remove_partial)
 }
 
 async fn run_upload_file(
-    jobs: &Arc<DashMap<String, TransferJobState>>,
-    job_id: &str,
-    sftp_arc: &Arc<tokio::sync::Mutex<russh_sftp::client::SftpSession>>,
+    context: FileTransferContext<'_>,
     local_path: &Path,
     remote_path: &str,
-    cancel_token: &CancellationToken,
-    app_handle: &AppHandle,
+    mode: UploadMode,
 ) -> Result<(), SftpError> {
-    let file_size = tokio::fs::metadata(local_path)
-        .await
-        .map_err(|e| SftpError::LocalIoError(format!("Cannot read {}: {e}", local_path.display())))?
-        .len();
+    let (progress_tx, aggregator) = context.progress_channel();
 
-    let regions = plan_upload_regions(file_size);
-
-    // With multiple concurrent writers the truncation must happen exactly once
-    // before any of them opens the file (a TRUNCATE racing other regions'
-    // writes would clobber their data), so the file is pre-created empty and
-    // regions open it WRITE-only. A single writer truncates via its own handle
-    // and skips the extra round-trip; an empty file has no writer at all and
-    // relies on the pre-create alone.
-    let open_flags = if regions.len() == 1 {
-        OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE
-    } else {
-        let sftp = sftp_arc.lock().await;
-        let mut f = sftp
-            .open_with_flags(
+    let result = match mode {
+        UploadMode::Resumable(checkpoint) => {
+            file_transfer::upload_resumable(
+                context.sftp,
+                local_path,
                 remote_path,
-                OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+                context.job_id,
+                checkpoint,
+                context.cancel,
+                progress_tx,
             )
             .await
-            .map_err(|e| SftpError::RemoteIoError(format!("Cannot write to {remote_path}: {e}")))?;
-        f.shutdown()
+        }
+        UploadMode::Fresh => {
+            file_transfer::upload_fresh(
+                context.sftp,
+                local_path,
+                remote_path,
+                context.job_id,
+                context.cancel,
+                progress_tx,
+            )
             .await
-            .map_err(|e| SftpError::RemoteIoError(format!("Cannot write to {remote_path}: {e}")))?;
-        OpenFlags::WRITE
+        }
     };
-
-    let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<u64>();
-    let aggregator = tokio::spawn({
-        let jobs = jobs.clone();
-        let job_id = job_id.to_string();
-        let cancel_token = cancel_token.clone();
-        let app_handle = app_handle.clone();
-        async move {
-            while let Some(n) = progress_rx.recv().await {
-                let _ = update_progress(&jobs, &job_id, n, &cancel_token, &app_handle);
-            }
-        }
-    });
-
-    let ctx = Arc::new(UploadFileCtx {
-        sftp_arc: sftp_arc.clone(),
-        local_path: local_path.to_path_buf(),
-        remote_path: remote_path.to_string(),
-        open_flags,
-        cancel_token: cancel_token.clone(),
-        progress_tx,
-    });
-
-    let tasks: Vec<_> = regions
-        .into_iter()
-        .map(|(start, end)| tokio::spawn(upload_region(ctx.clone(), start, end)))
-        .collect();
-
-    let mut results = Vec::with_capacity(tasks.len());
-    for t in tasks {
-        let r = match t.await {
-            Ok(r) => r,
-            // Task panicked/aborted mid-write — assume the file is partial.
-            Err(join_err) => Err(RegionError {
-                err: SftpError::RemoteIoError(join_err.to_string()),
-                write_complete: false,
-            }),
-        };
-        // Abort the remaining regions as soon as bytes are known to be
-        // missing. A close-only failure lets them finish: the file may still
-        // come out complete, and it must then be kept.
-        if matches!(&r, Err(re) if !re.write_complete) {
-            cancel_token.cancel();
-        }
-        results.push(r);
-    }
-
-    drop(ctx);
     let _ = aggregator.await;
-
-    let (first_err, remove_partial) = fold_region_results(results);
-    if let Some(e) = first_err {
-        // Best-effort cleanup of the partial remote file; on a dropped
-        // connection the remove itself fails, which is fine. When overwriting
-        // an existing file the original was already truncated at open, so
-        // removing the partial is the better of two lossy outcomes.
-        if remove_partial {
-            let sftp = sftp_arc.lock().await;
-            let _ = sftp.remove_file(remote_path).await;
-        }
-        return Err(e);
-    }
-
-    mark_file_done(jobs, job_id, app_handle);
-    Ok(())
-}
-
-/// Upload bytes `[start, end)` of the local file through its own remote
-/// handle. On failure, reports whether the region's writes had all completed
-/// (see [`RegionError`]).
-async fn upload_region(ctx: Arc<UploadFileCtx>, start: u64, end: u64) -> Result<(), RegionError> {
-    use tokio::io::AsyncSeekExt;
-
-    let incomplete = |err: SftpError| RegionError {
-        err,
-        write_complete: false,
-    };
-    let local_ctx = |e: &dyn std::fmt::Display| {
-        SftpError::LocalIoError(format!("Cannot read {}: {e}", ctx.local_path.display()))
-    };
-    let remote_ctx = |e: &dyn std::fmt::Display| {
-        SftpError::RemoteIoError(format!("Cannot write to {}: {e}", ctx.remote_path))
-    };
-
-    let mut local_file = tokio::fs::File::open(&ctx.local_path)
-        .await
-        .map_err(|e| incomplete(local_ctx(&e)))?;
-    local_file
-        .seek(std::io::SeekFrom::Start(start))
-        .await
-        .map_err(|e| incomplete(local_ctx(&e)))?;
-
-    let mut remote_file = {
-        let sftp = ctx.sftp_arc.lock().await;
-        sftp.open_with_flags(&ctx.remote_path, ctx.open_flags)
-            .await
-            .map_err(|e| incomplete(remote_ctx(&e)))?
-    };
-    remote_file
-        .seek(std::io::SeekFrom::Start(start))
-        .await
-        .map_err(|e| incomplete(remote_ctx(&e)))?;
-
-    copy_region(
-        &mut local_file,
-        &mut remote_file,
-        end - start,
-        &ctx.cancel_token,
-        |n| {
-            let _ = ctx.progress_tx.send(n);
-            Ok(())
-        },
-    )
-    .await
-    .map_err(|err| {
-        incomplete(match err {
-            SftpError::LocalIoError(msg) => local_ctx(&msg),
-            SftpError::RemoteIoError(msg) => remote_ctx(&msg),
-            other => other,
-        })
-    })?;
-
-    // Every byte is written and acked past this point: a close failure is
-    // surfaced but must not count as a partial upload.
-    remote_file.shutdown().await.map_err(|e| RegionError {
-        err: remote_ctx(&e),
-        write_complete: true,
-    })
-}
-
-/// Pump `len` bytes from `local` into `remote` in `CHUNK_SIZE` chunks,
-/// reporting progress after every chunk. Generic over the endpoints so the
-/// copy loop is unit-testable without an SFTP session.
-///
-/// A source that runs dry before `len` bytes is an error, not EOF: regions
-/// are planned from the file size up front, and a silently short region would
-/// leave a hole of stale or zero bytes in the assembled remote file.
-async fn copy_region<R, W, F>(
-    local: &mut R,
-    remote: &mut W,
-    len: u64,
-    cancel_token: &CancellationToken,
-    mut on_progress: F,
-) -> Result<(), SftpError>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-    F: FnMut(u64) -> Result<(), SftpError>,
-{
-    let mut buf = vec![0u8; CHUNK_SIZE];
-    let mut remaining = len;
-    while remaining > 0 {
-        if cancel_token.is_cancelled() {
-            return Err(SftpError::TransferCancelled);
-        }
-        let want = buf.len().min(remaining as usize);
-        let n = local
-            .read(&mut buf[..want])
-            .await
-            .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
-        if n == 0 {
-            return Err(SftpError::LocalIoError(format!(
-                "file shrank during upload ({remaining} bytes missing)"
-            )));
-        }
-        remote
-            .write_all(&buf[..n])
-            .await
-            .map_err(|e| SftpError::RemoteIoError(e.to_string()))?;
-        remaining -= n as u64;
-        on_progress(n as u64)?;
-    }
+    result?;
+    mark_file_done(context.jobs, context.job_id, context.app_handle);
     Ok(())
 }
 
@@ -1312,13 +1436,16 @@ async fn upload_dir_recursive(
             .await?;
         } else {
             run_upload_file(
-                jobs,
-                job_id,
-                sftp_arc,
+                FileTransferContext {
+                    jobs,
+                    job_id,
+                    sftp: sftp_arc,
+                    cancel: cancel_token,
+                    app_handle,
+                },
                 &entry.path(),
                 &remote_child,
-                cancel_token,
-                app_handle,
+                UploadMode::Fresh,
             )
             .await?;
         }
@@ -1330,69 +1457,41 @@ async fn upload_dir_recursive(
 // ─── Download: single file ────────────────────────────────────────────────────
 
 async fn run_download_file(
-    jobs: &Arc<DashMap<String, TransferJobState>>,
-    job_id: &str,
-    sftp_arc: &Arc<tokio::sync::Mutex<russh_sftp::client::SftpSession>>,
+    context: FileTransferContext<'_>,
     remote_path: &str,
-    local_path: &PathBuf,
-    cancel_token: &CancellationToken,
-    app_handle: &AppHandle,
+    local_path: &Path,
+    mode: DownloadMode,
 ) -> Result<(), SftpError> {
-    let mut remote_file = {
-        let sftp = sftp_arc.lock().await;
-        sftp.open(remote_path)
+    let (progress_tx, aggregator) = context.progress_channel();
+
+    let result = match mode {
+        DownloadMode::Resumable(checkpoint) => {
+            file_transfer::download_resumable(
+                context.sftp,
+                remote_path,
+                local_path,
+                context.job_id,
+                checkpoint,
+                context.cancel,
+                progress_tx,
+            )
             .await
-            .map_err(|e| SftpError::RemoteIoError(e.to_string()))?
+        }
+        DownloadMode::Fresh => {
+            file_transfer::download_fresh(
+                context.sftp,
+                remote_path,
+                local_path,
+                context.job_id,
+                context.cancel,
+                progress_tx,
+            )
+            .await
+        }
     };
-
-    // Ensure local parent directory exists.
-    if let Some(parent) = local_path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
-    }
-
-    let mut local_file = tokio::fs::File::create(local_path)
-        .await
-        .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
-
-    let mut buf = vec![0u8; CHUNK_SIZE];
-
-    loop {
-        if cancel_token.is_cancelled() {
-            let _ = tokio::fs::remove_file(local_path).await;
-            return Err(SftpError::TransferCancelled);
-        }
-
-        let n = remote_file
-            .read(&mut buf)
-            .await
-            .map_err(|e| SftpError::RemoteIoError(e.to_string()))?;
-        if n == 0 {
-            break;
-        }
-
-        local_file
-            .write_all(&buf[..n])
-            .await
-            .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
-
-        update_progress(jobs, job_id, n as u64, cancel_token, app_handle)?;
-    }
-
-    local_file
-        .flush()
-        .await
-        .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
-
-    remote_file
-        .shutdown()
-        .await
-        .map_err(|e| SftpError::RemoteIoError(e.to_string()))?;
-
-    // Mark this file done.
-    mark_file_done(jobs, job_id, app_handle);
-
+    let _ = aggregator.await;
+    result?;
+    mark_file_done(context.jobs, context.job_id, context.app_handle);
     Ok(())
 }
 
@@ -1478,13 +1577,16 @@ async fn download_dir_recursive(
             .await?;
         } else {
             run_download_file(
-                jobs,
-                job_id,
-                sftp_arc,
+                FileTransferContext {
+                    jobs,
+                    job_id,
+                    sftp: sftp_arc,
+                    cancel: cancel_token,
+                    app_handle,
+                },
                 &remote_child,
                 &local_child,
-                cancel_token,
-                app_handle,
+                DownloadMode::Fresh,
             )
             .await?;
         }
@@ -1526,6 +1628,14 @@ async fn remote_mkdir_p(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn retry_wait_stops_when_transfer_is_paused_or_cancelled() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let result = wait_for_retry(Duration::from_secs(60), &cancel).await;
+        assert!(matches!(result, Err(SftpError::TransferCancelled)));
+    }
+
     #[test]
     fn transfer_job_state_to_info_computes_eta() {
         let now = Instant::now();
@@ -1534,9 +1644,9 @@ mod tests {
             sftp_session_id: "s1".to_string(),
             name: "file.txt".to_string(),
             direction: TransferDirection::Upload,
-            kind: TransferJobKind::UploadFile {
+            kind: TransferJobKind::UploadDir {
                 local_path: PathBuf::from("/tmp/file.txt"),
-                remote_path: "/remote/file.txt".to_string(),
+                remote_dir: "/remote/file.txt".to_string(),
             },
             status: TransferStatus::InProgress,
             bytes_transferred: 500,
@@ -1545,6 +1655,7 @@ mod tests {
             files_total: 1,
             speed_bps: 100,
             cancel_token: CancellationToken::new(),
+            stop_request: StopRequest::None,
             error: None,
             created_at: 0,
             last_emit: now,
@@ -1567,9 +1678,9 @@ mod tests {
             sftp_session_id: "s1".to_string(),
             name: "file.txt".to_string(),
             direction: TransferDirection::Download,
-            kind: TransferJobKind::DownloadFile {
+            kind: TransferJobKind::DownloadDir {
                 remote_path: "/remote/file.txt".to_string(),
-                local_path: PathBuf::from("/tmp/file.txt"),
+                local_dir: PathBuf::from("/tmp/file.txt"),
             },
             status: TransferStatus::Completed,
             bytes_transferred: 1000,
@@ -1578,6 +1689,7 @@ mod tests {
             files_total: 1,
             speed_bps: 100,
             cancel_token: CancellationToken::new(),
+            stop_request: StopRequest::None,
             error: None,
             created_at: 0,
             last_emit: now,
@@ -1609,6 +1721,7 @@ mod tests {
             files_total: 5,
             speed_bps: 0,
             cancel_token: CancellationToken::new(),
+            stop_request: StopRequest::None,
             error: None,
             created_at: 0,
             last_emit: now,
@@ -1619,318 +1732,5 @@ mod tests {
         let info = job.to_info();
         // Speed is 0 => cannot compute ETA
         assert_eq!(info.eta_secs, None);
-    }
-
-    // ─── plan_upload_regions ──────────────────────────────────────────────
-
-    const C: u64 = CHUNK_SIZE as u64;
-
-    #[test]
-    fn plan_regions_empty_file_has_no_regions() {
-        assert!(plan_upload_regions(0).is_empty());
-    }
-
-    #[test]
-    fn plan_regions_small_files_get_a_single_region() {
-        for size in [1, C - 1, C, 2 * C - 1] {
-            assert_eq!(plan_upload_regions(size), vec![(0, size)], "size {size}");
-        }
-    }
-
-    #[test]
-    fn plan_regions_depth_scales_with_size_up_to_pipeline_depth() {
-        // 2 chunks => 2C/C + 1 = 3 regions; large files cap at PIPELINE_DEPTH.
-        assert_eq!(plan_upload_regions(2 * C).len(), 3);
-        assert_eq!(plan_upload_regions(100 * C).len(), PIPELINE_DEPTH as usize);
-    }
-
-    #[test]
-    fn plan_regions_cover_the_file_exactly_without_overlap() {
-        let sizes = [
-            1,
-            2,
-            C - 1,
-            C,
-            C + 1,
-            2 * C,
-            2 * C + 1,
-            3 * C,
-            4 * C,
-            10 * C + 7,
-            1_000_000_007,
-        ];
-        for size in sizes {
-            let regions = plan_upload_regions(size);
-            assert!(!regions.is_empty(), "size {size}");
-            assert!(regions.len() <= PIPELINE_DEPTH as usize, "size {size}");
-            assert_eq!(regions.first().unwrap().0, 0, "size {size}");
-            assert_eq!(regions.last().unwrap().1, size, "size {size}");
-            for (start, end) in &regions {
-                assert!(start < end, "empty region at size {size}");
-            }
-            for pair in regions.windows(2) {
-                assert_eq!(pair[0].1, pair[1].0, "gap/overlap at size {size}");
-            }
-        }
-    }
-
-    // ─── copy_region ──────────────────────────────────────────────────────
-
-    use std::io::Cursor;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
-
-    /// Deterministic non-repeating-ish payload so region mixups show up as
-    /// content mismatches, not just length mismatches.
-    fn test_data(len: usize) -> Vec<u8> {
-        (0..len).map(|i| (i % 251) as u8).collect()
-    }
-
-    /// Reader that serves at most `max` bytes per read call, to exercise the
-    /// short-read accounting of the copy loop.
-    struct TrickleReader {
-        inner: Cursor<Vec<u8>>,
-        max: usize,
-    }
-
-    impl AsyncRead for TrickleReader {
-        fn poll_read(
-            mut self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            buf: &mut tokio::io::ReadBuf<'_>,
-        ) -> Poll<std::io::Result<()>> {
-            let cap = self.max.min(buf.remaining());
-            let mut tmp = vec![0u8; cap];
-            let n = std::io::Read::read(&mut self.inner, &mut tmp).unwrap();
-            buf.put_slice(&tmp[..n]);
-            Poll::Ready(Ok(()))
-        }
-    }
-
-    /// Writer that accepts `accept` bytes and then fails, to simulate a
-    /// connection dropped mid-region.
-    struct FailingWriter {
-        written: usize,
-        accept: usize,
-    }
-
-    impl AsyncWrite for FailingWriter {
-        fn poll_write(
-            mut self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            buf: &[u8],
-        ) -> Poll<std::io::Result<usize>> {
-            if self.written + buf.len() > self.accept {
-                return Poll::Ready(Err(std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    "connection lost",
-                )));
-            }
-            self.written += buf.len();
-            Poll::Ready(Ok(buf.len()))
-        }
-
-        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-
-        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-    }
-
-    #[tokio::test]
-    async fn copy_region_copies_exact_bytes_and_reports_progress() {
-        let data = test_data(3 * CHUNK_SIZE + 17);
-        let mut src = Cursor::new(data.clone());
-        let mut dst = Cursor::new(Vec::new());
-        let token = CancellationToken::new();
-        let mut progressed = 0u64;
-
-        copy_region(&mut src, &mut dst, data.len() as u64, &token, |n| {
-            progressed += n;
-            Ok(())
-        })
-        .await
-        .unwrap();
-
-        assert_eq!(dst.into_inner(), data);
-        assert_eq!(progressed, data.len() as u64);
-    }
-
-    #[tokio::test]
-    async fn copy_region_handles_short_reads() {
-        // 10_000 bytes served 337 bytes at a time: the loop must keep reading
-        // until the region is complete, not treat a short read as EOF.
-        let data = test_data(10_000);
-        let mut src = TrickleReader {
-            inner: Cursor::new(data.clone()),
-            max: 337,
-        };
-        let mut dst = Cursor::new(Vec::new());
-        let token = CancellationToken::new();
-
-        copy_region(&mut src, &mut dst, data.len() as u64, &token, |_| Ok(()))
-            .await
-            .unwrap();
-
-        assert_eq!(dst.into_inner(), data);
-    }
-
-    #[tokio::test]
-    async fn copy_region_errors_when_source_runs_dry() {
-        // Region planned for 1000 bytes but the file only has 400 left — a
-        // silent break would leave a hole in the assembled remote file.
-        let mut src = Cursor::new(test_data(400));
-        let mut dst = Cursor::new(Vec::new());
-        let token = CancellationToken::new();
-
-        let err = copy_region(&mut src, &mut dst, 1000, &token, |_| Ok(()))
-            .await
-            .unwrap_err();
-
-        match err {
-            SftpError::LocalIoError(msg) => assert!(msg.contains("shrank"), "got: {msg}"),
-            other => panic!("expected LocalIoError, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn copy_region_stops_immediately_when_already_cancelled() {
-        let mut src = Cursor::new(test_data(1000));
-        let mut dst = Cursor::new(Vec::new());
-        let token = CancellationToken::new();
-        token.cancel();
-
-        let err = copy_region(&mut src, &mut dst, 1000, &token, |_| Ok(()))
-            .await
-            .unwrap_err();
-
-        assert!(matches!(err, SftpError::TransferCancelled));
-        assert!(dst.into_inner().is_empty());
-    }
-
-    #[tokio::test]
-    async fn copy_region_stops_at_next_chunk_after_cancellation() {
-        // Trickle 100 bytes per read out of 1000 and cancel from the first
-        // progress callback: exactly one chunk may land, never the rest.
-        let mut src = TrickleReader {
-            inner: Cursor::new(test_data(1000)),
-            max: 100,
-        };
-        let mut dst = Cursor::new(Vec::new());
-        let token = CancellationToken::new();
-        let cancel_from_progress = token.clone();
-
-        let err = copy_region(&mut src, &mut dst, 1000, &token, |_| {
-            cancel_from_progress.cancel();
-            Ok(())
-        })
-        .await
-        .unwrap_err();
-
-        assert!(matches!(err, SftpError::TransferCancelled));
-        assert_eq!(dst.into_inner().len(), 100);
-    }
-
-    #[tokio::test]
-    async fn copy_region_surfaces_write_failures() {
-        let data = test_data(2 * CHUNK_SIZE);
-        let mut src = Cursor::new(data);
-        let mut dst = FailingWriter {
-            written: 0,
-            accept: CHUNK_SIZE,
-        };
-        let token = CancellationToken::new();
-
-        let err = copy_region(&mut src, &mut dst, (2 * CHUNK_SIZE) as u64, &token, |_| {
-            Ok(())
-        })
-        .await
-        .unwrap_err();
-
-        assert!(matches!(err, SftpError::RemoteIoError(_)));
-    }
-
-    #[tokio::test]
-    async fn copy_region_propagates_progress_errors() {
-        let mut src = Cursor::new(test_data(100));
-        let mut dst = Cursor::new(Vec::new());
-        let token = CancellationToken::new();
-
-        let err = copy_region(&mut src, &mut dst, 100, &token, |_| {
-            Err(SftpError::ChannelError("progress sink gone".into()))
-        })
-        .await
-        .unwrap_err();
-
-        assert!(matches!(err, SftpError::ChannelError(_)));
-    }
-
-    #[tokio::test]
-    async fn planned_regions_reassemble_into_identical_file() {
-        // End-to-end over the pure pieces: plan regions for a multi-region
-        // file, copy each independently, reassemble by offset, compare.
-        let data = test_data(3 * CHUNK_SIZE + 1234);
-        let regions = plan_upload_regions(data.len() as u64);
-        assert!(regions.len() > 1);
-
-        let token = CancellationToken::new();
-        let mut assembled = vec![0u8; data.len()];
-        for &(start, end) in &regions {
-            let mut src = Cursor::new(data[start as usize..end as usize].to_vec());
-            let mut dst = Cursor::new(Vec::new());
-            copy_region(&mut src, &mut dst, end - start, &token, |_| Ok(()))
-                .await
-                .unwrap();
-            assembled[start as usize..end as usize].copy_from_slice(&dst.into_inner());
-        }
-
-        assert_eq!(assembled, data);
-    }
-
-    // ─── fold_region_results ──────────────────────────────────────────────
-
-    fn region_err(msg: &str, write_complete: bool) -> Result<(), RegionError> {
-        Err(RegionError {
-            err: SftpError::RemoteIoError(msg.into()),
-            write_complete,
-        })
-    }
-
-    #[test]
-    fn fold_all_ok_keeps_file_and_no_error() {
-        let (err, remove) = fold_region_results(vec![Ok(()), Ok(()), Ok(())]);
-        assert!(err.is_none());
-        assert!(!remove);
-    }
-
-    #[test]
-    fn fold_close_only_failure_surfaces_error_but_keeps_file() {
-        // Every byte was written and acked; only a handle close failed. The
-        // remote file is complete — deleting it would be data loss.
-        let (err, remove) = fold_region_results(vec![Ok(()), region_err("close failed", true)]);
-        assert!(err.is_some());
-        assert!(!remove);
-    }
-
-    #[test]
-    fn fold_write_failure_removes_partial_file() {
-        let (err, remove) = fold_region_results(vec![Ok(()), region_err("dropped", false)]);
-        assert!(err.is_some());
-        assert!(remove);
-    }
-
-    #[test]
-    fn fold_mixed_failures_remove_file_and_report_first_error() {
-        let (err, remove) = fold_region_results(vec![
-            region_err("close failed", true),
-            region_err("dropped", false),
-        ]);
-        assert!(remove, "any incomplete region must trigger removal");
-        match err {
-            Some(SftpError::RemoteIoError(msg)) => assert_eq!(msg, "close failed"),
-            other => panic!("expected first error, got {other:?}"),
-        }
     }
 }

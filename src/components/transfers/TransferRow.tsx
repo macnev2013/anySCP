@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { ArrowDown, ArrowUp, X, RotateCw } from "lucide-react";
+import { ArrowDown, ArrowUp, Pause, Play, X, RotateCw } from "lucide-react";
 import type { TransferEvent, TransferStatusValue } from "../../types";
 import { useTransferStore } from "../../stores/transfer-store";
 import { formatBytes, formatSpeed, formatEta, getStatusString } from "../../utils/format";
@@ -66,6 +66,7 @@ const ProgressBar = memo(function ProgressBar({ pct, status, label }: {
   const barColor =
     s === "Completed"  ? "var(--color-status-connected)" :
     s === "Failed"     ? "var(--color-status-error)" :
+    s === "Paused"     ? "var(--color-text-muted)" :
     s === "Cancelled"  ? "var(--color-text-muted)" :
                          "var(--color-accent)";
 
@@ -99,6 +100,8 @@ const ProgressBar = memo(function ProgressBar({ pct, status, label }: {
 interface TransferRowProps {
   transfer: TransferEvent;
   onCancel: (id: string) => void;
+  onPause: (id: string) => void;
+  onResume: (id: string) => void;
   onRetry: (id: string) => void;
   onDismiss: (id: string) => void;
 }
@@ -106,6 +109,8 @@ interface TransferRowProps {
 export const TransferRow = memo(function TransferRow({
   transfer: t,
   onCancel,
+  onPause,
+  onResume,
   onRetry,
   onDismiss,
 }: TransferRowProps) {
@@ -118,8 +123,11 @@ export const TransferRow = memo(function TransferRow({
   const statusStr = getStatusString(t.status);
   const isQueued = statusStr === "Queued";
   const isInProgress = statusStr === "InProgress";
+  const isPaused = statusStr === "Paused";
   const isCompleted = statusStr === "Completed";
   const isCancelled = statusStr === "Cancelled";
+  const canResume = isPaused || (failed && t.resume_supported);
+  const discardable = t.resume_supported && !isCompleted;
 
   const hasMultipleFiles = t.files_total > 1;
   const errorMsg = getErrorMessage(t.status);
@@ -127,6 +135,7 @@ export const TransferRow = memo(function TransferRow({
   const statusLabel =
     isInProgress ? `${pct}%` :
     isQueued     ? "Queued" :
+    isPaused     ? "Paused" :
     isCompleted  ? "Done" :
     isCancelled  ? "Cancelled" :
     failed       ? "Failed" : "";
@@ -183,7 +192,18 @@ export const TransferRow = memo(function TransferRow({
 
         {/* Actions — visible on hover, always accessible via keyboard */}
         <div className={ACTIONS_CONTAINER_CLASS}>
-          {failed && (
+          {canResume && (
+            <button
+              onClick={() => onResume(t.transfer_id)}
+              title="Resume transfer"
+              aria-label={`Resume ${t.name}`}
+              className={`${ACTION_BTN_CLASS} text-text-muted hover:text-accent hover:bg-accent/10`}
+            >
+              <Play size={14} strokeWidth={2} aria-hidden="true" />
+            </button>
+          )}
+
+          {failed && !t.resume_supported && (
             <button
               onClick={() => onRetry(t.transfer_id)}
               title="Retry transfer"
@@ -194,7 +214,18 @@ export const TransferRow = memo(function TransferRow({
             </button>
           )}
 
-          {(isInProgress || isQueued) && (
+          {isInProgress && t.resume_supported && (
+            <button
+              onClick={() => onPause(t.transfer_id)}
+              title="Pause transfer"
+              aria-label={`Pause ${t.name}`}
+              className={`${ACTION_BTN_CLASS} text-text-muted hover:text-accent hover:bg-accent/10`}
+            >
+              <Pause size={14} strokeWidth={2} aria-hidden="true" />
+            </button>
+          )}
+
+          {((isInProgress && !t.resume_supported) || isQueued) && (
             <button
               onClick={() => onCancel(t.transfer_id)}
               title="Cancel transfer"
@@ -205,11 +236,11 @@ export const TransferRow = memo(function TransferRow({
             </button>
           )}
 
-          {terminal && (
+          {(terminal || isPaused) && (
             <button
               onClick={() => onDismiss(t.transfer_id)}
-              title="Dismiss"
-              aria-label={`Dismiss ${t.name}`}
+              title={discardable ? "Discard transfer" : "Dismiss"}
+              aria-label={`${discardable ? "Discard" : "Dismiss"} ${t.name}`}
               className={`${ACTION_BTN_CLASS} text-text-muted hover:text-text-primary hover:bg-bg-subtle`}
             >
               <X size={14} strokeWidth={2} aria-hidden="true" />
@@ -230,7 +261,7 @@ export const TransferRow = memo(function TransferRow({
           >
             {errorMsg}
           </p>
-        ) : isInProgress ? (
+        ) : isInProgress || isPaused ? (
           <>
             <span className="text-[length:var(--text-2xs)] text-text-muted tabular-nums">
               {formatBytes(t.bytes_transferred)} / {formatBytes(t.total_bytes)}

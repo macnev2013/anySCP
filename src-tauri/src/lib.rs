@@ -140,13 +140,17 @@ pub fn run() {
 
             app.manage(Arc::new(host_db));
 
+            let ssh_manager = Arc::new(SshManager::new());
+
             // SftpManager must be created inside setup so it can be shared with
             // TransferManager, which also needs the AppHandle.
             let sftp_manager = Arc::new(SftpManager::new());
             let transfer_manager = Arc::new(TransferManager::new(
                 sftp_manager.clone(),
+                ssh_manager.clone(),
                 app.handle().clone(),
             ));
+            app.manage(ssh_manager);
             app.manage(sftp_manager);
             app.manage(transfer_manager);
 
@@ -175,7 +179,6 @@ pub fn run() {
 
             Ok(())
         })
-        .manage(SshManager::new())
         .invoke_handler(tauri::generate_handler![
             // SFTP — session & filesystem
             sftp::commands::sftp_open,
@@ -201,6 +204,9 @@ pub fn run() {
             sftp::commands::sftp_enqueue_upload,
             sftp::commands::sftp_enqueue_download,
             sftp::commands::sftp_retry_transfer,
+            sftp::commands::sftp_pause_transfer,
+            sftp::commands::sftp_resume_transfer,
+            sftp::commands::sftp_discard_transfer,
             sftp::commands::sftp_list_transfers,
             sftp::commands::sftp_clear_finished_transfers,
             sftp::commands::sftp_set_concurrency,
