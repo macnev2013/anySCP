@@ -52,10 +52,6 @@
       "cardMode": "single",
       "viewport": "960x680"
     },
-    "NewHostPopup": {
-      "cardMode": "single",
-      "viewport": "960x680"
-    },
     "FilePropertiesDialog": {
       "cardMode": "single",
       "viewport": "960x680"
@@ -155,11 +151,101 @@
     "UpdateDialog": {
       "cardMode": "single",
       "viewport": "960x680"
+    },
+    "GroupCard": {
+      "cardMode": "column"
+    },
+    "RecentConnections": {
+      "cardMode": "column"
+    },
+    "S3Card": {
+      "cardMode": "column"
+    },
+    "SortableCard": {
+      "cardMode": "column"
+    },
+    "ExplorerDropZone": {
+      "cardMode": "column"
+    },
+    "ExplorerFileTable": {
+      "cardMode": "column"
+    },
+    "ExplorerToolbar": {
+      "cardMode": "column"
+    },
+    "UnifiedTabBar": {
+      "cardMode": "column"
+    },
+    "PathBar": {
+      "cardMode": "column"
+    },
+    "SftpSessionPicker": {
+      "cardMode": "column"
+    },
+    "SftpTabs": {
+      "cardMode": "column"
+    },
+    "CustomSelect": {
+      "cardMode": "single",
+      "primaryStory": "OpenFontPicker",
+      "viewport": "480x420"
+    },
+    "Kbd": {
+      "cardMode": "column"
+    },
+    "ModalBackdrop": {
+      "cardMode": "single",
+      "primaryStory": "DimmedBlur",
+      "viewport": "960x680"
+    },
+    "ModalShell": {
+      "cardMode": "single",
+      "primaryStory": "WithIconAndFooter",
+      "viewport": "960x680"
+    },
+    "Toaster": {
+      "cardMode": "single",
+      "primaryStory": "Stack",
+      "viewport": "640x400"
+    },
+    "SnippetCard": {
+      "cardMode": "column"
+    },
+    "SnippetFolderCard": {
+      "cardMode": "column"
+    },
+    "PaneHeader": {
+      "cardMode": "column"
+    },
+    "SplitHandle": {
+      "cardMode": "column"
+    },
+    "Terminal": {
+      "cardMode": "column"
+    },
+    "TerminalPane": {
+      "cardMode": "column"
+    },
+    "TerminalSearchBar": {
+      "cardMode": "column"
+    },
+    "TransferList": {
+      "cardMode": "column"
+    },
+    "TransferRow": {
+      "cardMode": "column"
     }
   },
   "storyImports": {
     "bundle": [
       "lucide-react"
     ]
-  }
+  },
+  "componentSrcMap": {
+    "NewHostPopup": null,
+    "QuickConnect": null,
+    "SidebarHeader": null,
+    "QuickConnectInline": null
+  },
+  "readmeHeader": ".design-sync/conventions.md"
 }

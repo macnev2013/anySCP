@@ -1,5 +1,5 @@
 // Design-sync entry: every anySCP component plus the stores previews seed.
-export { mockTauri } from "./tauri-mock";
+export { mockTauri, emitTauriEvent } from "./tauri-mock";
 export * from "../src/components/dashboard/CardActionButton";
 export * from "../src/components/dashboard/ConnectionDialog";
 export * from "../src/components/dashboard/GroupCard";

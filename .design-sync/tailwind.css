@@ -21,3 +21,5 @@
 @source inline("{flex,inline-flex,grid,inline-grid,block,inline-block,hidden,contents} flex-{row,col,wrap,1,none,auto,shrink-0} shrink-0 grow {items,self}-{start,center,end,stretch,baseline} justify-{start,center,end,between,around,evenly} grid-cols-{1,2,3,4,5,6,12} col-span-{1,2,3,4,6,12}");
 @source inline("rounded{,-sm,-md,-lg,-xl,-2xl,-full} border{,-0,-2,-t,-b,-l,-r} shadow{-sm,-md,-lg,-none}");
 @source inline("{overflow,overflow-x,overflow-y}-{auto,hidden,scroll} truncate whitespace-nowrap {relative,absolute,fixed,sticky} inset-0 z-{10,20,30,40,50} opacity-{0,50,60,70,80,100} uppercase tracking-{tight,wide,wider} leading-{none,tight,snug,normal,relaxed} transition{,-colors,-opacity} cursor-pointer select-none");
+/* Positioning offsets + dividers (missing from the first safelist; hit by preview glue). */
+@source inline("{top,bottom,left,right,inset-x,inset-y}-{0,0.5,1,2,3,4,5,6,8,10,12} divide-{x,y} divide-border{,/30,/50}");

@@ -1,7 +1,8 @@
 import { TerminalPane, useSessionStore, useTerminalSearchStore } from "anyscp";
+import { SHELL, ShellReplay } from "./_fixtures";
 
-// TerminalPane = PaneHeader + xterm + (search bar / disconnect pill). The xterm
-// buffer is empty in previews (no live shell).
+// TerminalPane = PaneHeader + xterm + (search bar / disconnect pill). Terminal
+// output is replayed through the Tauri mock (ShellReplay).
 const cfg = (host: string, username: string) => ({
   host, port: 22, username, auth_method: { type: "privateKey" as const, key_path: "~/.ssh/id_ed25519" },
 });
@@ -26,8 +27,9 @@ useTerminalSearchStore.setState({
   results: new Map([["s-logs", { index: 2, count: 7 }]]),
 });
 
+const OUT = { "s-api": SHELL.api, "s-logs": SHELL.logs, "s-web": SHELL.web, "s-db": "" };
 const Frame = ({ children }: { children: React.ReactNode }) => (
-  <div className="bg-bg-base p-2 rounded-lg" style={{ width: 680, height: 320 }}>{children}</div>
+  <div className="bg-bg-base p-2 rounded-lg" style={{ width: 680, height: 320 }}><ShellReplay outputs={OUT} />{children}</div>
 );
 
 export const Connected = () => <Frame><TerminalPane sessionId="s-api" tabId="s-api" /></Frame>;

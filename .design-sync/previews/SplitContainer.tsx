@@ -1,7 +1,8 @@
 import { SplitContainer, useSessionStore } from "anyscp";
 import type { SplitNode } from "../../src/types";
+import { SHELL, ShellReplay } from "./_fixtures";
 
-// xterm buffers are empty in previews (no live shell); split chrome is real.
+// Terminal output is replayed through the Tauri mock (ShellReplay).
 const cfg = (host: string, username: string) => ({
   host, port: 22, username, auth_method: { type: "privateKey" as const, key_path: "~/.ssh/id_ed25519" },
 });
@@ -34,7 +35,10 @@ useSessionStore.setState({
 });
 
 const Frame = ({ children }: { children: React.ReactNode }) => (
-  <div className="bg-bg-base p-1.5" style={{ width: 1232, height: 752 }}>{children}</div>
+  <div className="bg-bg-base p-1.5" style={{ width: 1232, height: 752 }}>
+    <ShellReplay outputs={{ "s-api": SHELL.api, "s-logs": SHELL.logs, "s-web": SHELL.web, "s-db": SHELL.db }} />
+    {children}
+  </div>
 );
 
 export const SideBySide = () => <Frame><SplitContainer node={SIDE_BY_SIDE} path={[]} tabId="s-api" /></Frame>;

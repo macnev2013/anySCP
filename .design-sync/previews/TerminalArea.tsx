@@ -1,8 +1,9 @@
 import { TerminalArea, useSessionStore, useTerminalSearchStore } from "anyscp";
 import type { LayoutNode } from "../../src/types";
+import { SHELL, ShellReplay } from "./_fixtures";
 
 // A terminal tab split three ways: api shell | (log tail / db shell that dropped).
-// xterm buffers are empty in previews (no live shell); pane chrome is real.
+// Terminal output is replayed through the Tauri mock (ShellReplay).
 const cfg = (host: string, username: string) => ({
   host, port: 22, username, auth_method: { type: "privateKey" as const, key_path: "~/.ssh/id_ed25519" },
 });
@@ -39,6 +40,7 @@ useTerminalSearchStore.setState({
 
 export const ThreeWaySplit = () => (
   <div className="bg-bg-base p-1.5" style={{ width: 1232, height: 752 }}>
+    <ShellReplay outputs={{ "s-api": SHELL.api, "s-logs": SHELL.logs, "s-db": SHELL.db }} />
     <TerminalArea node={LAYOUT} tabId="s-api" />
   </div>
 );
