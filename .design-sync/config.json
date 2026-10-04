@@ -1,0 +1,165 @@
+{
+  "shape": "package",
+  "pkg": "anyscp",
+  "globalName": "AnySCP",
+  "buildCmd": "./.design-sync/build.sh",
+  "cssEntry": "dist/ds/anyscp.css",
+  "tsconfig": "tsconfig.json",
+  "docsMap": {
+    "CardActionStrip": ".design-sync/groups/dashboard.md",
+    "Sidebar": ".design-sync/groups/sidebar.md",
+    "Terminal": ".design-sync/groups/terminal.md",
+    "TerminalPane": ".design-sync/groups/terminal.md"
+  },
+  "runtimeFontPrefixes": [
+    "Fira Code"
+  ],
+  "extraEntries": [
+    "lucide-react"
+  ],
+  "overrides": {
+    "ContextMenu": {
+      "cardMode": "single",
+      "viewport": "360x320"
+    },
+    "StatusBar": {
+      "cardMode": "column"
+    },
+    "HostCard": {
+      "cardMode": "column"
+    },
+    "ConnectionDialog": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "GroupDeleteDialog": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "GroupModal": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "HostEditModal": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "HostsDashboard": {
+      "cardMode": "single",
+      "viewport": "1280x800"
+    },
+    "ImportSshConfigModal": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "NewHostPopup": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "FilePropertiesDialog": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "HistoryPage": {
+      "cardMode": "single",
+      "viewport": "1280x800"
+    },
+    "AppShell": {
+      "cardMode": "single",
+      "viewport": "1280x800"
+    },
+    "PortForwardingPage": {
+      "cardMode": "single",
+      "viewport": "1280x800"
+    },
+    "S3Browser": {
+      "cardMode": "single",
+      "viewport": "1280x800"
+    },
+    "S3ConnectDialog": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "S3Page": {
+      "cardMode": "single",
+      "viewport": "1280x800"
+    },
+    "SettingsPage": {
+      "cardMode": "single",
+      "viewport": "1280x800"
+    },
+    "DropOverwriteDialog": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "ExplorerPage": {
+      "cardMode": "single",
+      "viewport": "1280x800"
+    },
+    "ExplorerView": {
+      "cardMode": "single",
+      "viewport": "1280x800"
+    },
+    "SftpPage": {
+      "cardMode": "single",
+      "viewport": "1280x800"
+    },
+    "ConfirmDangerDialog": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "SnippetEditModal": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "SnippetFolderModal": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "SnippetPalette": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "SnippetQuickPanel": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "SnippetsPage": {
+      "cardMode": "single",
+      "viewport": "1280x800"
+    },
+    "VariableDialog": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "DisconnectOverlay": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "SplitContainer": {
+      "cardMode": "single",
+      "viewport": "1280x800"
+    },
+    "TerminalArea": {
+      "cardMode": "single",
+      "viewport": "1280x800"
+    },
+    "TransferPopover": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    },
+    "TransfersPage": {
+      "cardMode": "single",
+      "viewport": "1280x800"
+    },
+    "UpdateDialog": {
+      "cardMode": "single",
+      "viewport": "960x680"
+    }
+  },
+  "storyImports": {
+    "bundle": [
+      "lucide-react"
+    ]
+  }
+}

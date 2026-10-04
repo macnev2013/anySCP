@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "allowImportingTsExtensions": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "rootDir": "..",
+    "outDir": "../dist/types"
+  },
+  "include": ["ds-entry.ts", "tauri-mock.ts", "../src"],
+  "exclude": ["../src/**/*.test.ts", "../src/**/*.test.tsx", "../src/**/__tests__/**"]
+}

@@ -1,0 +1,23 @@
+/* design-sync stylesheet: the app's own theme + every Tailwind utility the
+   app uses (auto-scanned from src/), plus a safelist of the token-based
+   utility families so designs composed from these components can use the
+   same vocabulary for their own layout glue without hitting missing CSS. */
+@import "../src/theme.css";
+@import "tailwindcss";
+@source "../src";
+
+/* Token colors x the properties the app styles with them (+ the opacities the app uses). */
+@source inline("{,hover:}{bg,text,border}-{bg-base,bg-surface,bg-overlay,bg-subtle,bg-muted,text-primary,text-secondary,text-muted,text-inverse,accent,accent-hover,accent-muted,status-connected,status-connecting,status-error,status-disconnected,border,border-focus}");
+@source inline("{bg,border}-{bg-base,bg-surface,bg-overlay,accent,status-connected,status-connecting,status-error,border}/{10,15,20,40,50,60}");
+@source inline("{ring,focus-visible:ring,focus:ring}-{ring,accent,border-focus} focus:border-border-focus divide-border");
+/* Type scale (theme tokens) as both plain utilities and the app's arbitrary-length idiom. */
+@source inline("text-{2xs,xs,sm,base,lg}");
+@source inline("text-[length:var(--text-{2xs,xs,sm,base,lg})]");
+@source inline("font-{sans,mono,normal,medium,semibold,bold}");
+/* Spacing / sizing / layout. */
+@source inline("{p,px,py,pt,pb,pl,pr,m,mx,my,mt,mb,ml,mr,gap,gap-x,gap-y,space-x,space-y}-{0,0.5,1,1.5,2,2.5,3,3.5,4,5,6,7,8,10,12,14,16,20,24}");
+@source inline("{w,h,size,min-w,min-h,max-w,max-h}-{0,1,1.5,2,2.5,3,3.5,4,5,6,7,8,9,10,11,12,14,16,20,24,28,32,36,40,44,48,56,64,72,80,96,full,screen,auto,fit,min,max}");
+@source inline("max-w-{xs,sm,md,lg,xl,2xl,3xl,4xl,5xl,6xl,7xl,prose}");
+@source inline("{flex,inline-flex,grid,inline-grid,block,inline-block,hidden,contents} flex-{row,col,wrap,1,none,auto,shrink-0} shrink-0 grow {items,self}-{start,center,end,stretch,baseline} justify-{start,center,end,between,around,evenly} grid-cols-{1,2,3,4,5,6,12} col-span-{1,2,3,4,6,12}");
+@source inline("rounded{,-sm,-md,-lg,-xl,-2xl,-full} border{,-0,-2,-t,-b,-l,-r} shadow{-sm,-md,-lg,-none}");
+@source inline("{overflow,overflow-x,overflow-y}-{auto,hidden,scroll} truncate whitespace-nowrap {relative,absolute,fixed,sticky} inset-0 z-{10,20,30,40,50} opacity-{0,50,60,70,80,100} uppercase tracking-{tight,wide,wider} leading-{none,tight,snug,normal,relaxed} transition{,-colors,-opacity} cursor-pointer select-none");

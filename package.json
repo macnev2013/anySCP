@@ -7,6 +7,9 @@
   "license": "MIT",
   "repository": "https://github.com/macnev2013/anySCP",
   "type": "module",
+  "publishConfig": {
+    "types": "dist/types/index.d.ts"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
