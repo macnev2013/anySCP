@@ -307,20 +307,20 @@ impl SshManager {
     ) -> Result<(), SshError> {
         let authenticated = match &config.auth_method {
             AuthMethod::Password { password } => {
-                let accepted = handle
-                    .authenticate_password(&config.username, password)
-                    .await
-                    .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
-                if accepted {
-                    true
-                } else {
-                    // Many servers — notably PAM / privileged-access gateways
-                    // (e.g. `user@domain%admin%target` logins) — disable the
-                    // `password` method and only accept the same password via
-                    // `keyboard-interactive`. PuTTY/OpenSSH fall back to it
-                    // automatically, so do the same.
-                    Self::auth_keyboard_interactive(handle, &config.username, password).await?
-                }
+                // Many servers — notably PAM / privileged-access gateways
+                // (e.g. `user@domain%admin%target` logins) — disable the
+                // `password` method and only accept the same password via
+                // `keyboard-interactive`. Try that first, as PuTTY does, then
+                // fall back to `password`. The order matters: russh 0.46 only
+                // routes the server's prompts back to us when
+                // keyboard-interactive is the connection's *first* auth
+                // request — attempted after a rejected password, the prompt is
+                // dropped and the login hangs.
+                Self::auth_keyboard_interactive(handle, &config.username, password).await?
+                    || handle
+                        .authenticate_password(&config.username, password)
+                        .await
+                        .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?
             }
             AuthMethod::PrivateKey {
                 key_path,

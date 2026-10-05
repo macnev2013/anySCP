@@ -6,6 +6,7 @@
 // sshd-kbdint (tests/kbdint-server) reproduces that gateway: password auth is
 // off, keyboard-interactive (PAM) is on. A saved-password host must connect.
 
+import { expect } from "chai";
 import { resetApp } from "../helpers/reset.js";
 import { waitForDashboard } from "../helpers/dashboard.js";
 import {
@@ -46,5 +47,23 @@ describe("connect via keyboard-interactive (issue #131)", () => {
         // The sentinel only appears once the command runs — the prompt already
         // contains the bare hostname, and the echoed input shows `$(hostname)`.
         await runCommand(sessionId, "echo KBDINT_OK_$(hostname)", "KBDINT_OK_anyscp-kbdint", 10_000);
+    });
+
+    it("still reports a wrong password instead of hanging", async () => {
+        await openNewHostModal();
+        await fillPasswordHostForm({
+            label: "kbdint-bad",
+            host: SSHD_KBDINT_HOST,
+            port: SSHD_KBDINT_PORT,
+            username: SSH_USER,
+            password: "definitely-wrong",
+        });
+        await clickConnect();
+
+        // Both methods are tried (keyboard-interactive, then password) and both
+        // fail; the modal must surface the error rather than spin forever.
+        const err = await $("[data-testid='host-modal-error']");
+        await err.waitForDisplayed({ timeout: 30_000 });
+        expect((await err.getText()).length).to.be.greaterThan(0);
     });
 });
