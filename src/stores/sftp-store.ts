@@ -152,6 +152,8 @@ if (typeof window !== "undefined") {
     __e2eSftpUpload?: (sessionId: string, localPath: string, remotePath: string) => Promise<string>;
     __e2eSftpDownload?: (sessionId: string, remotePath: string, localPath: string) => Promise<string>;
     __e2eSftpEnqueueUpload?: (sessionId: string, localPaths: string[], remoteDir: string) => Promise<string[]>;
+    __e2eSftpEnqueueDownload?: (sessionId: string, remotePaths: string[], localDir: string) => Promise<string[]>;
+    __e2eSftpListTransfers?: () => Promise<unknown[]>;
     __e2eSftpCopy?: (sessionId: string, sourcePaths: string[], targetDir: string) => Promise<string[]>;
     __e2eSftpMove?: (sessionId: string, sourcePaths: string[], targetDir: string) => Promise<string[]>;
   };
@@ -172,6 +174,16 @@ if (typeof window !== "undefined") {
     return await invoke<string[]>("sftp_enqueue_upload", {
       sftpSessionId: sessionId, localPaths, remoteDir,
     });
+  };
+  w.__e2eSftpEnqueueDownload = async (sessionId, remotePaths, localDir) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string[]>("sftp_enqueue_download", {
+      sftpSessionId: sessionId, remotePaths, localDir,
+    });
+  };
+  w.__e2eSftpListTransfers = async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<unknown[]>("sftp_list_transfers");
   };
   w.__e2eSftpCopy = async (sessionId, sourcePaths, targetDir) => {
     const { invoke } = await import("@tauri-apps/api/core");

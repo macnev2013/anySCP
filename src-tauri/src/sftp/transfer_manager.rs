@@ -510,6 +510,7 @@ impl TransferManager {
 // ─── Remote directory statistics ─────────────────────────────────────────────
 
 /// How a recursive directory transfer treats one remote `read_dir` entry.
+#[derive(Debug, PartialEq)]
 enum RemoteChild {
     Dir,
     /// A regular file, or a symlink to one; carries the size to transfer.
@@ -529,20 +530,39 @@ async fn classify_remote_child(
     path: &str,
     attrs: &russh_sftp::protocol::FileAttributes,
 ) -> RemoteChild {
+    let target = if attrs.file_type() == russh_sftp::protocol::FileType::Symlink {
+        match sftp.metadata(path).await {
+            Ok(t) => Some(t),
+            Err(e) => {
+                tracing::warn!(path, error = %e, "cannot stat symlink target");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    classify_resolved(path, attrs, target.as_ref())
+}
+
+/// Pure decision behind [`classify_remote_child`]. `target` is the stat of a
+/// symlink's target, `None` when the link is broken (or for non-symlinks).
+fn classify_resolved(
+    path: &str,
+    attrs: &russh_sftp::protocol::FileAttributes,
+    target: Option<&russh_sftp::protocol::FileAttributes>,
+) -> RemoteChild {
     use russh_sftp::protocol::FileType;
     match attrs.file_type() {
         FileType::Dir => RemoteChild::Dir,
         FileType::File => RemoteChild::File(attrs.size.unwrap_or(0)),
-        FileType::Symlink => match sftp.metadata(path).await {
-            Ok(target) if target.file_type() == FileType::File => {
-                RemoteChild::File(target.size.unwrap_or(0))
-            }
-            Ok(_) => {
+        FileType::Symlink => match target {
+            Some(t) if t.file_type() == FileType::File => RemoteChild::File(t.size.unwrap_or(0)),
+            Some(_) => {
                 tracing::warn!(path, "skipping symlink to a non-regular file");
                 RemoteChild::Skip
             }
-            Err(e) => {
-                tracing::warn!(path, error = %e, "skipping broken symlink");
+            None => {
+                tracing::warn!(path, "skipping broken symlink");
                 RemoteChild::Skip
             }
         },
@@ -1990,5 +2010,58 @@ mod tests {
             Some(SftpError::RemoteIoError(msg)) => assert_eq!(msg, "close failed"),
             other => panic!("expected first error, got {other:?}"),
         }
+    }
+
+    // ─── Recursive download: entry classification (issue #128) ──────────────
+
+    fn attrs(mode: u32, size: u64) -> russh_sftp::protocol::FileAttributes {
+        russh_sftp::protocol::FileAttributes {
+            permissions: Some(mode),
+            size: Some(size),
+            ..russh_sftp::protocol::FileAttributes::empty()
+        }
+    }
+
+    const S_IFREG: u32 = 0o100644;
+    const S_IFDIR: u32 = 0o040755;
+    const S_IFLNK: u32 = 0o120777;
+    const S_IFIFO: u32 = 0o010644;
+
+    #[test]
+    fn classify_regular_file_and_directory() {
+        assert_eq!(classify_resolved("/d/f", &attrs(S_IFREG, 42), None), RemoteChild::File(42));
+        assert_eq!(classify_resolved("/d/sub", &attrs(S_IFDIR, 4096), None), RemoteChild::Dir);
+    }
+
+    #[test]
+    fn classify_broken_symlink_is_skipped_not_fatal() {
+        // `ln -s /path/that/does/not/exist broken-link` — stat of the target fails.
+        assert_eq!(
+            classify_resolved("/d/broken-link", &attrs(S_IFLNK, 25), None),
+            RemoteChild::Skip
+        );
+    }
+
+    #[test]
+    fn classify_symlink_to_file_uses_target_size() {
+        let target = attrs(S_IFREG, 1000);
+        assert_eq!(
+            classify_resolved("/d/link", &attrs(S_IFLNK, 7), Some(&target)),
+            RemoteChild::File(1000)
+        );
+    }
+
+    #[test]
+    fn classify_symlink_to_directory_is_not_followed() {
+        let target = attrs(S_IFDIR, 4096);
+        assert_eq!(
+            classify_resolved("/d/linkdir", &attrs(S_IFLNK, 7), Some(&target)),
+            RemoteChild::Skip
+        );
+    }
+
+    #[test]
+    fn classify_special_file_is_skipped() {
+        assert_eq!(classify_resolved("/d/fifo", &attrs(S_IFIFO, 0), None), RemoteChild::Skip);
     }
 }
