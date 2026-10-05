@@ -306,10 +306,22 @@ impl SshManager {
         config: &HostConfig,
     ) -> Result<(), SshError> {
         let authenticated = match &config.auth_method {
-            AuthMethod::Password { password } => handle
-                .authenticate_password(&config.username, password)
-                .await
-                .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?,
+            AuthMethod::Password { password } => {
+                let accepted = handle
+                    .authenticate_password(&config.username, password)
+                    .await
+                    .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
+                if accepted {
+                    true
+                } else {
+                    // Many servers — notably PAM / privileged-access gateways
+                    // (e.g. `user@domain%admin%target` logins) — disable the
+                    // `password` method and only accept the same password via
+                    // `keyboard-interactive`. PuTTY/OpenSSH fall back to it
+                    // automatically, so do the same.
+                    Self::auth_keyboard_interactive(handle, &config.username, password).await?
+                }
+            }
             AuthMethod::PrivateKey {
                 key_path,
                 passphrase,
@@ -349,6 +361,58 @@ impl SshManager {
             ));
         }
         Ok(())
+    }
+
+    /// Answer a `keyboard-interactive` exchange with the saved password.
+    ///
+    /// Hidden prompts (e.g. "Password:") get the password; echoed prompts get
+    /// an empty answer. Prompt-less rounds (banners/instructions) are
+    /// acknowledged. The password is only ever sent once: if the server asks
+    /// for hidden input again (an OTP / MFA code) we stop rather than replay it.
+    async fn auth_keyboard_interactive(
+        handle: &mut client::Handle<SshClientHandler>,
+        username: &str,
+        password: &str,
+    ) -> Result<bool, SshError> {
+        use client::KeyboardInteractiveAuthResponse as Kbi;
+
+        // Bounds a server that keeps sending prompt-less rounds.
+        const MAX_ROUNDS: usize = 8;
+
+        let mut response = handle
+            .authenticate_keyboard_interactive_start(username, None::<String>)
+            .await
+            .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
+        let mut password_sent = false;
+
+        for _ in 0..MAX_ROUNDS {
+            let prompts = match response {
+                Kbi::Success => return Ok(true),
+                Kbi::Failure => return Ok(false),
+                Kbi::InfoRequest { prompts, .. } => prompts,
+            };
+
+            let mut answers = Vec::with_capacity(prompts.len());
+            for prompt in &prompts {
+                if prompt.echo {
+                    answers.push(String::new());
+                } else if !password_sent {
+                    answers.push(password.to_string());
+                    password_sent = true;
+                } else {
+                    return Err(SshError::AuthenticationFailed(format!(
+                        "server requested additional input ({}), which is not supported yet",
+                        prompt.prompt.trim()
+                    )));
+                }
+            }
+            response = handle
+                .authenticate_keyboard_interactive_respond(answers)
+                .await
+                .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
+        }
+
+        Ok(false)
     }
 
     async fn auth_with_key_data(
