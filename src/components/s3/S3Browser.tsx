@@ -498,11 +498,12 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
       />
 
       {session.nextToken && (
-        <div className="flex items-center justify-center gap-3 px-4 py-2 border-t border-border bg-bg-surface shrink-0 no-select">
-          <span className="text-[length:var(--text-xs)] text-text-muted">
+        <div data-testid="s3-load-more" className="flex items-center justify-center gap-3 px-4 py-2 border-t border-border bg-bg-surface shrink-0 no-select">
+          <span data-testid="s3-load-more-count" className="text-[length:var(--text-xs)] text-text-muted">
             Showing {session.entries.length.toLocaleString()} items — more available
           </span>
           <button
+            data-testid="s3-load-more-button"
             onClick={() => void loadMoreObjects()}
             disabled={session.loading}
             className="px-3 py-1 rounded-md text-[length:var(--text-xs)] font-medium text-text-muted bg-bg-surface border border-border hover:border-border-focus hover:text-text-secondary hover:bg-bg-overlay disabled:opacity-50 transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
