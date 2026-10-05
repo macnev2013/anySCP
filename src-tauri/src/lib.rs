@@ -42,6 +42,17 @@ fn is_release_build() -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // WebKitGTK's DMA-BUF renderer aborts the web process with "Could not
+    // create default EGL display: EGL_BAD_PARAMETER" on some Linux setups
+    // (Wayland, hybrid/Nvidia GPUs, and AppImages whose bundled WebKit is
+    // older than the host Mesa), leaving a blank white window. Fall back to
+    // the older renderer unless the user explicitly chose otherwise. Must run
+    // before any threads are spawned.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter("anyscp=debug,russh=info")
         .init();
