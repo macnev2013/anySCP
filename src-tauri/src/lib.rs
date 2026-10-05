@@ -40,6 +40,19 @@ fn is_release_build() -> bool {
     !cfg!(debug_assertions)
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const WEBKIT_DMABUF_ENV: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
+
+/// Value to set `WEBKIT_DISABLE_DMABUF_RENDERER` to at startup, given its
+/// current value — `None` leaves an explicit user choice (including `0`) alone.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn webkit_dmabuf_override(current: Option<&std::ffi::OsStr>) -> Option<&'static str> {
+    match current {
+        None => Some("1"),
+        Some(_) => None,
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // WebKitGTK's DMA-BUF renderer aborts the web process with "Could not
@@ -49,8 +62,8 @@ pub fn run() {
     // the older renderer unless the user explicitly chose otherwise. Must run
     // before any threads are spawned.
     #[cfg(target_os = "linux")]
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    if let Some(value) = webkit_dmabuf_override(std::env::var_os(WEBKIT_DMABUF_ENV).as_deref()) {
+        std::env::set_var(WEBKIT_DMABUF_ENV, value);
     }
 
     tracing_subscriber::fmt()
@@ -347,4 +360,24 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    // Issue #134: the DMA-BUF renderer crashed WebKitWebProcess with
+    // EGL_BAD_PARAMETER, so it is disabled by default…
+    #[test]
+    fn dmabuf_renderer_disabled_when_unset() {
+        assert_eq!(webkit_dmabuf_override(None), Some("1"));
+    }
+
+    // …but a value the user set explicitly is never overridden.
+    #[test]
+    fn dmabuf_override_respects_explicit_user_value() {
+        assert_eq!(webkit_dmabuf_override(Some(OsStr::new("0"))), None);
+        assert_eq!(webkit_dmabuf_override(Some(OsStr::new("1"))), None);
+    }
 }
