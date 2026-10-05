@@ -104,6 +104,18 @@ services:
     container_name: anyscp-e2e-sshd-scp-busybox-nostat
     networks: [e2e]
 
+  # Keyboard-interactive-only target (built from tests/kbdint-server). Password
+  # auth is disabled, mirroring PAM gateways (issue #131): connecting with a
+  # saved password only works via the keyboard-interactive fallback.
+  sshd-kbdint:
+    build:
+      context: ../kbdint-server
+      dockerfile: Dockerfile
+    image: anyscp-test-kbdint:latest
+    container_name: anyscp-e2e-sshd-kbdint
+    hostname: anyscp-kbdint
+    networks: [e2e]
+
   # ─── ProxyJump / tunnel pair ────────────────────────────────────────────────
   # Proves a connection is genuinely tunnelled. `sshd-bastion` bridges the
   # runner-reachable `e2e` network and an isolated `e2e-internal` network.
@@ -291,6 +303,8 @@ services:
         condition: service_started
       sshd-scp-busybox-nostat:
         condition: service_started
+      sshd-kbdint:
+        condition: service_started
       sshd-bastion:
         condition: service_started
       sshd-tunnel-target:
@@ -314,6 +328,8 @@ services:
       SSHD_SCP_BUSYBOX_PORT: "2222"
       SSHD_SCP_BUSYBOX_NOSTAT_HOST: sshd-scp-busybox-nostat
       SSHD_SCP_BUSYBOX_NOSTAT_PORT: "2222"
+      SSHD_KBDINT_HOST: sshd-kbdint
+      SSHD_KBDINT_PORT: "2222"
       # ProxyJump pair: bastion is runner-reachable; the tunnel target is not.
       SSHD_BASTION_HOST: sshd-bastion
       SSHD_BASTION_PORT: "2222"

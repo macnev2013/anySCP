@@ -392,20 +392,11 @@ impl SshManager {
                 Kbi::InfoRequest { prompts, .. } => prompts,
             };
 
-            let mut answers = Vec::with_capacity(prompts.len());
-            for prompt in &prompts {
-                if prompt.echo {
-                    answers.push(String::new());
-                } else if !password_sent {
-                    answers.push(password.to_string());
-                    password_sent = true;
-                } else {
-                    return Err(SshError::AuthenticationFailed(format!(
-                        "server requested additional input ({}), which is not supported yet",
-                        prompt.prompt.trim()
-                    )));
-                }
-            }
+            let answers = kbi_answers(
+                prompts.iter().map(|p| (p.prompt.as_str(), p.echo)),
+                password,
+                &mut password_sent,
+            )?;
             response = handle
                 .authenticate_keyboard_interactive_respond(answers)
                 .await
@@ -555,6 +546,34 @@ impl SshManager {
     }
 }
 
+/// Answers for one `keyboard-interactive` round, given `(prompt, echo)` pairs.
+///
+/// Hidden prompts get the password, echoed prompts an empty answer, and an
+/// empty round (banner/instructions only) an empty list. The password is only
+/// ever sent once across rounds (`password_sent`): a later hidden prompt is an
+/// OTP / MFA challenge we can't answer, so it's an error rather than a replay.
+fn kbi_answers<'a>(
+    prompts: impl IntoIterator<Item = (&'a str, bool)>,
+    password: &str,
+    password_sent: &mut bool,
+) -> Result<Vec<String>, SshError> {
+    let mut answers = Vec::new();
+    for (prompt, echo) in prompts {
+        if echo {
+            answers.push(String::new());
+        } else if !*password_sent {
+            answers.push(password.to_string());
+            *password_sent = true;
+        } else {
+            return Err(SshError::AuthenticationFailed(format!(
+                "server requested additional input ({}), which is not supported yet",
+                prompt.trim()
+            )));
+        }
+    }
+    Ok(answers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -602,5 +621,44 @@ mod tests {
         assert!(manager.cancel_connect("attempt-1"));
         assert!(active.is_cancelled());
         assert!(!orphaned.is_cancelled());
+    }
+
+    // ─── keyboard-interactive fallback (issue #131) ─────────────────────────
+
+    #[test]
+    fn kbi_answers_hidden_password_prompt_with_password() {
+        let mut sent = false;
+        let answers = kbi_answers([("Password: ", false)], "s3cret", &mut sent).unwrap();
+        assert_eq!(answers, vec!["s3cret".to_string()]);
+        assert!(sent);
+    }
+
+    #[test]
+    fn kbi_answers_echoed_prompts_with_empty_strings() {
+        let mut sent = false;
+        let answers =
+            kbi_answers([("Reason: ", true), ("Password: ", false)], "pw", &mut sent).unwrap();
+        assert_eq!(answers, vec![String::new(), "pw".to_string()]);
+    }
+
+    #[test]
+    fn kbi_answers_acknowledges_prompt_less_rounds() {
+        let mut sent = false;
+        let answers = kbi_answers(std::iter::empty(), "pw", &mut sent).unwrap();
+        assert!(answers.is_empty());
+        assert!(!sent, "a banner round must not consume the password");
+    }
+
+    #[test]
+    fn kbi_answers_never_replays_password_to_a_second_hidden_prompt() {
+        // Round 1: password. Round 2: an OTP challenge — must not get the password.
+        let mut sent = false;
+        kbi_answers([("Password: ", false)], "pw", &mut sent).unwrap();
+        let err = kbi_answers([("Verification code: ", false)], "pw", &mut sent).unwrap_err();
+        assert!(matches!(err, SshError::AuthenticationFailed(m) if m.contains("Verification code")));
+
+        // Same rule within a single round.
+        let mut sent = false;
+        assert!(kbi_answers([("Password: ", false), ("OTP: ", false)], "pw", &mut sent).is_err());
     }
 }
