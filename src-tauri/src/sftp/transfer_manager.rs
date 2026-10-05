@@ -509,6 +509,50 @@ impl TransferManager {
 
 // ─── Remote directory statistics ─────────────────────────────────────────────
 
+/// How a recursive directory transfer treats one remote `read_dir` entry.
+enum RemoteChild {
+    Dir,
+    /// A regular file, or a symlink to one; carries the size to transfer.
+    File(u64),
+    /// Not transferable: a broken or dangling symlink, a symlink to a
+    /// directory (not followed, which also rules out symlink cycles), or a
+    /// special file (fifo, socket, device).
+    Skip,
+}
+
+/// Classify a `read_dir` entry. `read_dir` reports lstat types, so symlinks
+/// are followed with a stat to find what they point at — mirroring OpenSSH
+/// `scp -r`, which downloads symlinked files and skips everything else
+/// instead of aborting the whole transfer.
+async fn classify_remote_child(
+    sftp: &russh_sftp::client::SftpSession,
+    path: &str,
+    attrs: &russh_sftp::protocol::FileAttributes,
+) -> RemoteChild {
+    use russh_sftp::protocol::FileType;
+    match attrs.file_type() {
+        FileType::Dir => RemoteChild::Dir,
+        FileType::File => RemoteChild::File(attrs.size.unwrap_or(0)),
+        FileType::Symlink => match sftp.metadata(path).await {
+            Ok(target) if target.file_type() == FileType::File => {
+                RemoteChild::File(target.size.unwrap_or(0))
+            }
+            Ok(_) => {
+                tracing::warn!(path, "skipping symlink to a non-regular file");
+                RemoteChild::Skip
+            }
+            Err(e) => {
+                tracing::warn!(path, error = %e, "skipping broken symlink");
+                RemoteChild::Skip
+            }
+        },
+        FileType::Other => {
+            tracing::warn!(path, "skipping special file");
+            RemoteChild::Skip
+        }
+    }
+}
+
 /// Recursively walk a remote directory and return (total_bytes, file_count).
 /// Tracks visited paths to prevent infinite loops from symlink cycles.
 async fn walk_remote_dir_stats(
@@ -555,14 +599,21 @@ async fn walk_remote_dir_inner(
             format!("{path}/{name}")
         };
 
-        let attrs = entry.metadata();
-        if attrs.file_type() == russh_sftp::protocol::FileType::Dir {
-            let (b, c) = Box::pin(walk_remote_dir_inner(sftp_arc, &full_path, visited)).await;
-            total_bytes += b;
-            file_count += c;
-        } else {
-            total_bytes += attrs.size.unwrap_or(0);
-            file_count += 1;
+        let child = {
+            let sftp = sftp_arc.lock().await;
+            classify_remote_child(&sftp, &full_path, &entry.metadata()).await
+        };
+        match child {
+            RemoteChild::Dir => {
+                let (b, c) = Box::pin(walk_remote_dir_inner(sftp_arc, &full_path, visited)).await;
+                total_bytes += b;
+                file_count += c;
+            }
+            RemoteChild::File(size) => {
+                total_bytes += size;
+                file_count += 1;
+            }
+            RemoteChild::Skip => {}
         }
     }
 
@@ -1460,33 +1511,40 @@ async fn download_dir_recursive(
         };
         let local_child = local_dir.join(&name);
 
-        let attrs = entry.metadata();
-        if attrs.file_type() == russh_sftp::protocol::FileType::Dir {
-            tokio::fs::create_dir_all(&local_child)
-                .await
-                .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
+        let child = {
+            let sftp = sftp_arc.lock().await;
+            classify_remote_child(&sftp, &remote_child, &entry.metadata()).await
+        };
+        match child {
+            RemoteChild::Dir => {
+                tokio::fs::create_dir_all(&local_child)
+                    .await
+                    .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
 
-            Box::pin(download_dir_recursive(
-                jobs,
-                job_id,
-                sftp_arc,
-                &remote_child,
-                &local_child,
-                cancel_token,
-                app_handle,
-            ))
-            .await?;
-        } else {
-            run_download_file(
-                jobs,
-                job_id,
-                sftp_arc,
-                &remote_child,
-                &local_child,
-                cancel_token,
-                app_handle,
-            )
-            .await?;
+                Box::pin(download_dir_recursive(
+                    jobs,
+                    job_id,
+                    sftp_arc,
+                    &remote_child,
+                    &local_child,
+                    cancel_token,
+                    app_handle,
+                ))
+                .await?;
+            }
+            RemoteChild::File(_) => {
+                run_download_file(
+                    jobs,
+                    job_id,
+                    sftp_arc,
+                    &remote_child,
+                    &local_child,
+                    cancel_token,
+                    app_handle,
+                )
+                .await?;
+            }
+            RemoteChild::Skip => {}
         }
     }
 
