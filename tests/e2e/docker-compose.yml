@@ -213,15 +213,18 @@ services:
       start_period: 5s
 
   # ─── S3-compatible storage (MinIO) ──────────────────────────────────────────
-  # Pulled from Quay, not Docker Hub: MinIO deleted the `minio/minio` and
-  # `minio/mc` Docker Hub repositories, so `docker compose pull` failed with
-  # "pull access denied ... repository does not exist" and every E2E shard died
+  # Pulled from Bitnami's frozen `bitnamilegacy` namespace. MinIO deleted its
+  # Docker Hub repositories and later made the quay.io ones private (pulls of
+  # quay.io/minio/* now fail with 401 Unauthorized), and every E2E shard died
   # before running a test. Pinned to a release rather than `latest` — a floating
   # tag is what let an upstream change break CI on every branch at once.
+  # Bitnami images run as a non-root user with their own entrypoint, so the
+  # `minio` binary is invoked directly with a data dir that user can write.
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
     container_name: anyscp-e2e-minio
-    command: server /data --console-address ":9001"
+    entrypoint: ["minio"]
+    command: ["server", "/tmp/data", "--console-address", ":9001"]
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -230,8 +233,11 @@ services:
   # One-shot bucket seed — creates the test bucket and uploads two objects
   # so the S3 explorer specs have something to render.
   minio-seed:
-    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: bitnamilegacy/minio-client:2025.7.21-debian-12-r3
     container_name: anyscp-e2e-minio-seed
+    environment:
+      # The non-root Bitnami user can't write mc's default config dir.
+      MC_CONFIG_DIR: /tmp/.mc
     depends_on:
       minio:
         condition: service_started
