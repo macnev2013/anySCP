@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
+use super::agent::{try_agent_auth, AgentAuth};
 use super::handler::SshClientHandler;
 use super::session::SshSession;
 
@@ -314,6 +315,23 @@ impl SshManager {
                 key_path,
                 passphrase,
             } => {
+                // Prefer the ssh-agent when the key is already loaded there:
+                // no passphrase needed, the key file is never decrypted.
+                match try_agent_auth(handle, &config.username, key_path).await {
+                    AgentAuth::Authenticated => return Ok(()),
+                    AgentAuth::Rejected => {
+                        return Err(SshError::AuthenticationFailed(
+                            "server rejected key (offered via ssh-agent)".to_string(),
+                        ))
+                    }
+                    AgentAuth::SignFailed(e) => {
+                        return Err(SshError::AuthenticationFailed(format!(
+                            "ssh-agent failed to sign: {e}"
+                        )))
+                    }
+                    AgentAuth::Unavailable => {}
+                }
+
                 let key_data = tokio::fs::read_to_string(key_path)
                     .await
                     .map_err(|e| SshError::IoError(e.to_string()))?;

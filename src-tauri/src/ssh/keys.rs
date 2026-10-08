@@ -334,7 +334,7 @@ fn algorithm_from_pub_file(path: &Path, _file_name: &str) -> String {
 }
 
 /// Construct the `.pub` sidecar path for a private key (same name + `".pub"`).
-fn pub_path_for(private_key_path: &Path) -> PathBuf {
+pub(crate) fn pub_path_for(private_key_path: &Path) -> PathBuf {
     let mut p = private_key_path.to_path_buf();
     let ext = match p.extension() {
         Some(e) => format!("{}.pub", e.to_string_lossy()),
