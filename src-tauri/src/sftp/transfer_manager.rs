@@ -2029,8 +2029,14 @@ mod tests {
 
     #[test]
     fn classify_regular_file_and_directory() {
-        assert_eq!(classify_resolved("/d/f", &attrs(S_IFREG, 42), None), RemoteChild::File(42));
-        assert_eq!(classify_resolved("/d/sub", &attrs(S_IFDIR, 4096), None), RemoteChild::Dir);
+        assert_eq!(
+            classify_resolved("/d/f", &attrs(S_IFREG, 42), None),
+            RemoteChild::File(42)
+        );
+        assert_eq!(
+            classify_resolved("/d/sub", &attrs(S_IFDIR, 4096), None),
+            RemoteChild::Dir
+        );
     }
 
     #[test]
@@ -2062,6 +2068,9 @@ mod tests {
 
     #[test]
     fn classify_special_file_is_skipped() {
-        assert_eq!(classify_resolved("/d/fifo", &attrs(S_IFIFO, 0), None), RemoteChild::Skip);
+        assert_eq!(
+            classify_resolved("/d/fifo", &attrs(S_IFIFO, 0), None),
+            RemoteChild::Skip
+        );
     }
 }
