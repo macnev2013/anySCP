@@ -655,7 +655,9 @@ mod tests {
         let mut sent = false;
         kbi_answers([("Password: ", false)], "pw", &mut sent).unwrap();
         let err = kbi_answers([("Verification code: ", false)], "pw", &mut sent).unwrap_err();
-        assert!(matches!(err, SshError::AuthenticationFailed(m) if m.contains("Verification code")));
+        assert!(
+            matches!(err, SshError::AuthenticationFailed(m) if m.contains("Verification code"))
+        );
 
         // Same rule within a single round.
         let mut sent = false;
