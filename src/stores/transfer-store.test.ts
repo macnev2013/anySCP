@@ -18,6 +18,7 @@ function event(id: string, status: TransferStatusValue): TransferEvent {
     files_total: 1,
     speed_bps: 0,
     eta_secs: null,
+    resume_supported: false,
     created_at: 0,
   };
 }
@@ -82,5 +83,18 @@ describe("transfer-store — finished history cap", () => {
     expect(s.transfers.has("done")).toBe(false);
     expect(s.transfers.has("active")).toBe(true);
     expect(s.finished_order).toEqual([]);
+  });
+
+  it("clearFinished preserves a failed transfer with a resumable checkpoint", () => {
+    const { updateTransfer, clearFinished } = useTransferStore.getState();
+    updateTransfer({
+      ...event("resume", { Failed: "connection lost" }),
+      resume_supported: true,
+    });
+    clearFinished();
+
+    const state = useTransferStore.getState();
+    expect(state.transfers.get("resume")?.status).toEqual({ Failed: "connection lost" });
+    expect(state.finished_order).toEqual(["resume"]);
   });
 });

@@ -23,6 +23,7 @@ function transfer(over: Partial<TransferEvent>): TransferEvent {
     files_total: 1,
     speed_bps: 0,
     eta_secs: null,
+    resume_supported: false,
     created_at: 0,
     ...over,
   };
@@ -41,11 +42,12 @@ describe("useTransfers", () => {
     useTransferStore.setState({ transfers: new Map() });
   });
 
-  it("sorts active first, then queued, then finished, and counts each bucket", () => {
+  it("sorts active, queued, paused, and finished transfers and counts each bucket", () => {
     seed(
       transfer({ transfer_id: "done", status: "Completed" }),
       transfer({ transfer_id: "queued", status: "Queued" }),
       transfer({ transfer_id: "active", status: "InProgress" }),
+      transfer({ transfer_id: "paused", status: "Paused", resume_supported: true }),
       transfer({ transfer_id: "failed", status: { Failed: "boom" } }),
     );
     const { result } = renderHook(() => useTransfers());
@@ -53,19 +55,22 @@ describe("useTransfers", () => {
     expect(result.current.list.map((t) => t.transfer_id)).toEqual([
       "active",
       "queued",
+      "paused",
       "done",
       "failed",
     ]);
     expect(result.current.activeCount).toBe(1);
     expect(result.current.queuedCount).toBe(1);
+    expect(result.current.pausedCount).toBe(1);
     expect(result.current.finishedCount).toBe(2);
   });
 
-  it("routes cancel and retry to the backend owning the transfer", async () => {
+  it("routes cancel, retry, pause, and resume to their backend commands", async () => {
     seed(
       transfer({ transfer_id: "sftp-t", sftp_session_id: "s1" }),
       transfer({ transfer_id: "scp-t", sftp_session_id: undefined, scp_session_id: "s2" }),
       transfer({ transfer_id: "s3-t", sftp_session_id: undefined, s3_session_id: "s3" }),
+      transfer({ transfer_id: "paused", status: "Paused", resume_supported: true }),
     );
     const { result } = renderHook(() => useTransfers());
 
@@ -79,10 +84,16 @@ describe("useTransfers", () => {
     await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
     result.current.onRetry("s3-t");
     await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(3));
+    result.current.onPause("sftp-t");
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(4));
+    result.current.onResume("paused");
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(5));
 
     expect(invoke).toHaveBeenCalledWith("sftp_cancel_transfer", { transferId: "sftp-t" });
     expect(invoke).toHaveBeenCalledWith("scp_cancel_transfer", { transferId: "scp-t" });
     expect(invoke).toHaveBeenCalledWith("s3_retry_transfer", { transferId: "s3-t" });
+    expect(invoke).toHaveBeenCalledWith("sftp_pause_transfer", { transferId: "sftp-t" });
+    expect(invoke).toHaveBeenCalledWith("sftp_resume_transfer", { transferId: "paused" });
   });
 
   it("drops the row locally when cancel fails on the backend", async () => {
@@ -106,9 +117,11 @@ describe("useTransfers", () => {
 
     act(() => result.current.onClearFinished());
 
-    expect(useTransferStore.getState().transfers.has("done")).toBe(false);
-    expect(useTransferStore.getState().transfers.has("active")).toBe(true);
     await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() =>
+      expect(useTransferStore.getState().transfers.has("done")).toBe(false),
+    );
+    expect(useTransferStore.getState().transfers.has("active")).toBe(true);
     expect(invoke).toHaveBeenCalledWith("sftp_clear_finished_transfers");
     expect(invoke).toHaveBeenCalledWith("scp_clear_finished_transfers");
     expect(invoke).toHaveBeenCalledWith("s3_clear_finished_transfers");
@@ -119,6 +132,8 @@ describe("useTransfers", () => {
     const { result, rerender } = renderHook(() => useTransfers());
     const before = {
       onCancel: result.current.onCancel,
+      onPause: result.current.onPause,
+      onResume: result.current.onResume,
       onRetry: result.current.onRetry,
       onDismiss: result.current.onDismiss,
     };
@@ -133,6 +148,8 @@ describe("useTransfers", () => {
     rerender();
 
     expect(result.current.onCancel).toBe(before.onCancel);
+    expect(result.current.onPause).toBe(before.onPause);
+    expect(result.current.onResume).toBe(before.onResume);
     expect(result.current.onRetry).toBe(before.onRetry);
     expect(result.current.onDismiss).toBe(before.onDismiss);
   });

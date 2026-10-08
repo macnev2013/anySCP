@@ -79,6 +79,7 @@ impl TransferJobState {
             files_total: self.files_total,
             speed_bps: self.speed_bps,
             eta_secs,
+            resume_supported: false,
             created_at: self.created_at,
         }
     }

@@ -37,12 +37,15 @@ export interface TransferEvent {
   files_total: number;
   speed_bps: number;
   eta_secs: number | null;
+  /** True for single-file SFTP transfers with a retained checkpoint. */
+  resume_supported: boolean;
   created_at: number;
 }
 
 export type TransferStatusValue =
   | "Queued"
   | "InProgress"
+  | "Paused"
   | "Completed"
   | { Failed: string }
   | "Cancelled";

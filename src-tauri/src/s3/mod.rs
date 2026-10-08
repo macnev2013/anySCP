@@ -61,6 +61,7 @@ pub struct S3TransferEvent {
     pub files_total: u32,
     pub speed_bps: u64,
     pub eta_secs: Option<u64>,
+    pub resume_supported: bool,
     /// Unix timestamp in milliseconds.
     pub created_at: u64,
 }

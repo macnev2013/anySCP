@@ -16,8 +16,19 @@ interface TransferPopoverProps {
 }
 
 export function TransferPopover({ anchorRect, triggerRef, onClose }: TransferPopoverProps) {
-  const { list, activeCount, queuedCount, finishedCount, onCancel, onRetry, onDismiss, onClearFinished } =
-    useTransfers();
+  const {
+    list,
+    activeCount,
+    queuedCount,
+    pausedCount,
+    finishedCount,
+    onCancel,
+    onPause,
+    onResume,
+    onRetry,
+    onDismiss,
+    onClearFinished,
+  } = useTransfers();
   const openPageTab = useTabStore((s) => s.openPageTab);
   const popoverRef = useRef<HTMLDivElement>(null);
 
@@ -66,6 +77,7 @@ export function TransferPopover({ anchorRect, triggerRef, onClose }: TransferPop
   const summaryParts: string[] = [];
   if (activeCount > 0) summaryParts.push(`${activeCount} active`);
   if (queuedCount > 0) summaryParts.push(`${queuedCount} queued`);
+  if (pausedCount > 0) summaryParts.push(`${pausedCount} paused`);
   if (finishedCount > 0) summaryParts.push(`${finishedCount} done`);
 
   // ─── Render ─────────────────────────────────────────────────────────────────
@@ -150,6 +162,8 @@ export function TransferPopover({ anchorRect, triggerRef, onClose }: TransferPop
       <TransferList
         list={list}
         onCancel={onCancel}
+        onPause={onPause}
+        onResume={onResume}
         onRetry={onRetry}
         onDismiss={onDismiss}
         maxHeight="min(400px, 50vh)"
