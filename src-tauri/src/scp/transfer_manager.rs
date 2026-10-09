@@ -877,14 +877,22 @@ async fn run_upload_dir(
         let mut rd = tokio::fs::read_dir(&dir)
             .await
             .map_err(|e| ScpError::LocalIoError(e.to_string()))?;
-        while let Ok(Some(entry)) = rd.next_entry().await {
+        // Propagate iteration/metadata errors (don't silently skip): a partial
+        // tree must fail the job, never report Completed — a cross-pane MOVE
+        // deletes the source only on Completed, so a false Completed on a
+        // half-uploaded directory would destroy the un-uploaded files.
+        while let Some(entry) = rd
+            .next_entry()
+            .await
+            .map_err(|e| ScpError::LocalIoError(e.to_string()))?
+        {
             if cancel.is_cancelled() {
                 return Err(ScpError::TransferCancelled);
             }
-            let meta = match entry.metadata().await {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
+            let meta = entry
+                .metadata()
+                .await
+                .map_err(|e| ScpError::LocalIoError(e.to_string()))?;
             let entry_path = entry.path();
             if meta.is_dir() {
                 stack.push(entry_path);

@@ -40,6 +40,12 @@ pub enum TransferJobKind {
         key: String,
         local_path: PathBuf,
     },
+    DownloadDir {
+        /// S3 key prefix (ends with `/`); every object under it is downloaded.
+        prefix: String,
+        /// Local directory root the prefix's tree is mirrored into.
+        local_dir: PathBuf,
+    },
 }
 
 pub struct TransferJobState {
@@ -225,7 +231,7 @@ impl S3TransferManager {
 
             let (kind, total_bytes, files_total) = if meta.is_dir() {
                 let (bytes, count) = walk_local_dir_stats(&local_path).await;
-                let key_prefix = format!("{}/{}", prefix.trim_end_matches('/'), name);
+                let key_prefix = join_key(&prefix, &name);
                 (
                     TransferJobKind::UploadDir {
                         local_path: local_path.clone(),
@@ -235,7 +241,7 @@ impl S3TransferManager {
                     count,
                 )
             } else {
-                let key = format!("{}/{}", prefix.trim_end_matches('/'), name);
+                let key = join_key(&prefix, &name);
                 (
                     TransferJobKind::UploadFile {
                         local_path: local_path.clone(),
@@ -297,18 +303,98 @@ impl S3TransferManager {
         let mut ids = Vec::with_capacity(keys.len());
 
         for key in keys {
-            let name = std::path::Path::new(&key)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| key.clone());
-            let local_path = local_dir.join(&name);
-            let id = self
-                .queue_download_job(&bucket, &s3_session_id, key, local_path)
-                .await?;
+            // A key ending in `/` is a folder prefix (S3 has no real dirs) —
+            // download every object under it, mirrored into a local subdir.
+            let id = if key.ends_with('/') {
+                self.queue_download_dir_job(&bucket, &s3_session_id, key, &local_dir)
+                    .await?
+            } else {
+                let name = std::path::Path::new(&key)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| key.clone());
+                let local_path = local_dir.join(&name);
+                self.queue_download_job(&bucket, &s3_session_id, key, local_path)
+                    .await?
+            };
             ids.push(id);
         }
 
         Ok(ids)
+    }
+
+    /// Build, register, and queue a recursive directory download: list every
+    /// object under `prefix` to size the job, then mirror the tree into
+    /// `local_dir/<dirname>`. The transfer completes only once every object has
+    /// landed, so a cross-pane MOVE deletes the S3 source only on true success.
+    async fn queue_download_dir_job(
+        &self,
+        bucket: &s3::Bucket,
+        s3_session_id: &str,
+        prefix: String,
+        local_dir: &std::path::Path,
+    ) -> Result<String, S3Error> {
+        // Size the tree up-front (no delimiter = recursive), skipping the
+        // zero-byte folder marker keys.
+        let results = bucket
+            .list(prefix.clone(), None)
+            .await
+            .map_err(|e| S3Error::OperationError(format!("S3 list failed for {prefix}: {e}")))?;
+        let mut total_bytes = 0u64;
+        let mut files_total = 0u32;
+        for result in &results {
+            for obj in &result.contents {
+                if obj.key.ends_with('/') {
+                    continue;
+                }
+                total_bytes += obj.size;
+                files_total += 1;
+            }
+        }
+
+        let dir_name = prefix
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("download")
+            .to_string();
+        let dest_root = local_dir.join(&dir_name);
+
+        let transfer_id = uuid::Uuid::new_v4().to_string();
+        let now = Self::unix_now_millis();
+        let now_instant = Instant::now();
+
+        let job = TransferJobState {
+            transfer_id: transfer_id.clone(),
+            s3_session_id: s3_session_id.to_string(),
+            name: dir_name,
+            direction: S3TransferDirection::Download,
+            kind: TransferJobKind::DownloadDir {
+                prefix,
+                local_dir: dest_root,
+            },
+            status: S3TransferStatus::Queued,
+            bytes_transferred: 0,
+            total_bytes,
+            files_done: 0,
+            files_total,
+            speed_bps: 0,
+            cancel_token: CancellationToken::new(),
+            error: None,
+            created_at: now,
+            last_emit: now_instant,
+            speed_window_bytes: 0,
+            speed_window_start: now_instant,
+        };
+
+        self.jobs.insert(transfer_id.clone(), job);
+        Self::emit_initial(&self.jobs, &transfer_id, &self.app_handle);
+        self.queue_tx
+            .send(transfer_id.clone())
+            .map_err(|e| S3Error::OperationError(format!("queue send error: {e}")))?;
+
+        Ok(transfer_id)
     }
 
     /// Enqueue a single object for streaming download to an explicit local path
@@ -474,6 +560,17 @@ impl S3TransferManager {
 
 /// Recursively walk a local directory and return (total_bytes, file_count).
 /// Uses canonical paths to detect and skip symlink cycles.
+/// Join an S3 key prefix and a name. The bucket root is the empty prefix, so
+/// guard it — `format!("{}/{}", "", name)` would yield a phantom `/name` key.
+fn join_key(prefix: &str, name: &str) -> String {
+    let base = prefix.trim_end_matches('/');
+    if base.is_empty() {
+        name.to_string()
+    } else {
+        format!("{base}/{name}")
+    }
+}
+
 async fn walk_local_dir_stats(path: &PathBuf) -> (u64, u32) {
     let mut visited = HashSet::new();
     Box::pin(walk_local_dir_inner(path, &mut visited)).await
@@ -604,6 +701,10 @@ async fn execute_transfer(
                 key: key.clone(),
                 local_path: local_path.clone(),
             },
+            TransferJobKind::DownloadDir { prefix, local_dir } => KindDesc::DownloadDir {
+                prefix: prefix.clone(),
+                local_dir: local_dir.clone(),
+            },
         };
         (desc, cancel_token)
     };
@@ -640,6 +741,18 @@ async fn execute_transfer(
                 &bucket,
                 &key,
                 &local_path,
+                &cancel_token,
+                app_handle,
+            )
+            .await
+        }
+        KindDesc::DownloadDir { prefix, local_dir } => {
+            run_download_dir(
+                jobs,
+                job_id,
+                &bucket,
+                &prefix,
+                &local_dir,
                 &cancel_token,
                 app_handle,
             )
@@ -719,6 +832,7 @@ enum KindDesc {
     UploadFile { local_path: PathBuf, key: String },
     UploadDir { local_path: PathBuf, prefix: String },
     DownloadFile { key: String, local_path: PathBuf },
+    DownloadDir { prefix: String, local_dir: PathBuf },
 }
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
@@ -1003,7 +1117,92 @@ async fn run_download_file(
     job_id: &str,
     bucket: &s3::Bucket,
     key: &str,
-    local_path: &PathBuf,
+    local_path: &std::path::Path,
+    cancel_token: &CancellationToken,
+    app_handle: &AppHandle,
+) -> Result<(), S3Error> {
+    // A single-file job's `total_bytes` is exactly this object's size.
+    let size = jobs.get(job_id).map(|j| j.total_bytes).unwrap_or(0);
+    download_object(
+        jobs,
+        job_id,
+        bucket,
+        key,
+        local_path,
+        size,
+        cancel_token,
+        app_handle,
+    )
+    .await
+}
+
+// ─── Download: directory ──────────────────────────────────────────────────────
+
+async fn run_download_dir(
+    jobs: &Arc<DashMap<String, TransferJobState>>,
+    job_id: &str,
+    bucket: &s3::Bucket,
+    prefix: &str,
+    dest_root: &std::path::Path,
+    cancel_token: &CancellationToken,
+    app_handle: &AppHandle,
+) -> Result<(), S3Error> {
+    if cancel_token.is_cancelled() {
+        return Err(S3Error::TransferCancelled);
+    }
+
+    // Create the destination root so an "empty" prefix still yields a folder.
+    tokio::fs::create_dir_all(dest_root)
+        .await
+        .map_err(|e| S3Error::IoError(e.to_string()))?;
+
+    // List recursively (no delimiter). Any list error fails the job — a partial
+    // tree must never report Completed (a cross-pane move would then delete the
+    // un-downloaded S3 source).
+    let results = bucket
+        .list(prefix.to_string(), None)
+        .await
+        .map_err(|e| S3Error::OperationError(format!("S3 list failed for {prefix}: {e}")))?;
+
+    for result in &results {
+        for obj in &result.contents {
+            if cancel_token.is_cancelled() {
+                return Err(S3Error::TransferCancelled);
+            }
+            // Skip the zero-byte folder marker keys (they're not real files).
+            if obj.key.ends_with('/') {
+                continue;
+            }
+            let rel = obj.key.strip_prefix(prefix).unwrap_or(&obj.key);
+            let local_path = dest_root.join(rel);
+            download_object(
+                jobs,
+                job_id,
+                bucket,
+                &obj.key,
+                &local_path,
+                obj.size,
+                cancel_token,
+                app_handle,
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Stream one object to `local_path`, adding its bytes to the job's cumulative
+/// progress. `size` is THIS object's length (a dir job passes each object's size,
+/// a file job passes the whole-job total). Increments `files_done` on success.
+#[allow(clippy::too_many_arguments)]
+async fn download_object(
+    jobs: &Arc<DashMap<String, TransferJobState>>,
+    job_id: &str,
+    bucket: &s3::Bucket,
+    key: &str,
+    local_path: &std::path::Path,
+    size: u64,
     cancel_token: &CancellationToken,
     app_handle: &AppHandle,
 ) -> Result<(), S3Error> {
@@ -1024,7 +1223,7 @@ async fn run_download_file(
         .await
         .map_err(|e| S3Error::IoError(format!("Cannot create {}: {e}", local_path.display())))?;
 
-    let total_size = jobs.get(job_id).map(|j| j.total_bytes).unwrap_or(0);
+    let total_size = size;
 
     let download_result: Result<(), S3Error> = async {
         if total_size == 0 {

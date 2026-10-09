@@ -139,6 +139,16 @@ export function UnifiedTabBar() {
       useS3Store.getState().closeSession(tabId);
     }
 
+    // An explorer tab (sftp/s3) in dual-pane mode also owns a local pane keyed
+    // `local:<tabId>`. Tear it down too, so its browsing state doesn't linger in
+    // local-store after the tab is gone. Establishes the invariant that closing
+    // a tab releases ALL of its panes — which the Phase 2 ghost-restore relies
+    // on. No-op in single-pane mode (the pane was never created).
+    if (tab.type === "sftp" || tab.type === "s3") {
+      const { useLocalStore } = await import("../../stores/local-store");
+      useLocalStore.getState().closePane(`local:${tabId}`);
+    }
+
     removeTab(tabId);
   };
 
@@ -336,7 +346,7 @@ export function UnifiedTabBar() {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function collectLayoutIds(node: import("../../types").LayoutNode): string[] {
-  if (node.type === "pane") return [node.sessionId];
+  if (node.type === "pane") return [node.content.sessionId];
   return [...collectLayoutIds(node.children[0]), ...collectLayoutIds(node.children[1])];
 }
 
@@ -345,5 +355,5 @@ function getFirstSessionIdFromTab(tabId: string): string | null {
   if (!tab) return null;
   let node = tab.layout;
   while (node.type === "split") node = node.children[0];
-  return node.sessionId;
+  return node.content.sessionId;
 }

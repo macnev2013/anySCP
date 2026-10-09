@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { SftpEntry, SftpClipboard } from "../types";
+import type { ExplorerEntry, ExplorerClipboard } from "../types/explorer";
 
 // ─── Session shape ────────────────────────────────────────────────────────────
 
@@ -13,7 +13,9 @@ export interface SftpSession {
   /** Configured initial directory for this host's file browser (empty = home).
    *  May contain a leading `~` to expand against the remote home directory. */
   startDirectory: string;
-  entries: SftpEntry[];
+  /** Directory listing, normalized to ExplorerEntry (the provider maps it from
+   *  the backend-native SftpEntry). */
+  entries: ExplorerEntry[];
   loading: boolean;
   error: string | null;
   sortBy: "name" | "size" | "modified";
@@ -25,14 +27,14 @@ export interface SftpSession {
 interface SftpState {
   sessions: Map<string, SftpSession>;
   activeSftpSessionId: string | null;
-  clipboard: SftpClipboard | null;
+  clipboard: ExplorerClipboard | null;
 
   openSession: (sftpSessionId: string, sshSessionId: string, label: string, username?: string, sudoMode?: boolean, startDirectory?: string) => void;
   closeSession: (sftpSessionId: string) => void;
   /** Replace an existing session's ID in-place (used by sudo toggle). */
   swapSession: (oldId: string, newId: string, sudoMode: boolean) => void;
   setActiveSftpSession: (id: string | null) => void;
-  setEntries: (sftpSessionId: string, path: string, entries: SftpEntry[]) => void;
+  setEntries: (sftpSessionId: string, path: string, entries: ExplorerEntry[]) => void;
   setLoading: (sftpSessionId: string, loading: boolean) => void;
   setError: (sftpSessionId: string, error: string | null) => void;
   setSort: (
@@ -40,7 +42,7 @@ interface SftpState {
     sortBy: "name" | "size" | "modified",
     sortAsc: boolean,
   ) => void;
-  setClipboard: (clipboard: SftpClipboard | null) => void;
+  setClipboard: (clipboard: ExplorerClipboard | null) => void;
 }
 
 // ─── Store ────────────────────────────────────────────────────────────────────

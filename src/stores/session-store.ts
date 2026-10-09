@@ -7,69 +7,19 @@ import type {
   LayoutNode,
   SplitDirection,
 } from "../types";
+import {
+  replacePane,
+  removePane,
+  updateRatioAtPath,
+  containsSession,
+  collectSessionIds,
+} from "../lib/layout-tree";
+
+// Re-exported so existing importers (e.g. UnifiedTabBar) keep working while the
+// helpers live in the shared layout-tree module.
+export { countPanes, getTopDirection } from "../lib/layout-tree";
 
 // ─── Layout tree helpers ─────────────────────────────────────────────────────
-
-function replacePane(
-  node: LayoutNode,
-  targetSessionId: string,
-  replacement: LayoutNode,
-): LayoutNode {
-  if (node.type === "pane") {
-    return node.sessionId === targetSessionId ? replacement : node;
-  }
-  return {
-    ...node,
-    children: [
-      replacePane(node.children[0], targetSessionId, replacement),
-      replacePane(node.children[1], targetSessionId, replacement),
-    ],
-  };
-}
-
-function removePane(
-  node: LayoutNode,
-  targetSessionId: string,
-): LayoutNode | null {
-  if (node.type === "pane") {
-    return node.sessionId === targetSessionId ? null : node;
-  }
-  const [left, right] = node.children;
-  if (left.type === "pane" && left.sessionId === targetSessionId) return right;
-  if (right.type === "pane" && right.sessionId === targetSessionId) return left;
-  const newLeft = removePane(left, targetSessionId);
-  const newRight = removePane(right, targetSessionId);
-  if (newLeft === null) return right;
-  if (newRight === null) return left;
-  return { ...node, children: [newLeft, newRight] };
-}
-
-function updateRatioAtPath(
-  node: LayoutNode,
-  path: number[],
-  ratio: number,
-): LayoutNode {
-  if (path.length === 0 && node.type === "split") {
-    return { ...node, ratio };
-  }
-  if (node.type === "pane" || path.length === 0) return node;
-  const [idx, ...rest] = path;
-  const newChildren = [...node.children] as [LayoutNode, LayoutNode];
-  newChildren[idx] = updateRatioAtPath(newChildren[idx], rest, ratio);
-  return { ...node, children: newChildren };
-}
-
-/** Count total panes in a layout tree. */
-export function countPanes(node: LayoutNode): number {
-  if (node.type === "pane") return 1;
-  return countPanes(node.children[0]) + countPanes(node.children[1]);
-}
-
-/** Get the top-level split direction (null if single pane). */
-export function getTopDirection(node: LayoutNode): SplitDirection | null {
-  if (node.type === "pane") return null;
-  return node.direction;
-}
 
 /** Find which tab a session belongs to. */
 function findTabForSession(
@@ -80,17 +30,6 @@ function findTabForSession(
     if (containsSession(tab.layout, sessionId)) return tabId;
   }
   return null;
-}
-
-function containsSession(node: LayoutNode, sessionId: string): boolean {
-  if (node.type === "pane") return node.sessionId === sessionId;
-  return containsSession(node.children[0], sessionId) || containsSession(node.children[1], sessionId);
-}
-
-/** Collect all session IDs from a layout tree. */
-function collectSessionIds(node: LayoutNode): string[] {
-  if (node.type === "pane") return [node.sessionId];
-  return [...collectSessionIds(node.children[0]), ...collectSessionIds(node.children[1])];
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -143,7 +82,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       // New connection = new layout tree entry
       const tabs = new Map(state.tabs);
       tabs.set(id, {
-        layout: { type: "pane", sessionId: id },
+        layout: { type: "pane", content: { kind: "terminal", sessionId: id } },
         label: `${hostConfig.username}@${hostConfig.host}`,
       });
 
@@ -269,8 +208,8 @@ export const useSessionStore = create<SessionState>((set) => ({
         direction,
         ratio: 0.5,
         children: [
-          { type: "pane", sessionId: targetSessionId },
-          { type: "pane", sessionId: newSessionId },
+          { type: "pane", content: { kind: "terminal", sessionId: targetSessionId } },
+          { type: "pane", content: { kind: "terminal", sessionId: newSessionId } },
         ],
       };
 

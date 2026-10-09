@@ -678,9 +678,18 @@ function TerminalSettings() {
 function ExplorerSettings() {
   const doubleClickAction = useSettingsStore((s) => s.explorerDoubleClickAction);
   const setDoubleClickAction = useSettingsStore((s) => s.setExplorerDoubleClickAction);
+  const dualPane = useSettingsStore((s) => s.explorerDualPane);
+  const setDualPane = useSettingsStore((s) => s.setExplorerDualPane);
 
   return (
     <SettingsGroup>
+      <SettingRow>
+        <div>
+          <p className={LABEL_CLASS}>Dual-pane Explorer</p>
+          <p className={DESC_CLASS}>Show the local filesystem alongside the remote, side by side (like WinSCP)</p>
+        </div>
+        <Toggle id="s-dual-pane" checked={dualPane} onChange={setDualPane} />
+      </SettingRow>
       <SettingRow>
         <div>
           <p className={LABEL_CLASS}>Double-click a File</p>

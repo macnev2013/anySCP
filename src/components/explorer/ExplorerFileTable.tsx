@@ -25,6 +25,8 @@ import {
   Info,
   Link2,
   AlertTriangle,
+  ArrowRightLeft,
+  CornerLeftUp,
 } from "lucide-react";
 import { ModalShell, BTN_GHOST, BTN_DANGER } from "../shared/ModalShell";
 import type {
@@ -32,6 +34,7 @@ import type {
   ExplorerClipboard,
   FileSystemProvider,
   ChmodResult,
+  CrossPaneTarget,
 } from "../../types/explorer";
 import { ContextMenu } from "../shared/ContextMenu";
 import type { ContextMenuItem } from "../shared/ContextMenu";
@@ -41,6 +44,8 @@ import {
   type EditorConfig,
 } from "../../stores/settings-store";
 import { isEditableInEditor } from "../../lib/file-types";
+import { closestAtPoint } from "../../lib/hit-test";
+import { useDragStore } from "../../stores/drag-store";
 import { FilePropertiesDialog } from "./FilePropertiesDialog";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -87,11 +92,18 @@ interface ExplorerFileTableProps {
    *  elsewhere); a plain drag stays an in-app move. Absent for providers
    *  without OS drag-out support (e.g. SCP/S3). */
   onDragOut?: (entries: ExplorerEntry[]) => void;
+  /** Sibling pane in the dual-pane layout, enabling "Copy to <sibling>". Absent
+   *  in single-pane mode and for the S3 pane. */
+  crossPane?: CrossPaneTarget;
   /** Current directory path/prefix. Used to reset scroll on navigation while
    *  preserving it across same-directory refreshes (e.g. after a chmod). */
   currentPath?: string;
   loading?: boolean;
   busy?: boolean;
+  /** This pane is one of a split (dual-pane). Splits stay compact — short date
+   *  only — since space is tight and the filename matters most; a single pane
+   *  can expand to the full date+time when wide. */
+  dense?: boolean;
 }
 
 interface ContextMenuState {
@@ -120,6 +132,48 @@ function formatModified(unix: number | null): string {
   if (unix === null) return "—";
   const date = new Date(unix * 1000);
   return `${MODIFIED_DATE_FMT.format(date)} ${MODIFIED_TIME_FMT.format(date)}`;
+}
+
+// Compact, date-only timestamp for narrow panes (drops the time). `dateStyle:
+// "short"` yields the system locale's own canonical short date — e.g. 7/26/26
+// (en-US), 26.07.26 (de-DE), 2026/07/26 (ja-JP).
+const MODIFIED_SHORT_FMT = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "short",
+});
+function formatModifiedShort(unix: number | null): string {
+  if (unix === null) return "—";
+  return MODIFIED_SHORT_FMT.format(new Date(unix * 1000));
+}
+
+/** Compact octal mode for narrow panes, e.g. 0o644 → "644", 0o4755 → "4755". */
+function octalMode(mode: number): string {
+  return (mode & 0o7777).toString(8).padStart(3, "0");
+}
+
+// Responsive column classes (each pane is its own @container). Name flexes with
+// a 7rem minimum; the others are fixed-width and SNAP show/hide at thresholds set
+// so a column only appears once there's room for it plus Name's minimum (no
+// overflow/scroll). Narrowing drops Mode first, then Date. Header and body share
+// these so columns stay aligned.
+// Sentinel selection id for the pinned ".." row, so single-click selects it
+// (visual feedback, like every other row) without it being a real entry —
+// `selectedEntries` filters against the listing, so this never leaks into
+// copy/cut/delete/download.
+const UP_ROW_ID = "\u0000parent";
+
+const COL_NAME = "flex-1 min-w-[7rem] truncate";
+const COL_MODIFIED = "hidden @sm:block w-20 shrink-0";
+const COL_PERMS = "hidden @md:block w-16 @2xl:w-28 shrink-0";
+
+/** Owner-execute bit — the "is this runnable" signal, shown as a +x badge on
+ *  files in the compact octal view (directories always have it, so it's noise
+ *  there). */
+function isExecutableFile(entry: ExplorerEntry): boolean {
+  return (
+    entry.entryType === "File" &&
+    entry.permissions != null &&
+    (entry.permissions & 0o100) !== 0
+  );
 }
 
 function EntryIcon({ entry }: { entry: ExplorerEntry }) {
@@ -222,9 +276,15 @@ function RenameRow({
 function NewFolderRow({
   onCommit,
   onCancel,
+  colDate,
+  colPerms,
 }: {
   onCommit: (name: string) => void;
   onCancel: () => void;
+  // The size/date/perms column classes so the input row's trailing spacers line
+  // up with the listing below it (date/perms are hidden at narrow widths).
+  colDate: string;
+  colPerms: string;
 }) {
   const [value, setValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -268,9 +328,9 @@ function NewFolderRow({
         ].join(" ")}
         aria-label="New folder name"
       />
-      <span className="w-20" />
-      <span className="w-44" />
-      <span className="w-24" />
+      <span className="w-20 shrink-0" />
+      <span className={colDate} />
+      <span className={colPerms} />
     </div>
   );
 }
@@ -278,9 +338,14 @@ function NewFolderRow({
 function NewFileRow({
   onCommit,
   onCancel,
+  colDate,
+  colPerms,
 }: {
   onCommit: (name: string) => void;
   onCancel: () => void;
+  // See NewFolderRow: keep the trailing spacers aligned with the listing columns.
+  colDate: string;
+  colPerms: string;
 }) {
   const [value, setValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -324,9 +389,9 @@ function NewFileRow({
         ].join(" ")}
         aria-label="New file name"
       />
-      <span className="w-20" />
-      <span className="w-44" />
-      <span className="w-24" />
+      <span className="w-20 shrink-0" />
+      <span className={colDate} />
+      <span className={colPerms} />
     </div>
   );
 }
@@ -359,9 +424,21 @@ export function ExplorerFileTable({
   onMoveEntries,
   onCopyEntries,
   onDragOut,
+  crossPane,
   currentPath,
   loading,
+  dense,
 }: ExplorerFileTableProps) {
+  // Date column: split panes stay short; a single pane grows to the full
+  // date+time at ≥48rem (where Name still dominates). The header label and the
+  // body text switch at the same @3xl breakpoint.
+  const colDate = dense
+    ? COL_MODIFIED
+    : `${COL_MODIFIED} @3xl:w-52`;
+  // Like the date: a dense (dual) pane stays on the short "Mode"/"Cls" form and
+  // narrow width by default — no need to drag the split narrower — while a
+  // single/zoomed pane keeps the width-driven "Permissions"/"Class".
+  const colPerms = dense ? "hidden @md:block w-16 shrink-0" : COL_PERMS;
   const caps = provider.capabilities;
   const editors = useSettingsStore((s) => s.editors);
   const defaultEditorId = useSettingsStore((s) => s.defaultEditorId);
@@ -382,11 +459,20 @@ export function ExplorerFileTable({
   // enabled (for file-drop uploads), which suppresses HTML5 drag events in the
   // webview — so internal move/copy is driven by pointer events, not `draggable`.
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  // Highlight driven by a cross-pane drag happening in the OTHER pane: it targets
+  // a folder/".." in THIS pane, so we light that row up too. Only this pane's rows
+  // re-render (the selector returns null unless we're the drag's target pane).
+  const crossDragTargetId = useDragStore((s) =>
+    s.target?.paneKey === provider.sessionId ? s.target.entryId : null,
+  );
   const [dragGhost, setDragGhost] = useState<{
     x: number;
     y: number;
     count: number;
     copy: boolean;
+    /** Cursor is over the sibling pane (a cross-pane transfer, not an in-pane
+     *  move) — changes the ghost label to name the destination. */
+    cross: boolean;
   } | null>(null);
 
   // Reset scroll to the top only when the directory actually changes. Same-dir
@@ -429,6 +515,12 @@ export function ExplorerFileTable({
   // Keyboard navigation walks this on every arrow keydown — derive it once per
   // sort change instead of rebuilding a fresh array per keypress.
   const sortedIds = useMemo(() => sortedEntries.map((en) => en.id), [sortedEntries]);
+
+  // Pinned ".." row: the collapsed path bar makes "go up" hard to reach, so
+  // offer the file-manager staple. Shown whenever a parent exists — at the root
+  // `parentPath` returns the path unchanged, so this is false there.
+  const parentDir = currentPath != null ? provider.parentPath(currentPath) : null;
+  const showUpRow = parentDir != null && parentDir !== currentPath;
 
   const handleSortClick = (col: "name" | "size" | "modified") => {
     if (sortBy === col) {
@@ -592,14 +684,19 @@ export function ExplorerFileTable({
       const startY = e.clientY;
       let started = false;
       let moving = false;
+      // Tracks whether the cursor is currently over the sibling pane, so the
+      // ⌥-key handler (which has no pointer position) keeps the ghost on "copy"
+      // there — a cross-pane drop is always a transfer, never a move.
+      let overSibling = false;
 
       // Resolve the directory row under a point to a valid drop target id, or
       // null (not a dir, or dropping onto self / into the dragged subtree).
       const folderTargetAt = (x: number, y: number): string | null => {
-        const row = (
-          document.elementFromPoint(x, y) as HTMLElement | null
-        )?.closest("[data-entry-row]") as HTMLElement | null;
-        if (!row || row.dataset.entryType !== "Directory") return null;
+        const row = closestAtPoint(x, y, "[data-entry-row]");
+        if (!row) return null;
+        // Dropping onto the pinned ".." row moves/copies into the parent dir.
+        if (row.dataset.entryUp) return parentDir;
+        if (row.dataset.entryType !== "Directory") return null;
         const target = entries.find(
           (en) =>
             en.name === row.dataset.entryName && en.entryType === "Directory",
@@ -612,6 +709,39 @@ export function ExplorerFileTable({
         )
           return null;
         return target.id;
+      };
+
+      // Whether (x,y) is over the sibling pane — the cross-pane transfer drop
+      // zone. A drop there copies the selection into the other pane's cwd via
+      // the coordinator (local→remote upload, remote→local download).
+      const overSiblingPane = (x: number, y: number): boolean => {
+        if (!crossPane) return false;
+        const paneEl = closestAtPoint(x, y, "[data-explorer-pane-key]");
+        return !!paneEl && paneEl.dataset.explorerPaneKey !== provider.sessionId;
+      };
+
+      // The folder/".." under the cursor in the SIBLING pane, as a destination dir
+      // (its data-entry-id) — so a cross-pane drop lands INSIDE that folder, not
+      // just the sibling's cwd. undefined = no folder under cursor → sibling cwd.
+      const siblingTargetDirAt = (x: number, y: number): string | undefined => {
+        const row = closestAtPoint(x, y, "[data-entry-row]");
+        if (!row) return undefined;
+        if (row.dataset.entryUp || row.dataset.entryType === "Directory") {
+          // Return the id verbatim (not `|| undefined`): the S3 bucket root is the
+          // EMPTY prefix "", a valid target — treating "" as "no target" would
+          // send an S3 ".." drop to the current dir instead of the root.
+          return row.dataset.entryId;
+        }
+        return undefined;
+      };
+      // Paint the sibling pane's hovered folder via the shared drag store (its
+      // own component owns the highlight; we can't reach its local state).
+      const paintSibling = (x: number, y: number): void => {
+        const paneEl = closestAtPoint(x, y, "[data-explorer-pane-key]");
+        const key = paneEl?.dataset.explorerPaneKey;
+        const dir = siblingTargetDirAt(x, y);
+        // dir can be "" (S3 root) — test for undefined, not falsy.
+        useDragStore.getState().setTarget(key && dir !== undefined ? { paneKey: key, entryId: dir } : null);
       };
 
       // Hand off to the native OS download drag (only once).
@@ -647,12 +777,22 @@ export function ExplorerFileTable({
             dragOut();
             return;
           }
-          setDragOverId(folderTargetAt(ev.clientX, ev.clientY));
+          overSibling = overSiblingPane(ev.clientX, ev.clientY);
+          if (overSibling) {
+            setDragOverId(null);
+            paintSibling(ev.clientX, ev.clientY);
+          } else {
+            useDragStore.getState().setTarget(null);
+            setDragOverId(folderTargetAt(ev.clientX, ev.clientY));
+          }
           setDragGhost({
             x: ev.clientX,
             y: ev.clientY,
             count: dragEntries.length,
-            copy: ev.altKey,
+            // Cross-pane: plain drop = copy, ⌥ = move. In-pane: plain = move,
+            // ⌥ = copy. So the sense of ⌥ flips depending on where you are.
+            copy: overSibling ? !ev.altKey : ev.altKey,
+            cross: overSibling,
           });
         }
       };
@@ -666,35 +806,53 @@ export function ExplorerFileTable({
       // Reflect Alt (copy) the instant it's pressed/released, without waiting for
       // the next pointer move.
       const onKey = (ev: KeyboardEvent) => {
-        if (moving) setDragGhost((g) => (g ? { ...g, copy: ev.altKey } : g));
+        if (moving)
+          setDragGhost((g) => (g ? { ...g, copy: overSibling ? !ev.altKey : ev.altKey } : g));
       };
 
       const onUp = (ev: PointerEvent) => {
         if (moving) {
-          const targetId = folderTargetAt(ev.clientX, ev.clientY);
-          if (targetId) {
-            const handler = ev.altKey ? onCopyEntries : onMoveEntries;
-            void handler?.(
-              dragEntries.map((s) => s.id),
-              targetId,
-            );
+          if (overSiblingPane(ev.clientX, ev.clientY)) {
+            // Dropped on the other pane → transfer across, into the folder/".."
+            // under the cursor if any (else the sibling's cwd). ⌥ makes it a move
+            // (source deleted once the transfer lands); plain drop copies.
+            const dir = siblingTargetDirAt(ev.clientX, ev.clientY);
+            if (ev.altKey) crossPane?.moveTo(dragEntries, dir);
+            else crossPane?.copyTo(dragEntries, dir);
+          } else {
+            const targetId = folderTargetAt(ev.clientX, ev.clientY);
+            if (targetId) {
+              const handler = ev.altKey ? onCopyEntries : onMoveEntries;
+              void handler?.(
+                dragEntries.map((s) => s.id),
+                targetId,
+              );
+            }
           }
         }
         teardown();
       };
 
+      // A cancelled pointer stream (OS/browser interruption) never fires
+      // pointerup — tear down without performing a drop so listeners, the ghost,
+      // and the sibling highlight don't leak.
+      const onCancel = () => teardown();
+
       function teardown() {
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onCancel);
         window.removeEventListener("keydown", onKey);
         window.removeEventListener("keyup", onKey);
         document.removeEventListener("mouseleave", onWindowLeave);
         setDragOverId(null);
+        useDragStore.getState().setTarget(null);
         setDragGhost(null);
       }
 
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
       window.addEventListener("keydown", onKey);
       window.addEventListener("keyup", onKey);
       document.addEventListener("mouseleave", onWindowLeave);
@@ -704,6 +862,9 @@ export function ExplorerFileTable({
       onDragOut,
       onMoveEntries,
       onCopyEntries,
+      crossPane,
+      parentDir,
+      provider.sessionId,
       selectedIds,
       selectedEntries,
       entries,
@@ -757,15 +918,63 @@ export function ExplorerFileTable({
 
   // ─── Context menu items ───────────────────────────────────────────────────
 
-  const canPaste =
-    caps.canCopyPaste &&
-    clipboard !== null &&
-    clipboard.sourceSessionId === provider.sessionId;
+  // Paste is offered when this pane holds its own copy/cut, OR when the sibling
+  // pane holds the most-recent cross-pane copy. The sibling case reads a ref, so
+  // it's a fresh call at menu-open / keypress time rather than reactive state.
+  const canPaste = () =>
+    (caps.canCopyPaste &&
+      clipboard !== null &&
+      clipboard.sourceSessionId === provider.sessionId) ||
+    (crossPane?.hasSiblingClipboard() ?? false);
+
+  // Copy / cut / paste / select-all shortcuts, shared by the row handler (fires
+  // when a row is focused) and the scroll-container handler (fires when the pane
+  // is focused with no row — e.g. pasting into an empty target pane cross-pane).
+  // Returns true when it consumed the event.
+  const handleClipboardShortcut = (e: React.KeyboardEvent): boolean => {
+    if (!(e.metaKey || e.ctrlKey)) return false;
+    if ((e.target as Element).tagName === "INPUT") return false;
+    if (e.key === "a") {
+      e.preventDefault();
+      setSelectedIds(new Set(sortedEntries.map((en) => en.id)));
+      return true;
+    }
+    // Same-pane copy/paste needs a provider that can copy/move; a cross-pane
+    // sibling (crossPane) enables the clipboard for transfer even when it can't
+    // (e.g. S3 — ⌘C/⌘X seed the shared clipboard, ⌘V pulls from the sibling).
+    if (!caps.canCopyPaste && !crossPane) return false;
+    if (e.key === "c" && selectedEntries.length > 0) {
+      e.preventDefault();
+      onSetClipboard({ entries: selectedEntries, operation: "copy", sourceSessionId: provider.sessionId });
+      return true;
+    }
+    if (e.key === "x" && selectedEntries.length > 0) {
+      e.preventDefault();
+      onSetClipboard({ entries: selectedEntries, operation: "cut", sourceSessionId: provider.sessionId });
+      return true;
+    }
+    if (e.key === "v" && canPaste()) {
+      e.preventDefault();
+      onPaste?.();
+      return true;
+    }
+    return false;
+  };
+
+  // Open the inline new-file/new-folder row in THIS pane — the dispatch carries
+  // the pane key so the row opens in the targeted pane.
+  const startCreate = (kind: "file" | "folder") => {
+    document.dispatchEvent(
+      new CustomEvent(`explorer:new-${kind}`, {
+        detail: { paneKey: provider.sessionId },
+      }),
+    );
+  };
 
   const buildMenuItems = (entry: ExplorerEntry | null): ContextMenuItem[] => {
     if (!entry) {
       const items: ContextMenuItem[] = [];
-      if (canPaste) {
+      if (canPaste()) {
         items.push({
           label: "Paste",
           icon: ClipboardPaste,
@@ -782,18 +991,14 @@ export function ExplorerFileTable({
         items.push({
           label: "New File",
           icon: File,
-          onClick: () =>
-            onCreateFile?.("") ||
-            document.dispatchEvent(new CustomEvent("explorer:new-file")),
+          onClick: () => startCreate("file"),
         });
       }
       if (caps.canCreateFolder) {
         items.push({
           label: "New Folder",
           icon: FolderPlus,
-          onClick: () =>
-            onCreateFolder?.("") ||
-            document.dispatchEvent(new CustomEvent("explorer:new-folder")),
+          onClick: () => startCreate("folder"),
         });
       }
       return items;
@@ -812,7 +1017,14 @@ export function ExplorerFileTable({
           onClick: () => onDownloadMany(selectedEntries),
         });
       }
-      if (caps.canCopyPaste) {
+      if (crossPane) {
+        items.push({
+          label: `Copy ${count} items to ${crossPane.siblingLabel}`,
+          icon: ArrowRightLeft,
+          onClick: () => crossPane.copyTo(selectedEntries),
+        });
+      }
+      if (caps.canCopyPaste || crossPane) {
         items.push({
           label: `Copy ${count} items`,
           icon: Copy,
@@ -833,7 +1045,7 @@ export function ExplorerFileTable({
               sourceSessionId: provider.sessionId,
             }),
         });
-        if (canPaste) {
+        if (canPaste()) {
           items.push({
             label: "Paste",
             icon: ClipboardPaste,
@@ -898,6 +1110,14 @@ export function ExplorerFileTable({
       }
     }
 
+    if (crossPane) {
+      items.push({
+        label: `Copy to ${crossPane.siblingLabel}`,
+        icon: ArrowRightLeft,
+        onClick: () => crossPane.copyTo([entry]),
+      });
+    }
+
     if (caps.canPresignUrl && entry.entryType === "File") {
       items.push({
         label: "Copy Presigned URL",
@@ -942,7 +1162,7 @@ export function ExplorerFileTable({
             sourceSessionId: provider.sessionId,
           }),
       });
-      if (canPaste) {
+      if (canPaste()) {
         items.push({
           label: "Paste",
           icon: ClipboardPaste,
@@ -1047,12 +1267,12 @@ export function ExplorerFileTable({
           rather than a child, so the scroller stays a direct flex child of the
           pane column and scrolls. The right padding reserves the scrollbar
           gutter so the columns line up with the rows beneath. */}
-      <div className="shrink-0 bg-bg-surface border-b border-border flex items-center gap-2 py-2 pl-3 pr-[calc(0.75rem+var(--scrollbar-size))]">
+      <div className="shrink-0 bg-bg-surface border-b border-border flex items-center gap-2 h-9 pl-3 pr-[calc(0.75rem+var(--scrollbar-size))] whitespace-nowrap">
         <span className="w-5 shrink-0" />
 
         <button
           data-testid="explorer-sort-name"
-          className={`flex-1 text-left ${thClass("name")}`}
+          className={`${COL_NAME} text-left ${thClass("name")}`}
           onClick={() => handleSortClick("name")}
           aria-sort={
             sortBy === "name" ? (sortAsc ? "ascending" : "descending") : "none"
@@ -1063,7 +1283,7 @@ export function ExplorerFileTable({
 
         <button
           data-testid="explorer-sort-size"
-          className={`w-20 text-right ${thClass("size")}`}
+          className={`w-20 text-right whitespace-nowrap ${thClass("size")}`}
           onClick={() => handleSortClick("size")}
           aria-sort={
             sortBy === "size" ? (sortAsc ? "ascending" : "descending") : "none"
@@ -1074,7 +1294,7 @@ export function ExplorerFileTable({
 
         <button
           data-testid="explorer-sort-modified"
-          className={`w-44 text-center ${thClass("modified")}`}
+          className={`${colDate} truncate text-center ${thClass("modified")}`}
           onClick={() => handleSortClick("modified")}
           aria-sort={
             sortBy === "modified"
@@ -1084,17 +1304,34 @@ export function ExplorerFileTable({
               : "none"
           }
         >
-          <SortArrow col="modified" gap="mr-0.5" /> Modified{" "}
+          <SortArrow col="modified" gap="mr-0.5" />{" "}
+          {dense ? (
+            "Date"
+          ) : (
+            <>
+              <span className="@3xl:hidden">Date</span>
+              <span className="hidden @3xl:inline">Modified</span>
+            </>
+          )}{" "}
           <SortArrow col={null} gap="ml-0.5" />
         </button>
 
-        {/* Last column: Permissions for SFTP, Class for S3 */}
-        <span className="w-24 text-[length:var(--text-xs)] font-semibold uppercase tracking-wide text-text-muted select-none">
-          {caps.hasPermissions
-            ? "Permissions"
-            : caps.hasStorageClass
-              ? "Class"
-              : ""}
+        {/* Last column: Permissions for SFTP, Class for S3 — minifies to "Mode"/
+            "Cls" (octal) on narrow AND on dense (dual) panes; full form on a
+            single/zoomed pane. */}
+        <span className={`${colPerms} text-[length:var(--text-xs)] font-semibold uppercase tracking-wide text-text-muted select-none truncate`}>
+          {dense ? (
+            caps.hasPermissions ? "Mode" : caps.hasStorageClass ? "Cls" : ""
+          ) : (
+            <>
+              <span className="@2xl:hidden">
+                {caps.hasPermissions ? "Mode" : caps.hasStorageClass ? "Cls" : ""}
+              </span>
+              <span className="hidden @2xl:inline">
+                {caps.hasPermissions ? "Permissions" : caps.hasStorageClass ? "Class" : ""}
+              </span>
+            </>
+          )}
         </span>
       </div>
 
@@ -1102,10 +1339,21 @@ export function ExplorerFileTable({
         ref={tableRef}
         // -scroll, not -auto: the header above reserves the scrollbar gutter,
         // so short listings would otherwise sit 6px left of their headers.
-        className={`flex-1 overflow-y-scroll${dragGhost ? " select-none" : ""}`}
+        className={`flex-1 overflow-y-scroll overflow-x-hidden outline-none${dragGhost ? " select-none" : ""}`}
+        // Focusable so keyboard copy/cut/paste work when the pane has focus but
+        // no row does — e.g. a cross-pane ⌘V into an empty target pane. Only act
+        // on events targeting the container itself; row-focused events are
+        // handled by the row (and would otherwise double-fire as they bubble).
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.target === e.currentTarget) handleClipboardShortcut(e);
+        }}
         onClick={(e) => {
           const target = e.target as Element;
-          if (!target.closest("[data-entry-row]")) setSelectedIds(new Set());
+          if (!target.closest("[data-entry-row]")) {
+            setSelectedIds(new Set());
+            e.currentTarget.focus();
+          }
         }}
         onContextMenu={(e) => {
           const target = e.target as Element;
@@ -1120,58 +1368,23 @@ export function ExplorerFileTable({
           <NewFileRow
             onCommit={(name) => onCreateFile?.(name)}
             onCancel={() => onCancelCreateFile?.()}
+            colDate={colDate}
+            colPerms={colPerms}
           />
         )}
         {creatingFolder && (
           <NewFolderRow
             onCommit={(name) => onCreateFolder?.(name)}
             onCancel={() => onCancelCreateFolder?.()}
+            colDate={colDate}
+            colPerms={colPerms}
           />
         )}
 
-        {/* Rows */}
-        {sortedEntries.length === 0 && !creatingFolder && !creatingFile ? (
-          <div className="flex flex-col items-center justify-center flex-1 min-h-[200px] gap-3 py-12">
-            <Folder
-              size={30}
-              strokeWidth={1.2}
-              className="text-text-muted/30"
-              aria-hidden="true"
-            />
-            <p className="text-[length:var(--text-sm)] text-text-muted">
-              This folder is empty
-            </p>
-            <div className="flex items-center gap-2">
-              {caps.canCreateFile && (
-                <button
-                  onClick={() =>
-                    document.dispatchEvent(new CustomEvent("explorer:new-file"))
-                  }
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[length:var(--text-xs)] font-medium text-text-muted hover:text-text-secondary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <FilePlus size={13} strokeWidth={2} aria-hidden="true" />
-                  New File
-                </button>
-              )}
-              {caps.canCreateFolder && (
-                <button
-                  onClick={() =>
-                    document.dispatchEvent(
-                      new CustomEvent("explorer:new-folder"),
-                    )
-                  }
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[length:var(--text-xs)] font-medium text-text-muted hover:text-text-secondary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <FolderPlus size={13} strokeWidth={2} aria-hidden="true" />
-                  New Folder
-                </button>
-              )}
-            </div>
-            <p className="text-[length:var(--text-2xs)] text-text-muted/60">
-              Right-click for more options
-            </p>
-          </div>
-        ) : (
+        {/* Rows — the ".." row (when not at root) is pinned above the listing so
+            it's reachable even in an empty folder, where the empty-state hint
+            still renders below it. */}
+        {(showUpRow || sortedEntries.length > 0) && (
           <div
             role="list"
             aria-label="Directory contents"
@@ -1181,6 +1394,41 @@ export function ExplorerFileTable({
                 handleContextMenu(e, null);
             }}
           >
+            {showUpRow && (
+              <div
+                role="listitem"
+                data-entry-row="true"
+                data-entry-up="true"
+                data-entry-id={parentDir ?? ""}
+                data-entry-type="Directory"
+                tabIndex={0}
+                aria-label="Parent directory"
+                title="Go to parent directory"
+                onClick={() => setSelectedIds(new Set([UP_ROW_ID]))}
+                onDoubleClick={() => onNavigate(parentDir!)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    onNavigate(parentDir!);
+                  }
+                }}
+                className={[
+                  "flex items-center gap-2 px-3 py-2 cursor-default select-none",
+                  "transition-colors duration-[var(--duration-fast)]",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                  dragOverId === parentDir || crossDragTargetId === parentDir
+                    ? "ring-2 ring-accent bg-accent/10"
+                    : selectedIds.has(UP_ROW_ID)
+                      ? "bg-accent/10 text-text-primary"
+                      : "hover:bg-bg-subtle",
+                ].join(" ")}
+              >
+                <span className="w-5 flex items-center justify-center shrink-0">
+                  <CornerLeftUp size={16} strokeWidth={1.8} className="text-text-muted shrink-0" aria-hidden="true" />
+                </span>
+                <span className={`${COL_NAME} text-[length:var(--text-sm)] text-text-muted`}>..</span>
+              </div>
+            )}
             {sortedEntries.map((entry) => {
               const isSelected = selectedIds.has(entry.id);
               return (
@@ -1189,6 +1437,7 @@ export function ExplorerFileTable({
                   role="listitem"
                   data-entry-row="true"
                   data-entry-name={entry.name}
+                  data-entry-id={entry.id}
                   data-entry-type={entry.entryType}
                   data-testid={`explorer-entry-${entry.name}`}
                   tabIndex={0}
@@ -1249,47 +1498,10 @@ export function ExplorerFileTable({
                       caps.canDelete &&
                       !isInput
                     ) {
-                      if (selectedIds.size > 0)
+                      if (selectedEntries.length > 0)
                         setConfirmDelete(selectedEntries);
                     }
-                    if (!isInput && (e.metaKey || e.ctrlKey) && e.key === "a") {
-                      e.preventDefault();
-                      setSelectedIds(new Set(sortedEntries.map((en) => en.id)));
-                    }
-                    if (!isInput && caps.canCopyPaste) {
-                      if (
-                        (e.metaKey || e.ctrlKey) &&
-                        e.key === "c" &&
-                        selectedIds.size > 0
-                      ) {
-                        e.preventDefault();
-                        onSetClipboard({
-                          entries: selectedEntries,
-                          operation: "copy",
-                          sourceSessionId: provider.sessionId,
-                        });
-                      }
-                      if (
-                        (e.metaKey || e.ctrlKey) &&
-                        e.key === "x" &&
-                        selectedIds.size > 0
-                      ) {
-                        e.preventDefault();
-                        onSetClipboard({
-                          entries: selectedEntries,
-                          operation: "cut",
-                          sourceSessionId: provider.sessionId,
-                        });
-                      }
-                      if (
-                        (e.metaKey || e.ctrlKey) &&
-                        e.key === "v" &&
-                        canPaste
-                      ) {
-                        e.preventDefault();
-                        onPaste?.();
-                      }
-                    }
+                    handleClipboardShortcut(e);
                   }}
                   // Pointer-driven drag (HTML5 DnD is suppressed by the OS
                   // drag-drop handler). Drop on a folder = move (Alt = copy);
@@ -1308,7 +1520,7 @@ export function ExplorerFileTable({
                       ? "bg-accent/10 text-text-primary"
                       : "hover:bg-bg-subtle",
                     cutIds?.has(entry.id) ? "opacity-40" : "",
-                    dragOverId === entry.id
+                    dragOverId === entry.id || crossDragTargetId === entry.id
                       ? "ring-2 ring-accent bg-accent/10"
                       : "",
                   ].join(" ")}
@@ -1319,7 +1531,7 @@ export function ExplorerFileTable({
                   </span>
 
                   {/* Name — possibly in rename mode */}
-                  <span className="flex-1 min-w-0 text-[length:var(--text-sm)] text-text-primary truncate">
+                  <span className={`${COL_NAME} text-[length:var(--text-sm)] text-text-primary`}>
                     {caps.canRename && renamingId === entry.id && onRename ? (
                       <RenameRow
                         entry={entry}
@@ -1341,32 +1553,104 @@ export function ExplorerFileTable({
                   {/* Modified — centered so it doesn't crowd the right-aligned
                       Size on its left or leave dead space before Permissions;
                       12px because mono reads visually larger than the 14px sans.
-                      Truncate + title as a safety net for wide locales (#109). */}
+                      Truncate + title as a safety net for wide locales (#109).
+                      Narrow panes show a date-only short form, then hide it. */}
                   <span
-                    className="w-44 text-center text-[length:var(--text-xs)] text-text-muted shrink-0 font-mono tracking-tight truncate"
+                    className={`${colDate} text-center text-[length:var(--text-xs)] text-text-muted font-mono tracking-tight truncate`}
                     title={formatModified(entry.modified)}
                   >
-                    {formatModified(entry.modified)}
+                    {dense ? (
+                      formatModifiedShort(entry.modified)
+                    ) : (
+                      <>
+                        <span className="@3xl:hidden">{formatModifiedShort(entry.modified)}</span>
+                        <span className="hidden @3xl:inline">{formatModified(entry.modified)}</span>
+                      </>
+                    )}
                   </span>
 
-                  {/* Permissions / Storage Class */}
+                  {/* Permissions / Storage Class — narrow panes collapse the rwx
+                      string to octal (e.g. drwxr-xr-x → 755). */}
                   <span
                     data-entry-perms={
                       caps.hasPermissions
                         ? (entry.permissionsDisplay ?? "")
                         : undefined
                     }
-                    className="w-24 font-mono text-[length:var(--text-xs)] text-text-muted shrink-0 tracking-tight whitespace-nowrap"
+                    title={
+                      caps.hasPermissions
+                        ? (entry.permissionsDisplay ?? undefined)
+                        : undefined
+                    }
+                    className={`${colPerms} font-mono text-[length:var(--text-xs)] text-text-muted tracking-tight truncate`}
                   >
-                    {caps.hasPermissions
-                      ? (entry.permissionsDisplay ?? "")
-                      : caps.hasStorageClass
-                        ? (entry.storageClass ?? "—")
-                        : ""}
+                    {caps.hasPermissions ? (
+                      (() => {
+                        const octal = (
+                          <>
+                            {entry.permissions ? octalMode(entry.permissions) : ""}
+                            {isExecutableFile(entry) && (
+                              <span className="ml-0.5 text-accent font-semibold">+x</span>
+                            )}
+                          </>
+                        );
+                        return dense ? (
+                          octal
+                        ) : (
+                          <>
+                            <span className="@2xl:hidden">{octal}</span>
+                            <span className="hidden @2xl:inline">
+                              {entry.permissionsDisplay ?? ""}
+                            </span>
+                          </>
+                        );
+                      })()
+                    ) : caps.hasStorageClass ? (
+                      (entry.storageClass ?? "—")
+                    ) : (
+                      ""
+                    )}
                   </span>
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {sortedEntries.length === 0 && !creatingFolder && !creatingFile && (
+          <div className="flex flex-col items-center justify-center min-h-[200px] gap-3 py-12">
+            <Folder
+              size={30}
+              strokeWidth={1.2}
+              className="text-text-muted/30"
+              aria-hidden="true"
+            />
+            <p className="text-[length:var(--text-sm)] text-text-muted">
+              This folder is empty
+            </p>
+            <div className="flex items-center gap-2">
+              {caps.canCreateFile && (
+                <button
+                  onClick={() => startCreate("file")}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[length:var(--text-xs)] font-medium text-text-muted hover:text-text-secondary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <FilePlus size={13} strokeWidth={2} aria-hidden="true" />
+                  New File
+                </button>
+              )}
+              {caps.canCreateFolder && (
+                <button
+                  onClick={() => startCreate("folder")}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[length:var(--text-xs)] font-medium text-text-muted hover:text-text-secondary hover:bg-bg-subtle transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <FolderPlus size={13} strokeWidth={2} aria-hidden="true" />
+                  New Folder
+                </button>
+              )}
+            </div>
+            <p className="text-[length:var(--text-2xs)] text-text-muted/60">
+              Right-click for more options
+            </p>
           </div>
         )}
       </div>
@@ -1399,15 +1683,20 @@ export function ExplorerFileTable({
         />
       )}
 
-      {/* Drag ghost for the pointer-driven move/copy, with an Alt=copy hint. */}
+      {/* Drag ghost for the pointer-driven move/copy. In-pane shows the ⌥=copy
+          hint; over the sibling pane it names the destination (⌥ there = move). */}
       {dragGhost && (
         <div
           className="fixed z-50 pointer-events-none rounded-md bg-accent px-2 py-1 text-[length:var(--text-2xs)] font-medium text-white shadow-[var(--shadow-md)]"
           style={{ left: dragGhost.x + 12, top: dragGhost.y + 8 }}
         >
-          {dragGhost.copy
-            ? `Copy ${dragGhost.count} ${dragGhost.count === 1 ? "item" : "items"}`
-            : `Move ${dragGhost.count} ${dragGhost.count === 1 ? "item" : "items"} · ⌥ to copy`}
+          {(() => {
+            const n = dragGhost.count;
+            const items = `${n} ${n === 1 ? "item" : "items"}`;
+            const verb = dragGhost.copy ? "Copy" : "Move";
+            if (dragGhost.cross) return `${verb} ${items} to ${crossPane?.siblingLabel ?? "other pane"}`;
+            return dragGhost.copy ? `Copy ${items}` : `Move ${items} · ⌥ to copy`;
+          })()}
         </div>
       )}
     </>

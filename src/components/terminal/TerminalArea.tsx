@@ -1,6 +1,6 @@
 import type { LayoutNode } from "../../types";
 import { Terminal } from "./Terminal";
-import { SplitContainer } from "./SplitContainer";
+import { WorkspaceArea } from "../workspace/WorkspaceArea";
 import { DisconnectOverlay } from "./DisconnectOverlay";
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { PaneHeader } from "./PaneHeader";
@@ -9,7 +9,6 @@ import { useTerminalSearchStore } from "../../stores/terminal-search-store";
 
 interface TerminalAreaProps {
   node: LayoutNode;
-  path?: number[];
   tabId: string;
 }
 
@@ -31,14 +30,14 @@ export function TerminalPane({ sessionId, tabId }: { sessionId: string; tabId: s
 
   // When zoomed, this pane expands to fill the entire tab area
   // while staying in the same DOM tree (no remount).
-  // Non-zoomed sibling panes get hidden by SplitContainer.
+  // Non-zoomed sibling panes get hidden by the split layout.
   return (
     <div
       className={[
         "group/pane flex flex-col rounded-lg overflow-hidden border",
         "transition-[border-color,box-shadow] duration-[var(--duration-fast)]",
         isZoomed
-          ? "fixed-zoom absolute inset-0 z-30 border-accent/40"
+          ? "fixed-zoom absolute inset-2 z-30 border-accent/40"
           : "relative h-full w-full",
         !isZoomed && isActive && hasSplits
           ? "border-accent/40 shadow-[0_0_0_1px_oklch(var(--accent)/.12)]"
@@ -69,10 +68,16 @@ export function TerminalPane({ sessionId, tabId }: { sessionId: string; tabId: s
   );
 }
 
-export function TerminalArea({ node, path = [], tabId }: TerminalAreaProps) {
-  if (node.type === "pane") {
-    return <TerminalPane sessionId={node.sessionId} tabId={tabId} />;
-  }
-
-  return <SplitContainer node={node} path={path} tabId={tabId} />;
+export function TerminalArea({ node, tabId }: TerminalAreaProps) {
+  const zoomed = useSessionStore((s) => s.zoomedPaneId !== null);
+  const setRatio = useSessionStore((s) => s.updateSplitRatio);
+  return (
+    <WorkspaceArea
+      node={node}
+      tabId={tabId}
+      zoomed={zoomed}
+      setRatio={setRatio}
+      renderPane={(content, tid) => <TerminalPane sessionId={content.sessionId} tabId={tid} />}
+    />
+  );
 }

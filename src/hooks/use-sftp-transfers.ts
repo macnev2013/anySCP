@@ -15,7 +15,7 @@ import type { TransferEvent } from "../types";
 export function useSftpTransfers() {
   const updateTransfer = useTransferStore((s) => s.updateTransfer);
   const hydrate = useTransferStore((s) => s.hydrate);
-  const setPopoverOpen = useTransferStore((s) => s.setPopoverOpen);
+  const requestAutoOpen = useTransferStore((s) => s.requestAutoOpen);
   const setHostLabel = useTransferStore((s) => s.setHostLabel);
 
   // Hydrate on mount — both SFTP and S3
@@ -74,11 +74,10 @@ export function useSftpTransfers() {
             }
           }
 
-          // Auto-open popover when a new transfer starts
+          // Auto-peek the popover when a new transfer starts (burst-backoff'd
+          // + auto-dismissing, so a manual copy spree doesn't nag).
           if (isNew && (transfer.status === "InProgress" || transfer.status === "Queued")) {
-            if (!useTransferStore.getState().popoverOpen) {
-              setPopoverOpen(true);
-            }
+            requestAutoOpen();
           }
         });
 
@@ -88,7 +87,7 @@ export function useSftpTransfers() {
 
     return () => { aborted = true; unlisten?.(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [updateTransfer, setPopoverOpen, setHostLabel]);
+  }, [updateTransfer, requestAutoOpen, setHostLabel]);
 
   // Listen for live SCP transfer events (SCP sessions share the sftp store)
   useEffect(() => {
@@ -117,11 +116,10 @@ export function useSftpTransfers() {
             }
           }
 
-          // Auto-open popover when a new transfer starts
+          // Auto-peek the popover when a new transfer starts (burst-backoff'd
+          // + auto-dismissing, so a manual copy spree doesn't nag).
           if (isNew && (transfer.status === "InProgress" || transfer.status === "Queued")) {
-            if (!useTransferStore.getState().popoverOpen) {
-              setPopoverOpen(true);
-            }
+            requestAutoOpen();
           }
         });
 
@@ -131,7 +129,7 @@ export function useSftpTransfers() {
 
     return () => { aborted = true; unlisten?.(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [updateTransfer, setPopoverOpen, setHostLabel]);
+  }, [updateTransfer, requestAutoOpen, setHostLabel]);
 
   // Listen for live S3 transfer events
   useEffect(() => {
@@ -160,11 +158,10 @@ export function useSftpTransfers() {
             }
           }
 
-          // Auto-open popover when a new transfer starts
+          // Auto-peek the popover when a new transfer starts (burst-backoff'd
+          // + auto-dismissing, so a manual copy spree doesn't nag).
           if (isNew && (transfer.status === "InProgress" || transfer.status === "Queued")) {
-            if (!useTransferStore.getState().popoverOpen) {
-              setPopoverOpen(true);
-            }
+            requestAutoOpen();
           }
         });
 
@@ -174,7 +171,7 @@ export function useSftpTransfers() {
 
     return () => { aborted = true; unlisten?.(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [updateTransfer, setPopoverOpen, setHostLabel]);
+  }, [updateTransfer, requestAutoOpen, setHostLabel]);
 }
 
 // E2E test hook — emit a synthetic transfer event so specs can drive the

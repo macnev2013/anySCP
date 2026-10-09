@@ -3,8 +3,11 @@
 // event arrived; since the backend emits one per chunk, dismissing the popover
 // during an active upload reopened it immediately — impossible to close.
 //
-// The fix auto-opens only the first time a transfer id is seen. We drive the
-// real listener (mounted globally in AppShell) with synthetic `sftp:transfer`
+// The fix auto-opens only the first time a transfer id is seen. A later change
+// (the ambient icon progress + polite popover) added an exponential backoff on
+// auto-open, so a *new* transfer arriving during the backoff window also doesn't
+// re-pop the popover — the first of a burst opens, the rest stay quiet. We drive
+// the real listener (mounted globally in AppShell) with synthetic `sftp:transfer`
 // events — exactly what the backend emits — so we can deterministically deliver
 // many InProgress updates for the same transfer without a slow upload.
 
@@ -69,8 +72,12 @@ describe("Transfer popover — no reopen on progress (issue #88)", () => {
         await browser.pause(800); // give any stray re-render time to happen
         await expect($(POPOVER)).not.toBeExisting();
 
-        // A genuinely new transfer should still auto-open (feature intact).
+        // The politeness backoff (added with the ambient progress work) also
+        // suppresses a *new* transfer that arrives right after a dismiss — a
+        // manual copy spree must not re-pop the popover the user just closed.
+        // (The first transfer of a burst still auto-opens — proven above by t1.)
         await emitTransfer({ transfer_id: "t2", bytes_transferred: 1 });
-        await expect($(POPOVER)).toBeExisting();
+        await browser.pause(300);
+        await expect($(POPOVER)).not.toBeExisting();
     });
 });

@@ -11,11 +11,6 @@
 
 export type Transport = "sftp" | "scp";
 
-/** The Tauri event channel that carries transfer progress for a transport. */
-export function transferEventName(transport: Transport): string {
-  return `${transport}:transfer`;
-}
-
 /** The session-id argument key a transport's commands expect. */
 function sessionKey(transport: Transport): "sftpSessionId" | "scpSessionId" {
   return transport === "scp" ? "scpSessionId" : "sftpSessionId";

@@ -9,7 +9,7 @@ use tokio::sync::Semaphore;
 
 /// Minimum duration between consecutive progress events per transfer.
 const EMIT_THROTTLE: Duration = Duration::from_millis(100);
-/// Fix infinite history
+/// Cap on retained finished-transfer history (prevents unbounded growth).
 const MAX_FINISHED_HISTORY: usize = 200;
 /// Window over which bytes are accumulated to compute speed.
 const SPEED_WINDOW: Duration = Duration::from_millis(500);

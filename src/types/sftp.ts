@@ -9,15 +9,7 @@ export interface SftpEntry {
   is_symlink: boolean;
 }
 
-// ─── Clipboard ────────────────────────────────────────────────────────────────
-
-export interface SftpClipboard {
-  entries: SftpEntry[];
-  operation: "copy" | "cut";
-  sourceSessionId: string;
-}
-
-// ─── New transfer types ────────────────────────────────────────────────────────
+// ─── Transfer types ─────────────────────────────────────────────────────────
 
 export interface TransferEvent {
   transfer_id: string;
@@ -42,30 +34,6 @@ export interface TransferEvent {
 
 export type TransferStatusValue =
   | "Queued"
-  | "InProgress"
-  | "Completed"
-  | { Failed: string }
-  | "Cancelled";
-
-// ─── Deprecated ───────────────────────────────────────────────────────────────
-
-/**
- * @deprecated Use TransferEvent instead. Kept for backward compatibility.
- */
-export interface TransferProgress {
-  transfer_id: string;
-  sftp_session_id: string;
-  file_name: string;
-  direction: "Download" | "Upload";
-  bytes_transferred: number;
-  total_bytes: number;
-  status: TransferStatus;
-}
-
-/**
- * @deprecated Use TransferStatusValue instead. Kept for backward compatibility.
- */
-export type TransferStatus =
   | "InProgress"
   | "Completed"
   | { Failed: string }

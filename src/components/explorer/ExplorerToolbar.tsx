@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Upload,
   FolderUp,
@@ -45,15 +45,10 @@ const ICON_BTN_CLASS = [
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
   "disabled:opacity-40 disabled:cursor-not-allowed",
 ].join(" ");
-const PATH_INPUT_CLASS = [
-  "flex-1 min-w-0 mx-1 px-1.5 py-0.5 rounded",
-  "bg-bg-subtle text-text-primary text-[length:var(--text-sm)]",
-  "border border-ring outline-none",
-].join(" ");
-const BREADCRUMB_BAR_CLASS =
-  "flex items-center gap-0 overflow-x-auto flex-1 min-w-0 mx-1 cursor-text rounded hover:bg-bg-subtle/40";
 const SEGMENT_BTN_BASE_CLASS = [
-  "px-1 py-0.5 rounded text-[length:var(--text-sm)]",
+  // No truncate: segments render at natural width so the measured breadcrumb
+  // overflow (scrollWidth vs clientWidth) reflects the real path length.
+  "px-1 py-0.5 rounded text-[length:var(--text-sm)] whitespace-nowrap shrink-0",
   "transition-colors duration-[var(--duration-fast)]",
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
 ].join(" ");
@@ -147,29 +142,127 @@ export const ExplorerToolbar = memo(function ExplorerToolbar({
     },
     [cancelEdit],
   );
-  const handleHome = useCallback(
-    () => onNavigate(providerType === "sftp" ? "/" : ""),
-    [onNavigate, providerType],
-  );
-  const isAtRoot =
-    providerType === "sftp" ? currentPath === "/" : currentPath === "";
+  // Home resolves the provider's real home directory (SFTP/local `~`, S3 root
+  // prefix) rather than a hardcoded root. The old literal sent local panes to
+  // "" — an invalid path that crashed the listing on macOS. On error, fall back
+  // to the provider's root so the button always does something sane.
+  const handleHome = useCallback(() => {
+    void (async () => {
+      try {
+        onNavigate(await provider.homeDir());
+      } catch {
+        onNavigate(providerType === "sftp" ? "/" : provider.rootLabel());
+      }
+    })();
+  }, [onNavigate, provider, providerType]);
+
+  const lastIdx = segments.length - 1;
+  const currentLabel = lastIdx <= 0 ? provider.rootLabel() : segments[lastIdx].label;
+
+  // Measure whether the full breadcrumb fits the bar; if not, collapse to the
+  // current-dir name (which truncates). Content-based, not a width breakpoint —
+  // long bucket/dir names overflow even fullscreen. `fullPathWidthRef` remembers
+  // the overflowing width so we only re-expand once the bar is that wide again
+  // (avoids a collapse/expand feedback loop).
+  const pathBarRef = useRef<HTMLDivElement>(null);
+  const [pathFits, setPathFits] = useState(true);
+  const fullPathWidthRef = useRef(0);
+
+  // A new path starts optimistic (show full), then the effect below re-measures.
+  useLayoutEffect(() => {
+    setPathFits(true);
+  }, [currentPath]);
+
+  useLayoutEffect(() => {
+    const el = pathBarRef.current;
+    if (!el) return;
+    const measure = () => {
+      if (pathFits) {
+        if (el.scrollWidth > el.clientWidth + 1) {
+          fullPathWidthRef.current = el.scrollWidth;
+          setPathFits(false);
+        }
+      } else if (el.clientWidth >= fullPathWidthRef.current) {
+        setPathFits(true);
+      }
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [pathFits, currentPath]);
 
   return (
-    <div className="flex items-center h-10 px-2 border-b border-border bg-bg-surface shrink-0 gap-1 no-select">
+    <div className="relative flex items-center h-10 px-2 border-b border-border bg-bg-surface shrink-0 gap-1 no-select">
       {/* Home button */}
       <button
         data-testid="explorer-home"
         onClick={handleHome}
-        disabled={loading || isAtRoot}
-        title={`Go to ${provider.rootLabel()}`}
-        aria-label="Go to root"
+        disabled={loading}
+        title="Home"
+        aria-label="Go to home directory"
         className={ICON_BTN_CLASS}
       >
         <Home size={15} strokeWidth={1.8} aria-hidden="true" />
       </button>
 
-      {/* Breadcrumb path */}
-      {isEditing ? (
+      {/* Path field — full breadcrumbs when they fit the bar, else just the
+          current directory name (truncating). Fit is MEASURED (ResizeObserver),
+          not guessed from pane width, because long bucket/dir names overflow
+          even fullscreen. Click (or Enter) opens the overlay editor. */}
+      <div
+        ref={pathBarRef}
+        onClick={beginEdit}
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && e.target === e.currentTarget) {
+            e.preventDefault();
+            beginEdit();
+          }
+        }}
+        title={pathFits ? "Click to type a path" : currentPath || "Type a path"}
+        aria-label="Current path"
+        className="flex-1 min-w-0 mx-1 flex items-center overflow-hidden rounded cursor-text hover:bg-bg-subtle/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {pathFits ? (
+          segments.map((seg, index) => {
+            const isLast = index === segments.length - 1;
+            const isRoot = index === 0;
+            return (
+              <span key={`${seg.path}-${index}`} className="flex items-center shrink-0">
+                {!isRoot && (
+                  <ChevronRight
+                    size={12}
+                    strokeWidth={2}
+                    className="text-text-muted/50 mx-0.5 shrink-0"
+                    aria-hidden="true"
+                  />
+                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!isLast) onNavigate(seg.path);
+                  }}
+                  disabled={isLast}
+                  title={isLast ? seg.path : `Navigate to ${seg.path}`}
+                  className={`${SEGMENT_BTN_BASE_CLASS} ${isLast ? SEGMENT_BTN_LAST_CLASS : SEGMENT_BTN_LINK_CLASS}`}
+                >
+                  {isRoot ? provider.rootLabel() : seg.label}
+                </button>
+              </span>
+            );
+          })
+        ) : (
+          <span className="truncate px-1.5 py-0.5 text-[length:var(--text-sm)] font-medium text-text-primary">
+            {currentLabel}
+          </span>
+        )}
+      </div>
+
+      {/* Overlay editor — covers the toolbar while open so it stays usable on a
+          narrow pane. */}
+      {isEditing && (
         <input
           ref={inputRef}
           data-testid="explorer-path-input"
@@ -182,61 +275,8 @@ export const ExplorerToolbar = memo(function ExplorerToolbar({
           autoCorrect="off"
           autoCapitalize="off"
           aria-label="Edit current path"
-          className={PATH_INPUT_CLASS}
+          className="absolute inset-x-2 top-1/2 z-30 -translate-y-1/2 h-7 px-2 rounded-md border border-ring bg-bg-base text-text-primary text-[length:var(--text-sm)] shadow-[var(--shadow-md)] outline-none"
         />
-      ) : (
-        <div
-          onClick={beginEdit}
-          // Keyboard path to edit mode: the bar itself is focusable and Enter
-          // begins editing (segment buttons keep their own click behavior).
-          // No role="button" — it contains real buttons, and nesting
-          // interactive roles is an ARIA violation.
-          tabIndex={0}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && e.target === e.currentTarget) {
-              e.preventDefault();
-              beginEdit();
-            }
-          }}
-          title="Click to type a path"
-          aria-label="Current path"
-          className={`${BREADCRUMB_BAR_CLASS} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
-        >
-          {segments.map((seg, index) => {
-            const isLast = index === segments.length - 1;
-            const isRoot = index === 0;
-
-            return (
-              <span
-                key={`${seg.path}-${index}`}
-                className="flex items-center shrink-0"
-              >
-                {!isRoot && (
-                  <ChevronRight
-                    size={12}
-                    strokeWidth={2}
-                    className="text-text-muted/50 mx-0.5 shrink-0"
-                    aria-hidden="true"
-                  />
-                )}
-                <button
-                  onClick={(e) => {
-                    // Segment clicks navigate directly; don't let the click bubble up and open edit mode on the same action.
-                    e.stopPropagation();
-                    if (!isLast) onNavigate(seg.path);
-                  }}
-                  disabled={isLast}
-                  title={isLast ? seg.path : `Navigate to ${seg.path}`}
-                  className={`${SEGMENT_BTN_BASE_CLASS} ${isLast ? SEGMENT_BTN_LAST_CLASS : SEGMENT_BTN_LINK_CLASS}`}
-                >
-                  {isRoot ? provider.rootLabel() : seg.label}
-                </button>
-              </span>
-            );
-          })}
-          {/* Fills remaining empty space so clicking past the last segment still opens edit mode */}
-          <span className="flex-1 min-w-2 h-full" />
-        </div>
       )}
 
       {/* Busy spinner */}

@@ -9,6 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
+use crate::dragout::{start_native_drag, DragOutResult};
 use crate::ssh::manager::SshManager;
 
 use super::transfer_manager::TransferManager;
@@ -728,8 +729,6 @@ pub async fn sftp_download(
 /// a resolvable bundle-resource path at runtime, and handed to the drag API as
 /// raw bytes so it never needs to live in the staging directory (where a remote
 /// file of the same name could clobber it).
-static DRAG_ICON_PNG: &[u8] = include_bytes!("../../icons/32x32.png");
-
 // Hard caps on a single drag-out so a hostile server (e.g. a top-level symlink
 // pointing at `/`) cannot coerce the client into mirroring an unbounded tree
 // into local temp.
@@ -739,14 +738,6 @@ const MAX_DRAGOUT_DEPTH: usize = 64;
 /// Staged drag-out trees older than this are swept on the next drag-out. Long
 /// enough that the OS has certainly finished copying a dropped selection.
 const DRAGOUT_STALE_AFTER: Duration = Duration::from_secs(60 * 60);
-
-/// Outcome of a drag-out: whether the OS drag ended in a drop and how many
-/// top-level items were dragged.
-#[derive(serde::Serialize)]
-pub struct DragOutResult {
-    pub dropped: bool,
-    pub count: usize,
-}
 
 /// Budget shared across one drag-out, enforcing the caps above.
 struct StageBudget {
@@ -1004,67 +995,6 @@ async fn stage_entries(
     Ok(files)
 }
 
-/// Run the native OS drag on the main thread with already-staged file paths,
-/// resolving to `true` if the drag ended in a drop. Mirrors how
-/// `tauri-plugin-drag` drives the `drag` crate, but the path list is fixed by
-/// the backend (only validated staging paths) rather than accepted from the
-/// webview — so a compromised webview can't drag arbitrary local files.
-///
-/// Platform note: the `drag` crate's GTK backend is X11-oriented and best-effort
-/// under Wayland. The `drag` callback (Dropped/Cancel) is the only completion
-/// signal we await, so if a platform fails to fire it the command stays pending
-/// for that drag; the frontend's re-entrancy guard still recovers on the next
-/// attempt and staged files are reaped by `sweep_stale_dragout`.
-async fn start_native_drag(
-    app: AppHandle,
-    window: Window,
-    files: Vec<PathBuf>,
-) -> Result<bool, SftpError> {
-    let icon_bytes = DRAG_ICON_PNG.to_vec();
-
-    tokio::task::spawn_blocking(move || -> Result<bool, SftpError> {
-        let (tx, rx) = std::sync::mpsc::channel::<Result<bool, SftpError>>();
-        let tx_cb = tx.clone();
-
-        app.run_on_main_thread(move || {
-            #[cfg(target_os = "linux")]
-            let raw_window = window.gtk_window();
-            #[cfg(not(target_os = "linux"))]
-            let raw_window = tauri::Result::Ok(window.clone());
-
-            match raw_window {
-                Ok(w) => {
-                    let started = drag::start_drag(
-                        &w,
-                        drag::DragItem::Files(files),
-                        drag::Image::Raw(icon_bytes),
-                        move |result, _cursor| {
-                            let _ = tx_cb.send(Ok(matches!(result, drag::DragResult::Dropped)));
-                        },
-                        drag::Options::default(),
-                    );
-                    if let Err(e) = started {
-                        let _ = tx.send(Err(SftpError::LocalIoError(format!(
-                            "could not start drag: {e}"
-                        ))));
-                    }
-                }
-                Err(e) => {
-                    let _ = tx.send(Err(SftpError::LocalIoError(format!(
-                        "no window handle for drag: {e}"
-                    ))));
-                }
-            }
-        })
-        .map_err(|e| SftpError::LocalIoError(format!("main-thread dispatch failed: {e}")))?;
-
-        rx.recv()
-            .map_err(|e| SftpError::LocalIoError(format!("drag result channel closed: {e}")))?
-    })
-    .await
-    .map_err(|e| SftpError::LocalIoError(format!("drag task failed: {e}")))?
-}
-
 /// Stage the selected remote files/folders to a private temp dir and start a
 /// native OS drag-out (download to desktop/Finder), resolving once the drag
 /// ends. Returns whether it ended in a drop and how many top-level items moved.
@@ -1122,7 +1052,7 @@ pub async fn sftp_drag_out(
         Ok(dropped) => dropped,
         Err(e) => {
             let _ = tokio::fs::remove_dir_all(&stage).await;
-            return Err(e);
+            return Err(SftpError::LocalIoError(e));
         }
     };
 

@@ -1,12 +1,15 @@
 import { create } from "zustand";
-import type { S3Entry, S3BucketInfo, ExplorerClipboard, S3Connection } from "../types";
+import type { S3BucketInfo, ExplorerClipboard, S3Connection } from "../types";
+import type { ExplorerEntry } from "../types/explorer";
 
 export interface S3Session {
   sessionId: string;
   label: string;
   currentBucket: string | null;
   currentPrefix: string;
-  entries: S3Entry[];
+  /** Object listing, normalized to ExplorerEntry (the provider maps it from
+   *  the backend-native S3Entry). */
+  entries: ExplorerEntry[];
   buckets: S3BucketInfo[];
   loading: boolean;
   error: string | null;
@@ -27,7 +30,7 @@ interface S3State {
   setActiveS3Session: (id: string | null) => void;
   setBuckets: (sessionId: string, buckets: S3BucketInfo[]) => void;
   setCurrentBucket: (sessionId: string, bucket: string) => void;
-  setEntries: (sessionId: string, prefix: string, entries: S3Entry[]) => void;
+  setEntries: (sessionId: string, prefix: string, entries: ExplorerEntry[]) => void;
   setLoading: (sessionId: string, loading: boolean) => void;
   setError: (sessionId: string, error: string | null) => void;
   setSort: (sessionId: string, sortBy: "name" | "size" | "modified", sortAsc: boolean) => void;

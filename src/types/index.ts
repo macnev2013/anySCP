@@ -23,6 +23,7 @@ export type {
   SplitDirection,
   SplitNode,
   PaneNode,
+  PaneContent,
   LayoutNode,
 } from "./layout";
 
@@ -51,9 +52,6 @@ export type {
 
 export type {
   SftpEntry,
-  SftpClipboard,
-  TransferProgress,
-  TransferStatus,
   TransferEvent,
   TransferStatusValue,
 } from "./sftp";
