@@ -121,6 +121,7 @@ jobs:
         run: pnpm install
 
       - uses: tauri-apps/tauri-action@v0
+        id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -136,6 +137,48 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
           updaterJsonKeepUniversal: true
+
+      # tauri-action notarizes the .app but only signs the .dmg around it. A
+      # signed-but-unnotarized DMG fails Gatekeeper once downloaded, and macOS
+      # reports it as "damaged" (#74). Notarize + staple each DMG, then replace
+      # the asset tauri-action already uploaded.
+      - name: Notarize and staple DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          dmgs=$(jq -r '.[] | select(endswith(".dmg"))' <<<"$ARTIFACT_PATHS")
+          if [ -z "$dmgs" ]; then
+            echo "::error::No DMG in tauri-action artifacts: $ARTIFACT_PATHS"
+            exit 1
+          fi
+          while IFS= read -r dmg; do
+            name=$(basename "$dmg")
+            echo "Notarizing $name"
+            xcrun notarytool submit "$dmg" \
+              --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+              --wait
+            xcrun stapler staple "$dmg"
+            # Fails the job if Gatekeeper would still reject the download.
+            spctl -a -vv -t open --context context:primary-signature "$dmg"
+
+            asset_id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
+              --jq ".[] | select(.name == \"$name\") | .id")
+            if [ -n "$asset_id" ]; then
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+            fi
+            gh api -X POST \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$name" \
+              -H "Content-Type: application/x-apple-diskimage" \
+              --input "$dmg" --jq '"Uploaded " + .name'
+          done <<<"$dmgs"
 
   update-release-notes:
     needs: build
@@ -175,11 +218,6 @@ jobs:
           ## Installation
 
           Download the appropriate file for your platform from the assets below.
-
-          macOS users: If you see "app is damaged", run:
-          \`\`\`bash
-          xattr -cr /Applications/anyscp.app
-          \`\`\`
 
           ## Auto-Updates
 
