@@ -459,6 +459,19 @@ export function HostEditModal() {
       busy={isBusy}
       testId="host-modal"
       dataAttributes={{ "data-host-modal-mode": isNewHost ? "new" : "edit" }}
+      // Pinned under the header so a connect/save failure is visible even
+      // when the form is scrolled down to the footer buttons.
+      banner={
+        error ? (
+          <p
+            role="alert"
+            data-testid="host-modal-error"
+            className="text-[length:var(--text-sm)] text-status-error bg-status-error/10 rounded-lg px-3 py-2"
+          >
+            {error}
+          </p>
+        ) : undefined
+      }
       footerStart={
         !isNewHost ? (
           deleteConfirm ? (
@@ -953,16 +966,6 @@ export function HostEditModal() {
                 />
               </div>
 
-              {/* Error banner */}
-              {error && (
-                <p
-                  role="alert"
-                  data-testid="host-modal-error"
-                  className="text-[length:var(--text-sm)] text-status-error bg-status-error/10 rounded-lg px-3 py-2"
-                >
-                  {error}
-                </p>
-              )}
             </div>
           )}
         </div>
