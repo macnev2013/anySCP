@@ -64,13 +64,16 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # Same exclusions as release.yml. Updater artifacts are skipped since
-      # they need the signing key, which PRs from forks don't get.
+      # they need the signing key, which PRs from forks don't get. The updater
+      # endpoints are emptied too: this build is version 0.0.0-dev, so on
+      # launch it would auto-install the latest release and relaunch into it,
+      # exiting before the smoke test can check it.
       - name: Build AppImage
         run: |
           scripts/linux/install-linuxdeploy.sh
           LINUXDEPLOY_EXCLUDED_LIBRARIES=$(grep -v -e '^#' -e '^$' scripts/linux/appimage-excluded-libs.txt | paste -sd ';')
           export LINUXDEPLOY_EXCLUDED_LIBRARIES
-          pnpm tauri build --bundles appimage --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          pnpm tauri build --bundles appimage --config '{"bundle":{"createUpdaterArtifacts":false},"plugins":{"updater":{"endpoints":[]}}}'
 
       - name: Smoke test AppImage
         run: scripts/linux/appimage-smoke-test.sh src-tauri/target/release/bundle/appimage/*.AppImage
