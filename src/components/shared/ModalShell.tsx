@@ -60,6 +60,11 @@ export interface ModalShellProps {
    * When provided the footer becomes justify-between.
    */
   footerStart?: React.ReactNode;
+  /**
+   * Pinned between the header and the body, outside the scroll area — for
+   * errors/status that must stay visible however far the body is scrolled.
+   */
+  banner?: React.ReactNode;
   children: React.ReactNode;
   /** data-testid applied to the panel div. */
   testId?: string;
@@ -84,6 +89,7 @@ export function ModalShell({
   busy = false,
   footer,
   footerStart,
+  banner,
   children,
   testId,
   dataAttributes,
@@ -175,6 +181,9 @@ export function ModalShell({
             <X size={14} strokeWidth={1.8} aria-hidden="true" />
           </button>
         </div>
+
+        {/* ── Banner (pinned, never scrolls) ── */}
+        {banner && <div className="px-6 pt-4 shrink-0">{banner}</div>}
 
         {/* ── Body ── */}
         <div className={[
