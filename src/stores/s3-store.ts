@@ -7,6 +7,9 @@ export interface S3Session {
   currentBucket: string | null;
   currentPrefix: string;
   entries: S3Entry[];
+  /** Token for the next page of `entries`, or null when the listing is
+   *  complete. Large prefixes are listed a page at a time. */
+  nextToken: string | null;
   buckets: S3BucketInfo[];
   loading: boolean;
   error: string | null;
@@ -27,7 +30,10 @@ interface S3State {
   setActiveS3Session: (id: string | null) => void;
   setBuckets: (sessionId: string, buckets: S3BucketInfo[]) => void;
   setCurrentBucket: (sessionId: string, bucket: string) => void;
-  setEntries: (sessionId: string, prefix: string, entries: S3Entry[]) => void;
+  setEntries: (sessionId: string, prefix: string, entries: S3Entry[], nextToken?: string | null) => void;
+  /** Append a further page to the current listing. Ignored if the user has
+   *  navigated away from `prefix` since the page was requested. */
+  appendEntries: (sessionId: string, prefix: string, entries: S3Entry[], nextToken: string | null) => void;
   setLoading: (sessionId: string, loading: boolean) => void;
   setError: (sessionId: string, error: string | null) => void;
   setSort: (sessionId: string, sortBy: "name" | "size" | "modified", sortAsc: boolean) => void;
@@ -49,6 +55,7 @@ export const useS3Store = create<S3State>((set, get) => ({
         currentBucket: null,
         currentPrefix: "",
         entries: [],
+        nextToken: null,
         buckets: [],
         loading: false,
         error: null,
@@ -84,16 +91,31 @@ export const useS3Store = create<S3State>((set, get) => ({
       const session = state.sessions.get(sessionId);
       if (!session) return state;
       const next = new Map(state.sessions);
-      next.set(sessionId, { ...session, currentBucket: bucket, currentPrefix: "", entries: [] });
+      next.set(sessionId, { ...session, currentBucket: bucket, currentPrefix: "", entries: [], nextToken: null });
       return { sessions: next };
     }),
 
-  setEntries: (sessionId, prefix, entries) =>
+  setEntries: (sessionId, prefix, entries, nextToken = null) =>
     set((state) => {
       const session = state.sessions.get(sessionId);
       if (!session) return state;
       const next = new Map(state.sessions);
-      next.set(sessionId, { ...session, currentPrefix: prefix, entries, loading: false, error: null });
+      next.set(sessionId, { ...session, currentPrefix: prefix, entries, nextToken, loading: false, error: null });
+      return { sessions: next };
+    }),
+
+  appendEntries: (sessionId, prefix, entries, nextToken) =>
+    set((state) => {
+      const session = state.sessions.get(sessionId);
+      if (!session || session.currentPrefix !== prefix) return state;
+      const next = new Map(state.sessions);
+      next.set(sessionId, {
+        ...session,
+        entries: [...session.entries, ...entries],
+        nextToken,
+        loading: false,
+        error: null,
+      });
       return { sessions: next };
     }),
 
