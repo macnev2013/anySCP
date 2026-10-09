@@ -122,10 +122,12 @@ jobs:
 
       # Keep libraries the host's Mesa also loads out of the AppImage; bundled
       # older copies break EGL on newer distros (#67, #134). linuxdeploy (run
-      # by the Tauri bundler) reads this variable.
+      # by the Tauri bundler) reads this variable, but the build Tauri
+      # downloads is too old to, so install one that does first.
       - name: Exclude host graphics libraries from AppImage
         if: runner.os == 'Linux'
         run: |
+          scripts/linux/install-linuxdeploy.sh
           echo "LINUXDEPLOY_EXCLUDED_LIBRARIES=$(grep -v -e '^#' -e '^$' scripts/linux/appimage-excluded-libs.txt | paste -sd ';')" >> "$GITHUB_ENV"
 
       - uses: tauri-apps/tauri-action@v0

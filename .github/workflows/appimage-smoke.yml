@@ -67,6 +67,7 @@ jobs:
       # they need the signing key, which PRs from forks don't get.
       - name: Build AppImage
         run: |
+          scripts/linux/install-linuxdeploy.sh
           LINUXDEPLOY_EXCLUDED_LIBRARIES=$(grep -v -e '^#' -e '^$' scripts/linux/appimage-excluded-libs.txt | paste -sd ';')
           export LINUXDEPLOY_EXCLUDED_LIBRARIES
           pnpm tauri build --bundles appimage --config '{"bundle":{"createUpdaterArtifacts":false}}'
