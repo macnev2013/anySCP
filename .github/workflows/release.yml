@@ -120,6 +120,14 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
+      # Keep libraries the host's Mesa also loads out of the AppImage; bundled
+      # older copies break EGL on newer distros (#67, #134). linuxdeploy (run
+      # by the Tauri bundler) reads this variable.
+      - name: Exclude host graphics libraries from AppImage
+        if: runner.os == 'Linux'
+        run: |
+          echo "LINUXDEPLOY_EXCLUDED_LIBRARIES=$(grep -v -e '^#' -e '^$' scripts/linux/appimage-excluded-libs.txt | paste -sd ';')" >> "$GITHUB_ENV"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -136,6 +144,12 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
           updaterJsonKeepUniversal: true
+
+      # Launch the AppImage on current distros. The release is still a draft,
+      # so a failure here stops it from being published with a broken AppImage.
+      - name: Smoke test AppImage
+        if: runner.os == 'Linux'
+        run: scripts/linux/appimage-smoke-test.sh src-tauri/target/release/bundle/appimage/*.AppImage
 
   update-release-notes:
     needs: build

@@ -1,0 +1,90 @@
+name: AppImage smoke test
+
+# Launches the Linux AppImage on current distros (Arch, Fedora, Ubuntu rolling)
+# and fails if the webview crashes, e.g. a bundled library breaking the host's
+# Mesa (#67, #134). Distros keep moving under a published AppImage, so the
+# latest release is also re-checked weekly.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/appimage-smoke.yml"
+      - ".github/workflows/release.yml"
+      - "scripts/linux/**"
+      - "src-tauri/Cargo.toml"
+      - "src-tauri/Cargo.lock"
+      - "src-tauri/tauri.conf.json"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build AppImage and smoke test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libsoup-3.0-dev \
+            javascriptcoregtk-4.1-dev
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Same exclusions as release.yml. Updater artifacts are skipped since
+      # they need the signing key, which PRs from forks don't get.
+      - name: Build AppImage
+        run: |
+          LINUXDEPLOY_EXCLUDED_LIBRARIES=$(grep -v -e '^#' -e '^$' scripts/linux/appimage-excluded-libs.txt | paste -sd ';')
+          export LINUXDEPLOY_EXCLUDED_LIBRARIES
+          pnpm tauri build --bundles appimage --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Smoke test AppImage
+        run: scripts/linux/appimage-smoke-test.sh src-tauri/target/release/bundle/appimage/*.AppImage
+
+  published:
+    name: Smoke test latest release
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download latest release AppImage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download --pattern '*.AppImage' --dir release
+
+      - name: Smoke test AppImage
+        run: scripts/linux/appimage-smoke-test.sh release/*.AppImage

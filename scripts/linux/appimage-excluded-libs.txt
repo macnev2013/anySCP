@@ -1,0 +1,22 @@
+# Libraries kept out of the AppImage (fnmatch patterns on the file name),
+# passed to linuxdeploy as LINUXDEPLOY_EXCLUDED_LIBRARIES.
+#
+# The AppImage bundles GTK/WebKit from the Ubuntu 22.04 build host but uses
+# the host's Mesa (EGL/GL/GBM). Mesa loads these libraries too, so a bundled
+# copy older than the host's shadows it and Mesa's EGL fails to load, e.g.
+# Mesa 26 needs wl_display_create_queue_with_name, wl_fixes_interface, … from
+# libwayland-client >= 1.24 and WebKit aborts with "Could not create default
+# EGL display: EGL_BAD_PARAMETER" (#67, #134).
+#
+# Only list libraries Mesa itself depends on: any host that can load Mesa
+# then has them. Anything else (e.g. libwayland-server, which the app links
+# directly) may be missing on the host and must stay bundled.
+libwayland-client.so*
+libelf.so*
+libzstd.so*
+libffi.so*
+libXau.so*
+libXdmcp.so*
+libXext.so*
+libxcb-randr.so*
+libxcb-shm.so*
