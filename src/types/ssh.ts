@@ -3,7 +3,8 @@ export type SessionId = string;
 export type AuthMethod =
   | { type: "password"; password: string }
   | { type: "privateKey"; key_path: string; passphrase?: string }
-  | { type: "privateKeyData"; key_data: string; passphrase?: string };
+  | { type: "privateKeyData"; key_data: string; passphrase?: string }
+  | { type: "sshAgent"; socket_path?: string };
 
 export interface HostConfig {
   host: string;
@@ -58,7 +59,7 @@ export interface SavedHost {
   host: string;
   port: number;
   username: string;
-  auth_type: string; // "password" | "privateKey" | "privateKeyData"
+  auth_type: string; // "password" | "privateKey" | "privateKeyData" | "sshAgent"
   group_id: string | null;
   created_at: string;
   updated_at: string;

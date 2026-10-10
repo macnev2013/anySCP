@@ -12,7 +12,7 @@ import { CustomSelect } from "../shared/CustomSelect";
 
 // ─── Field types ─────────────────────────────────────────────────────────────
 
-type AuthType = "password" | "privateKey";
+type AuthType = "password" | "privateKey" | "sshAgent";
 
 /** Sentinel value: when editingHostId === NEW_HOST_ID, we create a new host
  *  instead of loading an existing one. */
@@ -27,6 +27,7 @@ interface FormState {
   authType: AuthType;
   groupId: string;
   keyPath: string;
+  agentSocketPath: string;
   proxyJump: string;
   proxyJumpHostId: string;
   keepAliveInterval: string;
@@ -52,6 +53,7 @@ const EMPTY_FORM: FormState = {
   authType: "password",
   groupId: "",
   keyPath: "",
+  agentSocketPath: "",
   proxyJump: "",
   proxyJumpHostId: "",
   keepAliveInterval: "",
@@ -77,7 +79,11 @@ function extractError(err: unknown, fallback: string): string {
 
 function savedHostToForm(host: SavedHost): FormState {
   const authType: AuthType =
-    host.auth_type === "privateKey" ? "privateKey" : "password";
+    host.auth_type === "privateKey"
+      ? "privateKey"
+      : host.auth_type === "sshAgent"
+        ? "sshAgent"
+        : "password";
   return {
     label: host.label ?? "",
     host: host.host,
@@ -86,6 +92,7 @@ function savedHostToForm(host: SavedHost): FormState {
     authType,
     groupId: host.group_id ?? "",
     keyPath: host.key_path ?? "",
+    agentSocketPath: "",
     proxyJump: host.proxy_jump ?? "",
     proxyJumpHostId: host.proxy_jump_host_id ?? "",
     keepAliveInterval: host.keep_alive_interval != null ? String(host.keep_alive_interval) : "",
@@ -307,9 +314,10 @@ export function HostEditModal() {
       auth_type: form.authType,
       group_id: form.groupId === "" ? null : form.groupId,
       updated_at: new Date().toISOString(),
-      key_path: form.authType === "privateKey" && form.keyPath.trim()
-        ? form.keyPath.trim()
-        : null,
+      key_path:
+        form.authType === "privateKey" && form.keyPath.trim()
+          ? form.keyPath.trim()
+          : null,
       proxy_jump: form.proxyJump.trim() || null,
       proxy_jump_host_id:
         tunnelEnabled && form.proxyJumpHostId ? form.proxyJumpHostId : null,
@@ -348,7 +356,6 @@ export function HostEditModal() {
       const credential: StoredCredential = { type: "KeyPassphrase", passphrase: form.passphrase };
       await invoke("vault_save_credential", { hostId, credential });
     }
-    // If the field is empty and not cleared, leave the existing keychain entry untouched.
   };
 
   // ── Save ────────────────────────────────────────────────────────────────────
@@ -403,7 +410,9 @@ export function HostEditModal() {
         auth_method:
           form.authType === "privateKey"
             ? { type: "privateKey", key_path: form.keyPath }
-            : { type: "password", password: "" },
+            : form.authType === "sshAgent"
+              ? { type: "sshAgent", socket_path: form.agentSocketPath.trim() || undefined }
+              : { type: "password", password: "" },
       };
       addSession(sessionId, hostConfig);
       const label = hostConfig.label || `${hostConfig.username}@${hostConfig.host}`;
@@ -591,6 +600,7 @@ export function HostEditModal() {
                     options={[
                       { value: "password", label: "Password" },
                       { value: "privateKey", label: "Private Key" },
+                      { value: "sshAgent", label: "SSH Agent" },
                     ]}
                   />
                 </div>
@@ -611,7 +621,7 @@ export function HostEditModal() {
               </div>
 
               {/* Auth credentials — conditional on auth type */}
-              {form.authType === "password" ? (
+              {form.authType === "password" && (
                 <div>
                   <label htmlFor="hem-password" className={labelClass}>
                     Password
@@ -636,7 +646,9 @@ export function HostEditModal() {
                     onClear={() => setCredCleared(true)}
                   />
                 </div>
-              ) : (
+              )}
+
+              {form.authType === "privateKey" && (
                 <>
                   <div>
                     <label htmlFor="hem-keypath" className={labelClass}>
@@ -745,6 +757,16 @@ export function HostEditModal() {
                     />
                   </div>
                 </>
+              )}
+
+              {form.authType === "sshAgent" && (
+                <SshAgentPanel
+                  socketPath={form.agentSocketPath}
+                  onSocketPathChange={(v) => setField("agentSocketPath", v)}
+                  disabled={isBusy}
+                  inputClass={inputClass}
+                  labelClass={labelClass}
+                />
               )}
 
               {/* ════════════════ TUNNEL ════════════════ */}
@@ -1220,6 +1242,75 @@ function DeleteConfirmRow({ onCancel, onConfirm, busy }: DeleteConfirmRowProps) 
       >
         {busy ? "Deleting\u2026" : "Delete"}
       </button>
+    </div>
+  );
+}
+
+// ─── SshAgentPanel ───────────────────────────────────────────────────────────
+
+interface SshAgentPanelProps {
+  socketPath: string;
+  onSocketPathChange: (v: string) => void;
+  disabled: boolean;
+  inputClass: string;
+  labelClass: string;
+}
+
+function SshAgentPanel({
+  socketPath,
+  onSocketPathChange,
+  disabled,
+  inputClass,
+  labelClass,
+}: SshAgentPanelProps) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg bg-bg-subtle border border-border">
+        {/* Key icon */}
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 16 16"
+          fill="none"
+          aria-hidden="true"
+          className="text-text-muted shrink-0 mt-0.5"
+        >
+          <circle cx="5.5" cy="10.5" r="3.5" stroke="currentColor" strokeWidth="1.3" />
+          <path
+            d="M8.5 7.5L14 2M14 2H11.5M14 2V4.5"
+            stroke="currentColor"
+            strokeWidth="1.3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+        <p className="text-[length:var(--text-xs)] text-text-secondary leading-relaxed">
+          Keys are provided by your SSH agent at runtime — nothing is stored in
+          the app.{" "}
+          <span className="text-text-muted">
+            Works with <code className="font-mono">ssh-agent</code> and{" "}
+            <code className="font-mono">gpg-agent --enable-ssh-support</code>{" "}
+            (Yubikey / PIV / OpenPGP cards).
+          </span>
+        </p>
+      </div>
+      <div>
+        <label htmlFor="hem-agent-socket" className={labelClass}>
+          Agent socket path
+          <span className="ml-1 text-text-muted font-normal">
+            (optional — defaults to <code className="font-mono">$SSH_AUTH_SOCK</code>)
+          </span>
+        </label>
+        <input
+          id="hem-agent-socket"
+          type="text"
+          value={socketPath}
+          onChange={(e) => onSocketPathChange(e.target.value)}
+          placeholder="/run/user/1000/gnupg/S.gpg-agent.ssh"
+          disabled={disabled}
+          className={`${inputClass} font-mono`}
+        />
+      </div>
     </div>
   );
 }

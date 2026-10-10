@@ -36,6 +36,12 @@ pub enum AuthMethod {
         key_data: String,
         passphrase: Option<String>,
     },
+    /// Delegate signing to a running SSH agent (ssh-agent / gpg-agent with
+    /// `--enable-ssh-support`). Uses `$SSH_AUTH_SOCK` unless `socket_path` overrides it.
+    #[serde(rename = "sshAgent")]
+    SshAgent {
+        socket_path: Option<String>,
+    },
 }
 
 /// Redacting `Debug`: sessions hold their `HostConfig` (and thus credentials)
@@ -66,6 +72,10 @@ impl std::fmt::Debug for AuthMethod {
                 .debug_struct("PrivateKeyData")
                 .field("key_data", &REDACTED)
                 .field("passphrase", &passphrase.as_ref().map(|_| REDACTED))
+                .finish(),
+            AuthMethod::SshAgent { socket_path } => f
+                .debug_struct("SshAgent")
+                .field("socket_path", socket_path)
                 .finish(),
         }
     }

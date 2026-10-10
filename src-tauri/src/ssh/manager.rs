@@ -25,6 +25,74 @@ type EstablishedConn = (
 type EstablishFuture<'a> =
     Pin<Box<dyn Future<Output = Result<EstablishedConn, SshError>> + Send + 'a>>;
 
+/// Asks an SSH agent for its identities and parses the reply ourselves.
+///
+/// `AgentClient::request_identities` fails for the whole list as soon as one
+/// key can't be parsed (e.g. an RSA key beyond the supported size), which
+/// hides every usable key. Here, unparsable keys are skipped instead.
+#[cfg(any(unix, windows))]
+async fn request_identities_lenient<S>(
+    stream: &mut S,
+) -> Result<Vec<russh_keys::key::PublicKey>, std::io::Error>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const REQUEST_IDENTITIES: u8 = 11;
+    const IDENTITIES_ANSWER: u8 = 12;
+    const MAX_REPLY: usize = 1 << 20;
+
+    stream.write_all(&[0, 0, 0, 1, REQUEST_IDENTITIES]).await?;
+    stream.flush().await?;
+
+    let mut len = [0u8; 4];
+    stream.read_exact(&mut len).await?;
+    let len = u32::from_be_bytes(len) as usize;
+    if len == 0 || len > MAX_REPLY {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid SSH agent reply length",
+        ));
+    }
+    let mut buf = vec![0u8; len];
+    stream.read_exact(&mut buf).await?;
+
+    if buf[0] != IDENTITIES_ANSWER {
+        return Ok(Vec::new());
+    }
+
+    fn read_u32(buf: &[u8], pos: &mut usize) -> Option<u32> {
+        let b = buf.get(*pos..*pos + 4)?;
+        *pos += 4;
+        Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    }
+    fn read_string<'a>(buf: &'a [u8], pos: &mut usize) -> Option<&'a [u8]> {
+        let n = read_u32(buf, pos)? as usize;
+        let end = pos.checked_add(n)?;
+        let s = buf.get(*pos..end)?;
+        *pos = end;
+        Some(s)
+    }
+
+    let mut pos = 1;
+    let count = read_u32(&buf, &mut pos).unwrap_or(0);
+    let mut keys = Vec::new();
+    for _ in 0..count {
+        let (Some(blob), Some(_comment)) =
+            (read_string(&buf, &mut pos), read_string(&buf, &mut pos))
+        else {
+            break;
+        };
+        match russh_keys::key::parse_public_key(blob, Some(russh_keys::key::SignatureHash::SHA2_512))
+        {
+            Ok(k) => keys.push(k),
+            Err(e) => tracing::debug!("skipping unsupported SSH agent key: {e}"),
+        }
+    }
+    Ok(keys)
+}
+
 /// A bare (PTY-less) SSH connection used by the SFTP layer.
 struct BareConn {
     /// The authenticated target handle, shared with the SFTP layer.
@@ -305,11 +373,18 @@ impl SshManager {
         handle: &mut client::Handle<SshClientHandler>,
         config: &HostConfig,
     ) -> Result<(), SshError> {
-        let authenticated = match &config.auth_method {
-            AuthMethod::Password { password } => handle
-                .authenticate_password(&config.username, password)
-                .await
-                .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?,
+        match &config.auth_method {
+            AuthMethod::Password { password } => {
+                let ok = handle
+                    .authenticate_password(&config.username, password)
+                    .await
+                    .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
+                if !ok {
+                    return Err(SshError::AuthenticationFailed(
+                        "server rejected credentials".to_string(),
+                    ));
+                }
+            }
             AuthMethod::PrivateKey {
                 key_path,
                 passphrase,
@@ -318,7 +393,6 @@ impl SshManager {
                     .await
                     .map_err(|e| SshError::IoError(e.to_string()))?;
 
-                // Auto-convert PPK to OpenSSH if detected
                 let key_data = if super::keys::is_ppk_format(&key_data) {
                     let kp = key_path.clone();
                     let pp = passphrase.clone();
@@ -331,24 +405,249 @@ impl SshManager {
                     key_data
                 };
 
-                Self::auth_with_key_data(handle, &config.username, &key_data, passphrase.as_deref())
-                    .await?
+                let ok = Self::auth_with_key_data(
+                    handle,
+                    &config.username,
+                    &key_data,
+                    passphrase.as_deref(),
+                )
+                .await?;
+                if !ok {
+                    return Err(SshError::AuthenticationFailed(
+                        "server rejected credentials".to_string(),
+                    ));
+                }
             }
             AuthMethod::PrivateKeyData {
                 key_data,
                 passphrase,
             } => {
-                Self::auth_with_key_data(handle, &config.username, key_data, passphrase.as_deref())
-                    .await?
+                let ok = Self::auth_with_key_data(
+                    handle,
+                    &config.username,
+                    key_data,
+                    passphrase.as_deref(),
+                )
+                .await?;
+                if !ok {
+                    return Err(SshError::AuthenticationFailed(
+                        "server rejected credentials".to_string(),
+                    ));
+                }
             }
-        };
-
-        if !authenticated {
-            return Err(SshError::AuthenticationFailed(
-                "server rejected credentials".to_string(),
-            ));
+            AuthMethod::SshAgent { socket_path } => {
+                Self::auth_with_agent(handle, config, socket_path.as_deref()).await?;
+            }
         }
         Ok(())
+    }
+
+    #[cfg(unix)]
+    async fn auth_with_agent(
+        handle: &mut client::Handle<SshClientHandler>,
+        config: &HostConfig,
+        socket_path: Option<&str>,
+    ) -> Result<(), SshError> {
+        use russh_keys::agent::client::AgentClient;
+        use tokio::net::UnixStream;
+
+        let candidates: Vec<String> = if let Some(p) = socket_path {
+            vec![p.to_owned()]
+        } else {
+            let mut list = Vec::new();
+            if let Ok(s) = std::env::var("SSH_AUTH_SOCK") {
+                list.push(s);
+            }
+
+            #[cfg(target_os = "macos")]
+            if let Ok(home) = std::env::var("HOME") {
+                let gpg = format!("{home}/.gnupg/S.gpg-agent.ssh");
+                if !list.contains(&gpg) {
+                    list.push(gpg);
+                }
+            }
+            list
+        };
+
+        if candidates.is_empty() {
+            return Err(SshError::ConnectionFailed(
+                "SSH_AUTH_SOCK is not set — is an SSH agent running?".into(),
+            ));
+        }
+
+        let mut sock = String::new();
+        let mut identities = Vec::new();
+        for candidate in &candidates {
+            let Ok(stream) = UnixStream::connect(candidate).await else {
+                tracing::debug!("SSH agent socket not reachable: {candidate}");
+                continue;
+            };
+            let mut stream = stream;
+            match request_identities_lenient(&mut stream).await {
+                Ok(ids) if !ids.is_empty() => {
+                    tracing::debug!("using SSH agent at {candidate} ({} key(s))", ids.len());
+                    sock = candidate.clone();
+                    identities = ids;
+                    break;
+                }
+                Ok(_) => tracing::debug!("SSH agent at {candidate} has no keys"),
+                Err(e) => tracing::debug!("SSH agent at {candidate}: {e}"),
+            }
+        }
+
+        if identities.is_empty() {
+            return Err(SshError::AuthenticationFailed(
+                "SSH agent holds no keys — run `ssh-add` or check gpg-agent config".into(),
+            ));
+        }
+
+        let n = identities.len();
+
+        for pubkey in identities {
+            let fingerprint = pubkey.fingerprint();
+
+            let stream_n = UnixStream::connect(&sock).await.map_err(|e| {
+                SshError::ConnectionFailed(format!("SSH agent reconnect failed: {e}"))
+            })?;
+            let ag: AgentClient<UnixStream> = AgentClient::connect(stream_n);
+
+            let (_ag, result) = handle
+                .authenticate_future(config.username.clone(), pubkey, ag)
+                .await;
+
+            match result {
+                Ok(true) => return Ok(()),
+                Ok(false) => {
+                    tracing::debug!("server rejected agent key {fingerprint}");
+                    continue;
+                }
+                Err(russh::AgentAuthError::Key(e)) => {
+                    return Err(SshError::AuthenticationFailed(format!(
+                        "SSH agent failed to sign with key {fingerprint}: {e}"
+                    )));
+                }
+                Err(russh::AgentAuthError::Send(e)) => {
+                    return Err(SshError::ConnectionFailed(format!(
+                        "SSH connection error during agent auth: {e}"
+                    )));
+                }
+            }
+        }
+
+        Err(SshError::AuthenticationFailed(format!(
+            "none of the {n} key(s) offered by the SSH agent was accepted by the server \
+             (check that the matching public key is in ~/.ssh/authorized_keys on the remote host; \
+             run `ssh-add -L` to list agent keys)"
+        )))
+    }
+
+    #[cfg(windows)]
+    async fn auth_with_agent(
+        handle: &mut client::Handle<SshClientHandler>,
+        config: &HostConfig,
+        socket_path: Option<&str>,
+    ) -> Result<(), SshError> {
+        use russh_keys::agent::client::AgentClient;
+
+        const DEFAULT_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
+        let pipe = socket_path.unwrap_or(DEFAULT_PIPE);
+
+        // ── Windows OpenSSH named pipe ─────────────────────────────────────
+        if let Ok(mut first) = tokio::net::windows::named_pipe::ClientOptions::new().open(pipe) {
+            let identities = request_identities_lenient(&mut first)
+                .await
+                .unwrap_or_default();
+            let n = identities.len();
+
+            for pubkey in identities {
+                let fingerprint = pubkey.fingerprint();
+                let ag = AgentClient::connect_named_pipe(pipe).await.map_err(|e| {
+                    SshError::ConnectionFailed(format!("SSH agent reconnect failed: {e}"))
+                })?;
+                let (_ag, result) = handle
+                    .authenticate_future(config.username.clone(), pubkey, ag)
+                    .await;
+                match result {
+                    Ok(true) => return Ok(()),
+                    Ok(false) => tracing::debug!("server rejected agent key {fingerprint}"),
+                    Err(russh::AgentAuthError::Key(e)) => {
+                        return Err(SshError::AuthenticationFailed(format!(
+                            "SSH agent failed to sign with key {fingerprint}: {e}"
+                        )));
+                    }
+                    Err(russh::AgentAuthError::Send(e)) => {
+                        return Err(SshError::ConnectionFailed(format!(
+                            "SSH connection error during agent auth: {e}"
+                        )));
+                    }
+                }
+            }
+
+            if socket_path.is_some() || n > 0 {
+                return Err(SshError::AuthenticationFailed(format!(
+                    "none of the {n} key(s) offered by the SSH agent was accepted by the server \
+                     (check that the matching public key is in ~/.ssh/authorized_keys on the remote host; \
+                     run `ssh-add -L` to list agent keys)"
+                )));
+            }
+        } else if socket_path.is_some() {
+            return Err(SshError::ConnectionFailed(format!(
+                "cannot connect to SSH agent pipe '{pipe}'"
+            )));
+        }
+
+        // ── Pageant (PuTTY / WinCryptSSHAgent / YubiKey on Windows) ───────
+        let mut first = AgentClient::connect_pageant().await;
+        let identities = first
+            .request_identities()
+            .await
+            .map_err(|e| SshError::AuthenticationFailed(format!("Pageant: {e}")))?;
+
+        if identities.is_empty() {
+            return Err(SshError::AuthenticationFailed(
+                "SSH agent holds no keys — is ssh-agent or Pageant running?".into(),
+            ));
+        }
+
+        let n = identities.len();
+        for pubkey in identities {
+            let fingerprint = pubkey.fingerprint();
+            let ag = AgentClient::connect_pageant().await;
+            let (_ag, result) = handle
+                .authenticate_future(config.username.clone(), pubkey, ag)
+                .await;
+            match result {
+                Ok(true) => return Ok(()),
+                Ok(false) => tracing::debug!("server rejected agent key {fingerprint}"),
+                Err(russh::AgentAuthError::Key(e)) => {
+                    return Err(SshError::AuthenticationFailed(format!(
+                        "SSH agent failed to sign with key {fingerprint}: {e}"
+                    )));
+                }
+                Err(russh::AgentAuthError::Send(e)) => {
+                    return Err(SshError::ConnectionFailed(format!(
+                        "SSH connection error during agent auth: {e}"
+                    )));
+                }
+            }
+        }
+
+        Err(SshError::AuthenticationFailed(format!(
+            "none of the {n} key(s) offered by the SSH agent was accepted by the server \
+             (check that the matching public key is in ~/.ssh/authorized_keys on the remote host; \
+             run `ssh-add -L` to list agent keys)"
+        )))
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    async fn auth_with_agent(
+        _handle: &mut client::Handle<SshClientHandler>,
+        _config: &HostConfig,
+        _socket_path: Option<&str>,
+    ) -> Result<(), SshError> {
+        Err(SshError::ConnectionFailed(
+            "SSH agent authentication is not supported on this platform".into(),
+        ))
     }
 
     async fn auth_with_key_data(
