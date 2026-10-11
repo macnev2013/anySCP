@@ -306,10 +306,22 @@ impl SshManager {
         config: &HostConfig,
     ) -> Result<(), SshError> {
         let authenticated = match &config.auth_method {
-            AuthMethod::Password { password } => handle
-                .authenticate_password(&config.username, password)
-                .await
-                .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?,
+            AuthMethod::Password { password } => {
+                // Many servers — notably PAM / privileged-access gateways
+                // (e.g. `user@domain%admin%target` logins) — disable the
+                // `password` method and only accept the same password via
+                // `keyboard-interactive`. Try that first, as PuTTY does, then
+                // fall back to `password`. The order matters: russh 0.46 only
+                // routes the server's prompts back to us when
+                // keyboard-interactive is the connection's *first* auth
+                // request — attempted after a rejected password, the prompt is
+                // dropped and the login hangs.
+                Self::auth_keyboard_interactive(handle, &config.username, password).await?
+                    || handle
+                        .authenticate_password(&config.username, password)
+                        .await
+                        .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?
+            }
             AuthMethod::PrivateKey {
                 key_path,
                 passphrase,
@@ -349,6 +361,49 @@ impl SshManager {
             ));
         }
         Ok(())
+    }
+
+    /// Answer a `keyboard-interactive` exchange with the saved password.
+    ///
+    /// Hidden prompts (e.g. "Password:") get the password; echoed prompts get
+    /// an empty answer. Prompt-less rounds (banners/instructions) are
+    /// acknowledged. The password is only ever sent once: if the server asks
+    /// for hidden input again (an OTP / MFA code) we stop rather than replay it.
+    async fn auth_keyboard_interactive(
+        handle: &mut client::Handle<SshClientHandler>,
+        username: &str,
+        password: &str,
+    ) -> Result<bool, SshError> {
+        use client::KeyboardInteractiveAuthResponse as Kbi;
+
+        // Bounds a server that keeps sending prompt-less rounds.
+        const MAX_ROUNDS: usize = 8;
+
+        let mut response = handle
+            .authenticate_keyboard_interactive_start(username, None::<String>)
+            .await
+            .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
+        let mut password_sent = false;
+
+        for _ in 0..MAX_ROUNDS {
+            let prompts = match response {
+                Kbi::Success => return Ok(true),
+                Kbi::Failure => return Ok(false),
+                Kbi::InfoRequest { prompts, .. } => prompts,
+            };
+
+            let answers = kbi_answers(
+                prompts.iter().map(|p| (p.prompt.as_str(), p.echo)),
+                password,
+                &mut password_sent,
+            )?;
+            response = handle
+                .authenticate_keyboard_interactive_respond(answers)
+                .await
+                .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
+        }
+
+        Ok(false)
     }
 
     async fn auth_with_key_data(
@@ -491,6 +546,34 @@ impl SshManager {
     }
 }
 
+/// Answers for one `keyboard-interactive` round, given `(prompt, echo)` pairs.
+///
+/// Hidden prompts get the password, echoed prompts an empty answer, and an
+/// empty round (banner/instructions only) an empty list. The password is only
+/// ever sent once across rounds (`password_sent`): a later hidden prompt is an
+/// OTP / MFA challenge we can't answer, so it's an error rather than a replay.
+fn kbi_answers<'a>(
+    prompts: impl IntoIterator<Item = (&'a str, bool)>,
+    password: &str,
+    password_sent: &mut bool,
+) -> Result<Vec<String>, SshError> {
+    let mut answers = Vec::new();
+    for (prompt, echo) in prompts {
+        if echo {
+            answers.push(String::new());
+        } else if !*password_sent {
+            answers.push(password.to_string());
+            *password_sent = true;
+        } else {
+            return Err(SshError::AuthenticationFailed(format!(
+                "server requested additional input ({}), which is not supported yet",
+                prompt.trim()
+            )));
+        }
+    }
+    Ok(answers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,5 +621,46 @@ mod tests {
         assert!(manager.cancel_connect("attempt-1"));
         assert!(active.is_cancelled());
         assert!(!orphaned.is_cancelled());
+    }
+
+    // ─── keyboard-interactive fallback (issue #131) ─────────────────────────
+
+    #[test]
+    fn kbi_answers_hidden_password_prompt_with_password() {
+        let mut sent = false;
+        let answers = kbi_answers([("Password: ", false)], "s3cret", &mut sent).unwrap();
+        assert_eq!(answers, vec!["s3cret".to_string()]);
+        assert!(sent);
+    }
+
+    #[test]
+    fn kbi_answers_echoed_prompts_with_empty_strings() {
+        let mut sent = false;
+        let answers =
+            kbi_answers([("Reason: ", true), ("Password: ", false)], "pw", &mut sent).unwrap();
+        assert_eq!(answers, vec![String::new(), "pw".to_string()]);
+    }
+
+    #[test]
+    fn kbi_answers_acknowledges_prompt_less_rounds() {
+        let mut sent = false;
+        let answers = kbi_answers(std::iter::empty(), "pw", &mut sent).unwrap();
+        assert!(answers.is_empty());
+        assert!(!sent, "a banner round must not consume the password");
+    }
+
+    #[test]
+    fn kbi_answers_never_replays_password_to_a_second_hidden_prompt() {
+        // Round 1: password. Round 2: an OTP challenge — must not get the password.
+        let mut sent = false;
+        kbi_answers([("Password: ", false)], "pw", &mut sent).unwrap();
+        let err = kbi_answers([("Verification code: ", false)], "pw", &mut sent).unwrap_err();
+        assert!(
+            matches!(err, SshError::AuthenticationFailed(m) if m.contains("Verification code"))
+        );
+
+        // Same rule within a single round.
+        let mut sent = false;
+        assert!(kbi_answers([("Password: ", false), ("OTP: ", false)], "pw", &mut sent).is_err());
     }
 }
