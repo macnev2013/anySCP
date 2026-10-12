@@ -571,6 +571,7 @@ fn auth_method_label(auth: &AuthMethod) -> &'static str {
         AuthMethod::Password { .. } => "password",
         AuthMethod::PrivateKey { .. } => "privateKey",
         AuthMethod::PrivateKeyData { .. } => "privateKeyData",
+        AuthMethod::SshAgent { .. } => "sshAgent",
     }
 }
 
@@ -591,6 +592,7 @@ fn resolve_auth_method(host_id: &str, auth_type: &str, key_path: Option<String>)
                 passphrase,
             }
         }
+        "sshAgent" => AuthMethod::SshAgent { socket_path: None },
         _ => {
             let password = match vault::get_credential(host_id) {
                 Ok(vault::StoredCredential::Password { password }) => password,
