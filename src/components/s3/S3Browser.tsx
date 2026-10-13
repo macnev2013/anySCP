@@ -252,8 +252,11 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("s3_create_file", { s3SessionId: sessionId, key });
-      await loadObjects(session.currentPrefix);
-    } catch { /* Error shown via refresh */ }
+    } catch (err) {
+      toast.error(`Couldn't create file "${name.trim()}": ${errorMessage(err)}`);
+      return;
+    }
+    await loadObjects(session.currentPrefix);
   }, [sessionId, session, loadObjects]);
 
   const handleCreateFolder = useCallback(async (name: string) => {
@@ -263,8 +266,11 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("s3_create_folder", { s3SessionId: sessionId, prefix });
-      await loadObjects(session.currentPrefix);
-    } catch { /* Error shown via refresh */ }
+    } catch (err) {
+      toast.error(`Couldn't create folder "${name.trim()}": ${errorMessage(err)}`);
+      return;
+    }
+    await loadObjects(session.currentPrefix);
   }, [sessionId, session, loadObjects]);
 
   // ─── Delete ──────────────────────────────────────────────────────────────
@@ -280,7 +286,10 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
           await invoke("s3_delete_object", { s3SessionId: sessionId, key: entry.id });
         }
       }
-    } catch { /* Partial deletes may occur */ }
+    } catch (err) {
+      // Deletion stops at the first failure; earlier entries may already be gone.
+      toast.error(`Delete failed: ${errorMessage(err)}`);
+    }
     if (session) void loadObjects(session.currentPrefix);
   }, [sessionId, session, loadObjects]);
 
@@ -526,4 +535,11 @@ interface DragDropEventPayload {
     paths: string[];
     position?: { x: number; y: number };
   };
+}
+
+function errorMessage(err: unknown): string {
+  if (err && typeof err === "object" && "message" in err) {
+    return String((err as { message: string }).message);
+  }
+  return typeof err === "string" ? err : "Unexpected error";
 }
