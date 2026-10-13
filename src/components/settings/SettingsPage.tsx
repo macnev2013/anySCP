@@ -692,12 +692,14 @@ function ExplorerSettings() {
           onChange={setDoubleClickAction}
           options={[
             { value: "download", label: "Download" },
-            { value: "open", label: "Open in Editor" },
+            { value: "open", label: "Open" },
           ]}
         />
       </SettingRow>
       <p className="px-1 text-[length:var(--text-xs)] text-text-muted">
-        Opening falls back to downloading when no editor is configured (see Editors).
+        Text files open in your default editor; other files (PDFs, images, documents…)
+        open in your system's default app for that type. Text files download instead
+        when no editor is configured (see Editors).
       </p>
     </SettingsGroup>
   );

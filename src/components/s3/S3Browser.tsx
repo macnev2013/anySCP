@@ -362,6 +362,22 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
     })();
   }, [sessionId]);
 
+  const handleOpenWithDefaultApp = useCallback((entry: ExplorerEntry) => {
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("s3_edit_external", {
+          s3SessionId: sessionId,
+          key: entry.id,
+          editor: null,
+          systemDefault: true,
+        });
+      } catch (err) {
+        toast.error(editorLaunchErrorMessage(err));
+      }
+    })();
+  }, [sessionId]);
+
   // ─── Presign URL ──────────────────────────────────────────────────────────
 
   const handlePresignUrl = useCallback(async (entry: ExplorerEntry) => {
@@ -486,6 +502,7 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
         onDownload={(entry) => void handleDownload(entry)}
         onDelete={handleDelete}
         onEditInEditor={handleEditInEditor}
+        onOpenWithDefaultApp={handleOpenWithDefaultApp}
         onPresignUrl={(entry) => void handlePresignUrl(entry)}
         creatingFile={creatingFile}
         onCreateFile={(name) => void handleCreateFile(name)}

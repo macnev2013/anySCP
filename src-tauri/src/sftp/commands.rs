@@ -1403,6 +1403,8 @@ pub async fn sftp_edit_external(
     sftp_session_id: String,
     remote_path: String,
     editor: Option<crate::editors::EditorConfig>,
+    // Open in the OS default app instead of an editor (binary files, #140).
+    system_default: Option<bool>,
     sftp_manager: State<'_, Arc<SftpManager>>,
     app_handle: AppHandle,
 ) -> Result<(), SftpError> {
@@ -1446,18 +1448,16 @@ pub async fn sftp_edit_external(
             .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
     }
 
-    // 2. Open in the chosen editor (or an auto-detected one). Spawns and returns
-    //    immediately; the watcher below handles save-and-re-upload.
-    let editor = editor
-        .or_else(crate::editors::resolve_default)
-        .ok_or_else(|| {
-            SftpError::LocalIoError("No editor found. Add one in Settings → Editors.".to_string())
-        })?;
-    crate::editors::launch(&editor, &local_path).map_err(SftpError::LocalIoError)?;
+    // 2. Open in the chosen editor (or an auto-detected one, or the OS default
+    //    app for binaries). Spawns and returns immediately; the watcher below
+    //    handles save-and-re-upload.
+    let opened_with =
+        crate::editors::open_staged(editor, system_default.unwrap_or(false), &local_path)
+            .map_err(SftpError::LocalIoError)?;
 
     crate::telemetry::capture(
         "edit_external",
-        serde_json::json!({ "source": "sftp", "editor": editor.name }),
+        serde_json::json!({ "source": "sftp", "editor": opened_with }),
     );
 
     // 3. Watch for file saves and re-upload on each save
