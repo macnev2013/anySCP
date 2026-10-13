@@ -31,13 +31,15 @@ async fn mkdir_p(sftp: &russh_sftp::client::SftpSession, path: &str) -> Result<(
         // Try to create — ignore "already exists" errors
         match sftp.create_dir(&current).await {
             Ok(()) => {}
-            Err(_) => {
+            Err(create_err) => {
                 // Check if it already exists as a directory — if so, continue
                 match sftp.metadata(&current).await {
                     Ok(attrs) if attrs.file_type() == FileType::Dir => {}
                     _ => {
+                        // Keep the server's reason (e.g. "Permission denied") so
+                        // the user learns why, not just that it failed (#151).
                         return Err(SftpError::RemoteIoError(format!(
-                            "failed to create directory: {current}"
+                            "failed to create directory {current}: {create_err}"
                         )));
                     }
                 }

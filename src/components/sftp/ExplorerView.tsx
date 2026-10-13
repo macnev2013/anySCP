@@ -560,10 +560,12 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
       const filePath = provider.joinPath(session.currentPath, name.trim());
       try {
         await explorerInvoke(transport, "create_file", sessionId, { path: filePath });
-        await loadDirectory(session.currentPath);
-      } catch {
-        // Error shown via refresh
+      } catch (err) {
+        // e.g. permission denied — the listing refresh alone would hide this.
+        toast.error(`Couldn't create file "${name.trim()}": ${errorMessage(err)}`);
+        return;
       }
+      await loadDirectory(session.currentPath);
     },
     [sessionId, transport, session, loadDirectory, provider],
   );
@@ -575,10 +577,11 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
       const dirPath = provider.joinPath(session.currentPath, name.trim());
       try {
         await explorerInvoke(transport, "mkdir", sessionId, { path: dirPath });
-        await loadDirectory(session.currentPath);
-      } catch {
-        // Error shown via refresh
+      } catch (err) {
+        toast.error(`Couldn't create folder "${name.trim()}": ${errorMessage(err)}`);
+        return;
       }
+      await loadDirectory(session.currentPath);
     },
     [sessionId, transport, session, loadDirectory, provider],
   );
@@ -593,8 +596,9 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
           isDir: entry.entryType === "Directory",
         });
       }
-    } catch {
-      // Partial deletes may occur
+    } catch (err) {
+      // Deletion stops at the first failure; earlier entries may already be gone.
+      toast.error(`Delete failed: ${errorMessage(err)}`);
     }
     if (session) void loadDirectory(session.currentPath);
   }, [sessionId, transport, session, loadDirectory]);
@@ -608,7 +612,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
       await explorerInvoke(transport, "rename", sessionId, { oldPath: entry.id, newPath });
       if (session) void loadDirectory(session.currentPath);
     } catch (err) {
-      console.error("Rename failed:", err);
+      toast.error(`Rename failed: ${errorMessage(err)}`);
     }
   }, [sessionId, transport, session, loadDirectory]);
 
