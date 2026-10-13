@@ -23,7 +23,10 @@ const SSH_USER = process.env.SSH_USER ?? "testuser";
 const SSH_PASS = process.env.SSH_PASS ?? "testpass";
 
 const BIG_FILE = "big-141.log";
-const BIG_MB = 400;
+// The e2e app is a debug build, so SFTP downloads run at only a few MB/s:
+// this is enough to keep the download in flight for the repeat double-click and
+// minimize below, without the spec taking minutes on slower CI runners.
+const BIG_MB = 80;
 
 async function toastTexts(role: "status" | "alert"): Promise<string[]> {
     return await browser.execute(
@@ -52,7 +55,10 @@ describe("SFTP open large file in editor (#141)", () => {
         await waitForDashboard();
     });
 
-    it("shows progress while downloading and ignores a repeat double-click", async () => {
+    it("shows progress while downloading and ignores a repeat double-click", async function () {
+        // Seeding + downloading a large file runs past the 120 s default on CI.
+        this.timeout(240_000);
+
         // An "editor" that exits immediately — the test is about the download.
         await gotoSettingsSection("editors");
         const addCustom = await $("//button[contains(., 'Add custom editor')]");
@@ -124,7 +130,7 @@ describe("SFTP open large file in editor (#141)", () => {
 
         // Once downloaded and launched, the progress toast clears with no error.
         await browser.waitUntil(async () => !(await hasToast("status", progressText)), {
-            timeout: 180_000,
+            timeout: 150_000,
             interval: 1_000,
             timeoutMsg: "progress toast never cleared",
         });
