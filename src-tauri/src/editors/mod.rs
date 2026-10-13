@@ -594,6 +594,29 @@ pub fn launch(editor: &EditorConfig, file: &Path) -> Result<(), String> {
         .map_err(|e| format!("Failed to launch {} ({exec}): {e}", editor.name))
 }
 
+/// Open a staged (downloaded) file: in the OS default app for its type when
+/// `system_default` is set, otherwise in `editor` or an auto-detected one.
+/// Returns the name of what opened it (for telemetry), or a user-facing error.
+///
+/// The system-default path serves double-click on binaries (PDFs, images,
+/// documents, …), which are useless in a code editor (#140).
+pub fn open_staged(
+    editor: Option<EditorConfig>,
+    system_default: bool,
+    file: &Path,
+) -> Result<String, String> {
+    if system_default {
+        tauri_plugin_opener::open_path(file, None::<&str>)
+            .map_err(|e| format!("Couldn't open with the default app: {e}"))?;
+        return Ok("system default".to_string());
+    }
+    let editor = editor
+        .or_else(resolve_default)
+        .ok_or_else(|| "No editor found. Add one in Settings → Editors.".to_string())?;
+    launch(&editor, file)?;
+    Ok(editor.name)
+}
+
 /// Split an args template into individual arguments, substituting `{path}` with
 /// the target file. Honours single/double quotes so a quoted token survives as
 /// one argument. If the template has no `{path}`, the file is appended last.

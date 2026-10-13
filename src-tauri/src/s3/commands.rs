@@ -1024,6 +1024,8 @@ pub async fn s3_edit_external(
     s3_session_id: String,
     key: String,
     editor: Option<crate::editors::EditorConfig>,
+    // Open in the OS default app instead of an editor (binary files, #140).
+    system_default: Option<bool>,
     s3_manager: State<'_, Arc<S3Manager>>,
     app_handle: AppHandle,
 ) -> Result<(), S3Error> {
@@ -1057,17 +1059,15 @@ pub async fn s3_edit_external(
             .map_err(|e| S3Error::IoError(e.to_string()))?;
     }
 
-    // 2. Open in the chosen editor (or an auto-detected one), non-blocking.
-    let editor = editor
-        .or_else(crate::editors::resolve_default)
-        .ok_or_else(|| {
-            S3Error::IoError("No editor found. Add one in Settings → Editors.".to_string())
-        })?;
-    crate::editors::launch(&editor, &local_path).map_err(S3Error::IoError)?;
+    // 2. Open in the chosen editor (or an auto-detected one) — or the OS default
+    //    app for binaries — non-blocking.
+    let opened_with =
+        crate::editors::open_staged(editor, system_default.unwrap_or(false), &local_path)
+            .map_err(S3Error::IoError)?;
 
     crate::telemetry::capture(
         "edit_external",
-        serde_json::json!({ "source": "s3", "editor": editor.name }),
+        serde_json::json!({ "source": "s3", "editor": opened_with }),
     );
 
     // 3. Watch for file saves and re-upload on each save.
