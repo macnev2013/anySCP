@@ -55,7 +55,8 @@ export function PortForwardingPage() {
       ? rules.filter((r) =>
           (r.label?.toLowerCase().includes(q)) ||
           String(r.local_port).includes(q) ||
-          String(r.remote_port).includes(q))
+          String(r.remote_port).includes(q) ||
+          r.remote_host.toLowerCase().includes(q))
       : rules;
 
     const groups = new Map<string, { host: SavedHost | null; rules: PortForwardRule[] }>();
@@ -252,7 +253,7 @@ export function PortForwardingPage() {
                             <span className="flex items-center gap-1.5 text-[length:var(--text-2xs)] font-mono text-text-muted">
                               <span>:{tunnel?.local_port ?? rule.local_port}</span>
                               <ArrowRight size={10} strokeWidth={2} className="text-text-muted/40" />
-                              <span>:{rule.remote_port}</span>
+                              <span>{isDefaultRemoteHost(rule.remote_host) ? "" : rule.remote_host}:{rule.remote_port}</span>
                             </span>
                             <button
                               onClick={(e) => {
@@ -395,7 +396,15 @@ const PORT_PRESETS = [
   { label: "Prometheus", port: 9090 },
 ];
 
-function RuleDialog({
+/** The SSH server itself — the destination when none is given. Shown as a bare
+ *  `:port` on rule cards; any other destination is spelled out. */
+const DEFAULT_REMOTE_HOST = "localhost";
+
+function isDefaultRemoteHost(host: string): boolean {
+  return host === DEFAULT_REMOTE_HOST;
+}
+
+export function RuleDialog({
   hosts,
   rule,
   onSubmit,
@@ -412,10 +421,13 @@ function RuleDialog({
   const [description, setDescription] = useState(rule?.description ?? "");
   const [localPort, setLocalPort] = useState(rule ? String(rule.local_port) : "");
   const [remotePort, setRemotePort] = useState(rule ? String(rule.remote_port) : "");
+  const [remoteHost, setRemoteHost] = useState(rule?.remote_host ?? DEFAULT_REMOTE_HOST);
   const [bindAddress, setBindAddress] = useState(rule?.bind_address ?? "127.0.0.1");
   const [autoStart, setAutoStart] = useState(rule?.auto_start ?? false);
 
-  const canSubmit = hostId && localPort && remotePort && Number(localPort) > 0 && Number(remotePort) > 0;
+  const canSubmit =
+    hostId && localPort && remotePort && Number(localPort) > 0 && Number(remotePort) > 0 &&
+    remoteHost.trim() !== "" && !/\s/.test(remoteHost.trim());
 
   const applyPreset = (port: number, presetLabel: string) => {
     setLocalPort(String(port));
@@ -433,7 +445,7 @@ function RuleDialog({
       forward_type: "Local",
       bind_address: bindAddress,
       local_port: Number(localPort),
-      remote_host: "localhost",
+      remote_host: remoteHost.trim(),
       remote_port: Number(remotePort),
       auto_start: autoStart,
       last_used_at: rule?.last_used_at ?? null,
@@ -580,6 +592,28 @@ function RuleDialog({
                 className={`${inputClass} font-mono`}
               />
             </div>
+          </div>
+
+          {/* Destination host — resolved by the SSH server, so it can be the
+              server itself or any other machine reachable from it (#138). */}
+          <div>
+            <label htmlFor="pf-remote-host" className={labelClass}>Destination Host</label>
+            <input
+              id="pf-remote-host"
+              data-testid="rule-remote-host"
+              type="text"
+              value={remoteHost}
+              onChange={(e) => setRemoteHost(e.target.value)}
+              placeholder={DEFAULT_REMOTE_HOST}
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              className={`${inputClass} font-mono`}
+            />
+            <p className="mt-1 text-[length:var(--text-2xs)] text-text-muted">
+              Resolved from the SSH server. Keep <span className="font-mono">localhost</span> for
+              a service on the server itself, or enter another host it can reach (e.g. <span className="font-mono">db.internal</span>).
+            </p>
           </div>
 
           <SectionHeader>Options</SectionHeader>
