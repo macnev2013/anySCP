@@ -646,6 +646,20 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
     );
   }, [sessionId, transport]);
 
+  const handleOpenWithDefaultApp = useCallback((entry: ExplorerEntry) => {
+    void (async () => {
+      try {
+        await explorerInvoke(transport, "edit_external", sessionId, {
+          remotePath: entry.id,
+          editor: null,
+          systemDefault: true,
+        });
+      } catch (err) {
+        toast.error(editorLaunchErrorMessage(err));
+      }
+    })();
+  }, [sessionId, transport]);
+
   // ─── Paste / Move / Copy ─────────────────────────────────────────────────
 
   const [busy, setBusy] = useState(false);
@@ -805,6 +819,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         onDelete={handleDelete}
         onRename={handleRename}
         onEditInEditor={handleEditInEditor}
+        onOpenWithDefaultApp={handleOpenWithDefaultApp}
         onApplyPermissions={handleApplyPermissions}
         creatingFile={creatingFile}
         onCreateFile={(name) => void handleCreateFile(name)}

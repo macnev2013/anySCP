@@ -64,6 +64,9 @@ interface ExplorerFileTableProps {
   onDelete: (entries: ExplorerEntry[]) => Promise<void>;
   onRename?: (entry: ExplorerEntry, newName: string) => Promise<void>;
   onEditInEditor?: (entry: ExplorerEntry, editor?: EditorConfig) => void;
+  /** Open a file in the OS default app for its type (double-click on a binary
+   *  when the action is "open"). Saves still upload back, as with editors. */
+  onOpenWithDefaultApp?: (entry: ExplorerEntry) => void;
   onPresignUrl?: (entry: ExplorerEntry) => void;
   /** Apply chmod permission bits. SFTP/SCP only; absent for S3 → the
    *  Properties dialog shows permissions read-only (or hides them). When
@@ -347,6 +350,7 @@ export function ExplorerFileTable({
   onDelete,
   onRename,
   onEditInEditor,
+  onOpenWithDefaultApp,
   onPresignUrl,
   onApplyPermissions,
   creatingFolder,
@@ -718,24 +722,28 @@ export function ExplorerFileTable({
       onNavigate(entry.id);
       return;
     }
-    // For files, the action is configurable (Settings → Explorer). "Open in
-    // editor" uses the default editor, but only for text-editable files —
-    // binaries (video, images, PDFs, archives, …) fall back to download rather
-    // than dumping raw bytes into the editor. It also falls back when editing
-    // isn't possible (no editor configured, or the provider can't edit).
-    const defaultEditor =
-      editors.find((e) => e.id === defaultEditorId) ?? editors[0];
-    if (
-      doubleClickAction === "open" &&
-      caps.canEditInEditor &&
-      onEditInEditor &&
-      defaultEditor &&
-      isEditableInEditor(entry.name)
-    ) {
-      onEditInEditor(entry, defaultEditor);
-    } else {
-      onDownload(entry);
+    // For files, the action is configurable (Settings → Explorer). "Open"
+    // sends text files to the default editor, and binaries (video, images,
+    // PDFs, documents, …) to the OS default app for their type — like a
+    // Finder/Explorer double-click — instead of dumping raw bytes into a code
+    // editor (#140). It falls back to download when opening isn't possible
+    // (no editor configured for a text file, or the provider can't open).
+    if (doubleClickAction === "open" && caps.canEditInEditor) {
+      if (!isEditableInEditor(entry.name)) {
+        if (onOpenWithDefaultApp) {
+          onOpenWithDefaultApp(entry);
+          return;
+        }
+      } else {
+        const defaultEditor =
+          editors.find((e) => e.id === defaultEditorId) ?? editors[0];
+        if (onEditInEditor && defaultEditor) {
+          onEditInEditor(entry, defaultEditor);
+          return;
+        }
+      }
     }
+    onDownload(entry);
   };
 
   const handleContextMenu = (

@@ -1,9 +1,9 @@
 // File-type heuristics for the Explorer.
 //
-// Extensions we treat as non-text/binary. When the double-click action is "Open
-// in Editor" (Settings → Explorer), files matching these fall back to download
-// instead of being dumped — as raw bytes — into a text editor (e.g. .mov, .pdf,
-// images, archives). The Edit / Open With context-menu actions are deliberately
+// Extensions we treat as non-text/binary. When the double-click action is "Open"
+// (Settings → Explorer), files matching these open in the OS default app for
+// their type instead of being dumped — as raw bytes — into a text editor (e.g.
+// .mov, .pdf, images, archives). The Edit / Open With context-menu actions are deliberately
 // NOT filtered: those let the user force any file open on purpose.
 const BINARY_EXTENSIONS = new Set<string>([
   // Video
@@ -32,7 +32,7 @@ const BINARY_EXTENSIONS = new Set<string>([
 /**
  * Whether a file should open in a text editor on double-click. Returns false for
  * known binary formats (video / audio / images / archives / executables / …),
- * which are useless in a code editor — those fall back to download. Files with
+ * which are useless in a code editor — those open in the OS default app. Files with
  * no extension or a leading-dot dotfile name (e.g. `Dockerfile`, `.env`) are
  * treated as text, matching how scripts and config on servers typically look.
  */
