@@ -400,8 +400,10 @@ const PORT_PRESETS = [
  *  `:port` on rule cards; any other destination is spelled out. */
 const DEFAULT_REMOTE_HOST = "localhost";
 
-function isDefaultRemoteHost(host: string): boolean {
-  return host === DEFAULT_REMOTE_HOST;
+export function isDefaultRemoteHost(host: string): boolean {
+  // Hostnames are case-insensitive (RFC 4343), so "LOCALHOST" still points at
+  // the SSH server and should render as a bare `:port`, not be spelled out.
+  return host.trim().toLowerCase() === DEFAULT_REMOTE_HOST;
 }
 
 export function RuleDialog({
@@ -425,9 +427,10 @@ export function RuleDialog({
   const [bindAddress, setBindAddress] = useState(rule?.bind_address ?? "127.0.0.1");
   const [autoStart, setAutoStart] = useState(rule?.auto_start ?? false);
 
+  const trimmedRemoteHost = remoteHost.trim();
   const canSubmit =
     hostId && localPort && remotePort && Number(localPort) > 0 && Number(remotePort) > 0 &&
-    remoteHost.trim() !== "" && !/\s/.test(remoteHost.trim());
+    trimmedRemoteHost !== "" && !/\s/.test(trimmedRemoteHost);
 
   const applyPreset = (port: number, presetLabel: string) => {
     setLocalPort(String(port));
@@ -445,7 +448,7 @@ export function RuleDialog({
       forward_type: "Local",
       bind_address: bindAddress,
       local_port: Number(localPort),
-      remote_host: remoteHost.trim(),
+      remote_host: trimmedRemoteHost,
       remote_port: Number(remotePort),
       auto_start: autoStart,
       last_used_at: rule?.last_used_at ?? null,

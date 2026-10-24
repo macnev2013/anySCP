@@ -5,7 +5,7 @@
 import "@testing-library/jest-dom/vitest";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { RuleDialog } from "./PortForwardingPage";
+import { RuleDialog, isDefaultRemoteHost } from "./PortForwardingPage";
 import type { PortForwardRule, SavedHost } from "../../types";
 
 const host = {
@@ -90,4 +90,27 @@ describe("RuleDialog — destination host", () => {
 
     expect(screen.getByTestId("rule-dialog-save")).toBeDisabled();
   });
+});
+
+describe("isDefaultRemoteHost — the server itself renders as a bare :port", () => {
+  it("treats the exact default as the server", () => {
+    expect(isDefaultRemoteHost("localhost")).toBe(true);
+  });
+
+  // Hostnames are case-insensitive (RFC 4343), so a rule saved with "LOCALHOST"
+  // still points at the SSH server and should show the compact :port form, not
+  // be spelled out as "LOCALHOST:port".
+  it.each(["LOCALHOST", "LocalHost", "localHOST"])(
+    "treats %s as the server, case-insensitively",
+    (host) => {
+      expect(isDefaultRemoteHost(host)).toBe(true);
+    },
+  );
+
+  it.each(["db.internal", "localhost.evil.com", "notlocalhost"])(
+    "spells out a real destination like %s",
+    (host) => {
+      expect(isDefaultRemoteHost(host)).toBe(false);
+    },
+  );
 });
