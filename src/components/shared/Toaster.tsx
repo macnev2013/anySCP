@@ -84,16 +84,19 @@ function FullToast({
  *  clicking restores the full toast. */
 function MinimizedProgress({ toast: t, onRestore }: { toast: Toast; onRestore: () => void }) {
   return (
+    // The restore control stays a real button with an accessible name, so AT
+    // announces it as actionable. The message lives in an inner `status` region
+    // (collapsed but in the DOM) so the download is still reported politely.
     <button
       type="button"
-      role="status"
       data-minimized="true"
       onClick={onRestore}
+      aria-label="Show download progress"
       title="Show details"
       className="group pointer-events-auto self-end flex items-center rounded-full bg-bg-overlay border border-border shadow-[var(--shadow-lg)] p-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring animate-in fade-in-0 duration-[var(--duration-fast)]"
     >
       <Loader2 size={16} strokeWidth={2} aria-hidden="true" className="shrink-0 text-accent animate-spin" />
-      <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 text-[length:var(--text-sm)] text-text-primary transition-[max-width,opacity,padding] duration-[var(--duration-fast)] group-hover:max-w-[19rem] group-hover:opacity-100 group-hover:pl-2 group-hover:pr-1 group-focus-visible:max-w-[19rem] group-focus-visible:opacity-100 group-focus-visible:pl-2 group-focus-visible:pr-1 truncate">
+      <span role="status" className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 text-[length:var(--text-sm)] text-text-primary transition-[max-width,opacity,padding] duration-[var(--duration-fast)] group-hover:max-w-[19rem] group-hover:opacity-100 group-hover:pl-2 group-hover:pr-1 group-focus-visible:max-w-[19rem] group-focus-visible:opacity-100 group-focus-visible:pl-2 group-focus-visible:pr-1 truncate">
         {t.message}
       </span>
     </button>

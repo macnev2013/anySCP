@@ -24,6 +24,23 @@ describe("Toaster — progress toasts", () => {
     expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
   });
 
+  it("collapses to an activatable button, not a bare status region", () => {
+    // Regression guard (#141 review): the collapsed control used to override its
+    // own role with role="status", so assistive tech announced it as a status
+    // region, not a button — hiding that it restores the toast. It must stay a
+    // button with an accessible name.
+    render(<Toaster />);
+    act(() => {
+      toast.progress('Downloading "big.log" to open…');
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Minimize" }));
+
+    expect(
+      screen.getByRole("button", { name: /show download progress/i }),
+    ).toBeInTheDocument();
+  });
+
   it("minimizes to a glyph that still reports progress, and restores on click", () => {
     render(<Toaster />);
     act(() => {
@@ -32,10 +49,10 @@ describe("Toaster — progress toasts", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Minimize" }));
 
-    const glyph = screen.getByRole("status");
+    const glyph = screen.getByRole("button", { name: /show download progress/i });
     expect(glyph).toHaveAttribute("data-minimized", "true");
-    // The message stays in the DOM (revealed on hover), so it's still announced.
-    expect(glyph).toHaveTextContent('Downloading "big.log" to open…');
+    // The message stays in a live region (revealed on hover), so it's still announced.
+    expect(screen.getByRole("status")).toHaveTextContent('Downloading "big.log" to open…');
     expect(useToastStore.getState().toasts).toHaveLength(1);
 
     fireEvent.click(glyph);

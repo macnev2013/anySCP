@@ -124,7 +124,7 @@ describe("SFTP open large file in editor (#141)", () => {
         // It can't be closed — only minimized to a glyph that keeps showing.
         expect(await (await $("[role='status'] button[aria-label='Dismiss']")).isExisting()).to.equal(false);
         await (await $("[role='status'] button[aria-label='Minimize']")).click();
-        const glyph = await $("[role='status'][data-minimized='true']");
+        const glyph = await $("button[data-minimized='true']");
         await glyph.waitForExist({ timeout: 5_000 });
         expect(await hasToast("status", progressText), "minimized glyph keeps the message").to.equal(true);
 
