@@ -48,6 +48,8 @@ import { FilePropertiesDialog } from "./FilePropertiesDialog";
 interface ExplorerFileTableProps {
   provider: FileSystemProvider;
   entries: ExplorerEntry[];
+  hiddenCount?: number;
+  onShowHiddenFiles?: () => void;
   sortBy: "name" | "size" | "modified";
   sortAsc: boolean;
   onSortChange: (
@@ -336,6 +338,8 @@ function NewFileRow({
 export function ExplorerFileTable({
   provider,
   entries,
+  hiddenCount = 0,
+  onShowHiddenFiles,
   sortBy,
   sortAsc,
   onSortChange,
@@ -374,9 +378,52 @@ export function ExplorerFileTable({
     null,
   );
   const [propsEntry, setPropsEntry] = useState<ExplorerEntry | null>(null);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [rawSelectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const visibleIds = useMemo(() => new Set(entries.map((entry) => entry.id)), [entries]);
+  // All action targets/counts are constrained in the render that hides a row,
+  // before the cleanup effect runs.
+  const selectedIds = useMemo(
+    () => new Set([...rawSelectedIds].filter((id) => visibleIds.has(id))),
+    [rawSelectedIds, visibleIds],
+  );
   const lastClickedId = useRef<string | null>(null);
   const tableRef = useRef<HTMLDivElement>(null);
+  const focusedRow = useRef<{ id: string; element: HTMLElement } | null>(null);
+  const activeDrag = useRef<{ ids: string[]; cancel: () => void } | null>(null);
+  // Snapshot before React removes the row or finishes its rename editor.
+  // A body focus after the commit
+  // cannot distinguish a removed row from a user who already clicked away.
+  const restoreRemovedRowFocus = !!focusedRow.current
+    && focusedRow.current.element.contains(document.activeElement)
+    && (!visibleIds.has(focusedRow.current.id)
+      || (!renamingId && document.activeElement?.getAttribute("data-testid") === "explorer-rename-input"));
+
+  useLayoutEffect(() => {
+    setSelectedIds((previous) => {
+      const next = new Set([...previous].filter((id) => visibleIds.has(id)));
+      return next.size === previous.size ? previous : next;
+    });
+    if (lastClickedId.current && !visibleIds.has(lastClickedId.current)) lastClickedId.current = null;
+    if (contextMenu?.entry && !visibleIds.has(contextMenu.entry.id)) setContextMenu(null);
+    if (renamingId && !visibleIds.has(renamingId)) setRenamingId(null);
+    if (propsEntry && !visibleIds.has(propsEntry.id)) setPropsEntry(null);
+    if (confirmDelete?.some((entry) => !visibleIds.has(entry.id))) setConfirmDelete(null);
+    if (activeDrag.current?.ids.some((id) => !visibleIds.has(id))) activeDrag.current.cancel();
+    if (restoreRemovedRowFocus) {
+      focusedRow.current = null;
+      // Use a passive target: navigation/deletion/rename can also remove a
+      // focused row. Enter/Space must never activate a visibility toggle.
+      // Only make the scroller focusable during this recovery; remove the
+      // attribute on blur so later blank-space clicks preserve row focus.
+      const table = tableRef.current;
+      if (table) {
+        table.tabIndex = -1;
+        table.focus();
+      }
+    }
+  }, [visibleIds, contextMenu, renamingId, propsEntry, confirmDelete, restoreRemovedRowFocus]);
+
+  useLayoutEffect(() => () => activeDrag.current?.cancel(), []);
 
   // Drag-and-drop state (internal move). The OS-level Tauri drag-drop handler is
   // enabled (for file-drop uploads), which suppresses HTML5 drag events in the
@@ -584,6 +631,7 @@ export function ExplorerFileTable({
       if (!(caps.canInternalDragMove || onDragOut)) return;
       if ((e.target as HTMLElement).closest("input")) return;
 
+      activeDrag.current?.cancel();
       const dragEntries =
         selectedIds.has(entry.id) && selectedIds.size > 1
           ? selectedEntries
@@ -689,10 +737,12 @@ export function ExplorerFileTable({
         window.removeEventListener("keydown", onKey);
         window.removeEventListener("keyup", onKey);
         document.removeEventListener("mouseleave", onWindowLeave);
+        activeDrag.current = null;
         setDragOverId(null);
         setDragGhost(null);
       }
 
+      activeDrag.current = { ids: dragEntries.map((entry) => entry.id), cancel: teardown };
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
       window.addEventListener("keydown", onKey);
@@ -1013,7 +1063,7 @@ export function ExplorerFileTable({
   // refreshing a directory that already has entries, keep the list mounted so
   // the scroll position survives (the toolbar shows a refresh spinner instead).
 
-  if (loading && entries.length === 0) {
+  if (loading && entries.length === 0 && hiddenCount === 0) {
     return (
       <div className="flex-1 overflow-y-auto">
         <div className="flex flex-col gap-1 p-2">
@@ -1043,6 +1093,12 @@ export function ExplorerFileTable({
 
   return (
     <>
+      {hiddenCount > 0 && (
+        <div role="status" className="flex items-center gap-3 px-4 py-2 border-b border-border text-[length:var(--text-xs)] text-text-muted">
+          <span>{hiddenCount.toLocaleString()} loaded {hiddenCount === 1 ? "item is" : "items are"} hidden</span>
+          <button onClick={onShowHiddenFiles} className="text-accent rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Show hidden files</button>
+        </div>
+      )}
       {/* Column header — a fixed row above the list, a sibling of the scroller
           rather than a child, so the scroller stays a direct flex child of the
           pane column and scrolls. The right padding reserves the scrollbar
@@ -1100,6 +1156,27 @@ export function ExplorerFileTable({
 
       <div
         ref={tableRef}
+        role="group"
+        aria-label="File list"
+        onFocusCapture={(event) => {
+          const row = (event.target as HTMLElement).closest<HTMLElement>("[data-entry-row]");
+          const id = row?.dataset.entryId;
+          focusedRow.current = row && id ? { id, element: row } : null;
+        }}
+        onBlurCapture={(event) => {
+          focusedRow.current = null;
+          if (event.target === tableRef.current) tableRef.current?.removeAttribute("tabindex");
+        }}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget || !sortedEntries.length) return;
+          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+          event.preventDefault();
+          const index = event.key === "ArrowDown" ? 0 : sortedEntries.length - 1;
+          const entry = sortedEntries[index];
+          setSelectedIds(new Set([entry.id]));
+          lastClickedId.current = entry.id;
+          tableRef.current?.querySelectorAll<HTMLElement>("[data-entry-row]")[index]?.focus();
+        }}
         // -scroll, not -auto: the header above reserves the scrollbar gutter,
         // so short listings would otherwise sit 6px left of their headers.
         className={`flex-1 overflow-y-scroll${dragGhost ? " select-none" : ""}`}
@@ -1139,7 +1216,7 @@ export function ExplorerFileTable({
               aria-hidden="true"
             />
             <p className="text-[length:var(--text-sm)] text-text-muted">
-              This folder is empty
+              {hiddenCount > 0 ? "Hidden items are not shown" : "This folder is empty"}
             </p>
             <div className="flex items-center gap-2">
               {caps.canCreateFile && (
@@ -1189,6 +1266,7 @@ export function ExplorerFileTable({
                   role="listitem"
                   data-entry-row="true"
                   data-entry-name={entry.name}
+                  data-entry-id={entry.id}
                   data-entry-type={entry.entryType}
                   data-testid={`explorer-entry-${entry.name}`}
                   tabIndex={0}
@@ -1372,7 +1450,7 @@ export function ExplorerFileTable({
       </div>
 
       {/* Context menu */}
-      {contextMenu && (
+      {contextMenu && (!contextMenu.entry || visibleIds.has(contextMenu.entry.id)) && (
         <ContextMenu
           items={buildMenuItems(contextMenu.entry)}
           position={{ x: contextMenu.x, y: contextMenu.y }}
@@ -1381,7 +1459,7 @@ export function ExplorerFileTable({
       )}
 
       {/* Delete confirmation dialog */}
-      {confirmDelete && confirmDelete.length > 0 && (
+      {confirmDelete && confirmDelete.length > 0 && confirmDelete.every((entry) => visibleIds.has(entry.id)) && (
         <DeleteConfirmDialog
           entries={confirmDelete}
           onConfirm={() => void handleDeleteEntries(confirmDelete)}
@@ -1390,7 +1468,7 @@ export function ExplorerFileTable({
       )}
 
       {/* Properties dialog */}
-      {propsEntry && (
+      {propsEntry && visibleIds.has(propsEntry.id) && (
         <FilePropertiesDialog
           entry={propsEntry}
           capabilities={caps}

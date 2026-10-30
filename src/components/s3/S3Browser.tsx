@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { toast } from "../../stores/toast-store";
 import { Folder, RefreshCw, AlertCircle } from "lucide-react";
 import { useS3Store } from "../../stores/s3-store";
 import type { S3BucketInfo, S3ListResult } from "../../types";
@@ -6,7 +7,8 @@ import type { ExplorerEntry } from "../../types/explorer";
 import { ExplorerToolbar, ExplorerFileTable, ExplorerDropZone } from "../explorer";
 import { createS3Provider, toS3ExplorerEntry } from "../../providers/s3-provider";
 import { openInEditorWithProgress } from "../../lib/open-in-editor";
-import type { EditorConfig } from "../../stores/settings-store";
+import { useSettingsStore, type EditorConfig } from "../../stores/settings-store";
+import { filterExplorerEntries, isHiddenEntry } from "../../lib/explorer-visibility";
 
 interface S3BrowserProps {
   sessionId: string;
@@ -18,6 +20,20 @@ interface S3BrowserProps {
 
 export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
   const session = useS3Store((s) => s.sessions.get(sessionId));
+  const visibilityReady = useSettingsStore((s) => s.loaded);
+  const defaultShowHiddenFiles = useSettingsStore((s) => s.explorerShowHiddenFiles);
+  const setShowHiddenFilesOverride = useS3Store((s) => s.setShowHiddenFilesOverride);
+  const showHiddenFiles = session?.showHiddenFilesOverride ?? defaultShowHiddenFiles;
+  const toggleHiddenFiles = () => setShowHiddenFilesOverride(sessionId, !showHiddenFiles);
+  // Read the current preference after the backend succeeds, including changes
+  // made while the request was in flight.
+  const notifyHiddenSuccess = useCallback((name: string, action: string) => {
+    const show = useS3Store.getState().sessions.get(sessionId)?.showHiddenFilesOverride
+      ?? useSettingsStore.getState().explorerShowHiddenFiles;
+    if (!show && isHiddenEntry({ name })) {
+      toast.success(`${action} "${name}". Hidden files are currently hidden.`);
+    }
+  }, [sessionId]);
   const setEntries = useS3Store((s) => s.setEntries);
   const appendEntries = useS3Store((s) => s.appendEntries);
   const setBuckets = useS3Store((s) => s.setBuckets);
@@ -251,9 +267,10 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("s3_create_file", { s3SessionId: sessionId, key });
+      notifyHiddenSuccess(name.trim(), "Created");
       await loadObjects(session.currentPrefix);
     } catch { /* Error shown via refresh */ }
-  }, [sessionId, session, loadObjects]);
+  }, [sessionId, session, loadObjects, notifyHiddenSuccess]);
 
   const handleCreateFolder = useCallback(async (name: string) => {
     setCreatingFolder(false);
@@ -262,9 +279,10 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("s3_create_folder", { s3SessionId: sessionId, prefix });
+      notifyHiddenSuccess(name.trim(), "Created");
       await loadObjects(session.currentPrefix);
     } catch { /* Error shown via refresh */ }
-  }, [sessionId, session, loadObjects]);
+  }, [sessionId, session, loadObjects, notifyHiddenSuccess]);
 
   // ─── Delete ──────────────────────────────────────────────────────────────
 
@@ -397,6 +415,11 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
     [session?.entries],
   );
 
+  const { visibleEntries, hiddenCount } = useMemo(
+    () => filterExplorerEntries(explorerEntries, showHiddenFiles),
+    [explorerEntries, showHiddenFiles],
+  );
+
   // ─── Guard ────────────────────────────────────────────────────────────────
 
   if (!session) return null;
@@ -449,6 +472,9 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
   return (
     <div className="flex flex-col h-full overflow-hidden relative">
       <ExplorerToolbar
+        showHiddenFiles={showHiddenFiles}
+        visibilityReady={visibilityReady}
+        onToggleHiddenFiles={toggleHiddenFiles}
         provider={provider}
         currentPath={session.currentPrefix}
         segments={segments}
@@ -469,42 +495,48 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
         </div>
       )}
 
-      <ExplorerFileTable
-        provider={provider}
-        entries={explorerEntries}
-        sortBy={session.sortBy}
-        sortAsc={session.sortAsc}
-        onSortChange={(sortBy, sortAsc) => setSort(sessionId, sortBy, sortAsc)}
-        clipboard={clipboard}
-        onSetClipboard={setClipboard}
-        onNavigate={(path) => void loadObjects(path)}
-        onDownload={(entry) => void handleDownload(entry)}
-        onDelete={handleDelete}
-        onEditInEditor={handleEditInEditor}
-        onPresignUrl={(entry) => void handlePresignUrl(entry)}
-        creatingFile={creatingFile}
-        onCreateFile={(name) => void handleCreateFile(name)}
-        onCancelCreateFile={() => setCreatingFile(false)}
-        creatingFolder={creatingFolder}
-        onCreateFolder={(name) => void handleCreateFolder(name)}
-        onCancelCreateFolder={() => setCreatingFolder(false)}
-        currentPath={session.currentPrefix}
-        loading={session.loading}
-      />
+      {!visibilityReady ? (
+        <div role="status" className="flex-1 p-4 text-text-muted">Loading Explorer settings…</div>
+      ) : (
+        <ExplorerFileTable
+          provider={provider}
+          entries={visibleEntries}
+          hiddenCount={hiddenCount}
+          onShowHiddenFiles={() => setShowHiddenFilesOverride(sessionId, true)}
+          sortBy={session.sortBy}
+          sortAsc={session.sortAsc}
+          onSortChange={(sortBy, sortAsc) => setSort(sessionId, sortBy, sortAsc)}
+          clipboard={clipboard}
+          onSetClipboard={setClipboard}
+          onNavigate={(path) => void loadObjects(path)}
+          onDownload={(entry) => void handleDownload(entry)}
+          onDelete={handleDelete}
+          onEditInEditor={handleEditInEditor}
+          onPresignUrl={(entry) => void handlePresignUrl(entry)}
+          creatingFile={creatingFile}
+          onCreateFile={(name) => void handleCreateFile(name)}
+          onCancelCreateFile={() => setCreatingFile(false)}
+          creatingFolder={creatingFolder}
+          onCreateFolder={(name) => void handleCreateFolder(name)}
+          onCancelCreateFolder={() => setCreatingFolder(false)}
+          currentPath={session.currentPrefix}
+          loading={session.loading}
+        />
+      )}
 
-      {session.nextToken && (
-        <div data-testid="s3-load-more" className="flex items-center justify-center gap-3 px-4 py-2 border-t border-border bg-bg-surface shrink-0 no-select">
+      {visibilityReady && (session.entries.length > 0 || session.nextToken) && (
+        <div key={session.nextToken ? "more" : "complete"} data-testid={session.nextToken ? "s3-load-more" : "s3-listing-count"} className="flex items-center justify-center gap-3 px-4 py-2 border-t border-border bg-bg-surface shrink-0 no-select">
           <span data-testid="s3-load-more-count" className="text-[length:var(--text-xs)] text-text-muted">
-            Showing {session.entries.length.toLocaleString()} items — more available
+            Loaded {session.entries.length.toLocaleString()} items · Showing {visibleEntries.length.toLocaleString()} · Hidden {hiddenCount.toLocaleString()}{session.nextToken ? " — more available" : ""}
           </span>
-          <button
+          {session.nextToken && <button
             data-testid="s3-load-more-button"
             onClick={() => void loadMoreObjects()}
             disabled={session.loading}
             className="px-3 py-1 rounded-md text-[length:var(--text-xs)] font-medium text-text-muted bg-bg-surface border border-border hover:border-border-focus hover:text-text-secondary hover:bg-bg-overlay disabled:opacity-50 transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {session.loading ? "Loading..." : "Load more"}
-          </button>
+          </button>}
         </div>
       )}
 

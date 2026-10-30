@@ -679,8 +679,26 @@ function ExplorerSettings() {
   const doubleClickAction = useSettingsStore((s) => s.explorerDoubleClickAction);
   const setDoubleClickAction = useSettingsStore((s) => s.setExplorerDoubleClickAction);
 
+  const showHiddenFiles = useSettingsStore((s) => s.explorerShowHiddenFiles);
+  const setShowHiddenFiles = useSettingsStore((s) => s.setExplorerShowHiddenFiles);
+
   return (
     <SettingsGroup>
+      <SettingRow>
+        <div>
+          <p className={LABEL_CLASS}>Hidden Files by Default</p>
+          <p className={DESC_CLASS}>Global default for dot-prefixed files and folders. The toolbar changes only the current session.</p>
+        </div>
+        <SegmentedControl<"show" | "hide">
+          id="s-hidden-files"
+          value={showHiddenFiles ? "show" : "hide"}
+          onChange={(value) => setShowHiddenFiles(value === "show")}
+          options={[
+            { value: "show", label: "Show" },
+            { value: "hide", label: "Hide" },
+          ]}
+        />
+      </SettingRow>
       <SettingRow>
         <div>
           <p className={LABEL_CLASS}>Double-click a File</p>

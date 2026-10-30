@@ -18,6 +18,8 @@ export interface SftpSession {
   error: string | null;
   sortBy: "name" | "size" | "modified";
   sortAsc: boolean;
+  /** Temporary choice; null follows the global Explorer default. */
+  showHiddenFilesOverride: boolean | null;
 }
 
 // ─── Store shape ──────────────────────────────────────────────────────────────
@@ -40,6 +42,7 @@ interface SftpState {
     sortBy: "name" | "size" | "modified",
     sortAsc: boolean,
   ) => void;
+  setShowHiddenFilesOverride: (sessionId: string, show: boolean) => void;
   setClipboard: (clipboard: SftpClipboard | null) => void;
 }
 
@@ -66,6 +69,7 @@ export const useSftpStore = create<SftpState>((set) => ({
         error: null,
         sortBy: "name",
         sortAsc: true,
+        showHiddenFilesOverride: null,
       });
       return { sessions: next, activeSftpSessionId: sftpSessionId };
     }),
@@ -136,6 +140,15 @@ export const useSftpStore = create<SftpState>((set) => ({
       if (!session) return state;
       const next = new Map(state.sessions);
       next.set(sftpSessionId, { ...session, sortBy, sortAsc });
+      return { sessions: next };
+    }),
+
+  setShowHiddenFilesOverride: (sessionId, show) =>
+    set((state) => {
+      const session = state.sessions.get(sessionId);
+      if (!session) return state;
+      const next = new Map(state.sessions);
+      next.set(sessionId, { ...session, showHiddenFilesOverride: show });
       return { sessions: next };
     }),
 

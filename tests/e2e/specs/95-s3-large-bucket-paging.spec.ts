@@ -50,7 +50,7 @@ describe("S3 large bucket paging (issue #137)", () => {
         const footer = await $("[data-testid='s3-load-more']");
         await footer.waitForDisplayed({ timeout: 15_000 });
         expect(await (await $("[data-testid='s3-load-more-count']")).getText()).to.include(
-            "Showing 1,000 items",
+            "Loaded 1,000 items · Showing 1,000 · Hidden 0",
         );
         expect(await entryCount()).to.equal(1000);
         expect(await (await $("[data-entry-name='obj-1005.txt']")).isExisting()).to.equal(false);

@@ -49,6 +49,7 @@ interface SettingsState {
 
   // Explorer
   explorerDoubleClickAction: DoubleClickAction;
+  explorerShowHiddenFiles: boolean;
 
   // Transfers
   transferConcurrency: number;
@@ -77,6 +78,7 @@ interface SettingsState {
   setTerminalCopyOnSelect: (enabled: boolean) => void;
   setTerminalPasteButton: (button: PasteButton) => void;
   setExplorerDoubleClickAction: (action: DoubleClickAction) => void;
+  setExplorerShowHiddenFiles: (show: boolean) => void;
   setTransferConcurrency: (n: number) => void;
   addEditor: (editor: Omit<EditorConfig, "id">) => void;
   updateEditor: (id: string, patch: Partial<Omit<EditorConfig, "id">>) => void;
@@ -103,6 +105,7 @@ const DEFAULTS = {
   terminalCopyOnSelect: false,
   terminalPasteButton: "none" as PasteButton,
   explorerDoubleClickAction: "download" as DoubleClickAction,
+  explorerShowHiddenFiles: true,
   transferConcurrency: 3,
   editors: [] as EditorConfig[],
   defaultEditorId: null as string | null,
@@ -296,6 +299,11 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     persist("terminal_copy_on_select", String(enabled));
   },
 
+  setExplorerShowHiddenFiles: (show) => {
+    set({ explorerShowHiddenFiles: show });
+    persist("explorer_show_hidden_files", String(show));
+  },
+
   setExplorerDoubleClickAction: (action) => {
     set({ explorerDoubleClickAction: action });
     persist("explorer_double_click_action", action);
@@ -351,7 +359,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       const { invoke } = await import("@tauri-apps/api/core");
       const pairs = await invoke<[string, string][]>("load_all_settings");
 
-      const updates: Partial<SettingsState> = {};
+      const updates: Partial<SettingsState> = { explorerShowHiddenFiles: DEFAULTS.explorerShowHiddenFiles };
       let editorsSeeded = false;
       for (const [key, value] of pairs) {
         switch (key) {
@@ -372,6 +380,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           case "terminal_scrollback": updates.terminalScrollback = Number(value) || DEFAULTS.terminalScrollback; break;
           case "terminal_copy_on_select": updates.terminalCopyOnSelect = value === "true"; break;
           case "terminal_paste_button": updates.terminalPasteButton = value === "right" || value === "middle" ? value : DEFAULTS.terminalPasteButton; break;
+          case "explorer_show_hidden_files": updates.explorerShowHiddenFiles = value !== "false"; break;
           case "explorer_double_click_action": updates.explorerDoubleClickAction = value === "open" ? "open" : "download"; break;
           case "transfer_concurrency": updates.transferConcurrency = Number(value) || DEFAULTS.transferConcurrency; break;
           case "app_interface_font": updates.interfaceFont = value || DEFAULTS.interfaceFont; break;

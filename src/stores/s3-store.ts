@@ -15,6 +15,8 @@ export interface S3Session {
   error: string | null;
   sortBy: "name" | "size" | "modified";
   sortAsc: boolean;
+  /** Temporary choice; null follows the global Explorer default. */
+  showHiddenFilesOverride: boolean | null;
 }
 
 interface S3State {
@@ -37,6 +39,7 @@ interface S3State {
   setLoading: (sessionId: string, loading: boolean) => void;
   setError: (sessionId: string, error: string | null) => void;
   setSort: (sessionId: string, sortBy: "name" | "size" | "modified", sortAsc: boolean) => void;
+  setShowHiddenFilesOverride: (sessionId: string, show: boolean) => void;
   setClipboard: (clipboard: ExplorerClipboard | null) => void;
 }
 
@@ -61,6 +64,7 @@ export const useS3Store = create<S3State>((set, get) => ({
         error: null,
         sortBy: "name",
         sortAsc: true,
+        showHiddenFilesOverride: null,
       });
       return { sessions: next, activeS3SessionId: sessionId };
     }),
@@ -143,6 +147,15 @@ export const useS3Store = create<S3State>((set, get) => ({
       if (!session) return state;
       const next = new Map(state.sessions);
       next.set(sessionId, { ...session, sortBy, sortAsc });
+      return { sessions: next };
+    }),
+
+  setShowHiddenFilesOverride: (sessionId, show) =>
+    set((state) => {
+      const session = state.sessions.get(sessionId);
+      if (!session) return state;
+      const next = new Map(state.sessions);
+      next.set(sessionId, { ...session, showHiddenFilesOverride: show });
       return { sessions: next };
     }),
 

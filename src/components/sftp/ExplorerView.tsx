@@ -12,7 +12,8 @@ import { explorerInvoke, transferEventName, type Transport } from "../../lib/exp
 import { openInEditorWithProgress } from "../../lib/open-in-editor";
 import { conflictingNames } from "../../lib/drop-conflicts";
 import { toast } from "../../stores/toast-store";
-import type { EditorConfig } from "../../stores/settings-store";
+import { useSettingsStore, type EditorConfig } from "../../stores/settings-store";
+import { filterExplorerEntries, isHiddenEntry } from "../../lib/explorer-visibility";
 
 interface ExplorerViewProps {
   /** The transport session id (sftp_session_id or scp_session_id). */
@@ -31,6 +32,20 @@ interface ExplorerViewProps {
 
 export function ExplorerView({ sessionId, transport = "sftp", isActive = true }: ExplorerViewProps) {
   const session = useSftpStore((s) => s.sessions.get(sessionId));
+  const visibilityReady = useSettingsStore((s) => s.loaded);
+  const defaultShowHiddenFiles = useSettingsStore((s) => s.explorerShowHiddenFiles);
+  const setShowHiddenFilesOverride = useSftpStore((s) => s.setShowHiddenFilesOverride);
+  const showHiddenFiles = session?.showHiddenFilesOverride ?? defaultShowHiddenFiles;
+  const toggleHiddenFiles = () => setShowHiddenFilesOverride(sessionId, !showHiddenFiles);
+  // Read the current preference after the backend succeeds, including changes
+  // made while the request was in flight.
+  const notifyHiddenSuccess = useCallback((name: string, action: string) => {
+    const show = useSftpStore.getState().sessions.get(sessionId)?.showHiddenFilesOverride
+      ?? useSettingsStore.getState().explorerShowHiddenFiles;
+    if (!show && isHiddenEntry({ name })) {
+      toast.success(`${action} "${name}". Hidden files are currently hidden.`);
+    }
+  }, [sessionId]);
   const setEntries = useSftpStore((s) => s.setEntries);
   const setLoading = useSftpStore((s) => s.setLoading);
   const setError = useSftpStore((s) => s.setError);
@@ -560,12 +575,13 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
       const filePath = provider.joinPath(session.currentPath, name.trim());
       try {
         await explorerInvoke(transport, "create_file", sessionId, { path: filePath });
+        notifyHiddenSuccess(name.trim(), "Created");
         await loadDirectory(session.currentPath);
       } catch {
         // Error shown via refresh
       }
     },
-    [sessionId, transport, session, loadDirectory, provider],
+    [sessionId, transport, session, loadDirectory, provider, notifyHiddenSuccess],
   );
 
   const handleCreateFolder = useCallback(
@@ -575,12 +591,13 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
       const dirPath = provider.joinPath(session.currentPath, name.trim());
       try {
         await explorerInvoke(transport, "mkdir", sessionId, { path: dirPath });
+        notifyHiddenSuccess(name.trim(), "Created");
         await loadDirectory(session.currentPath);
       } catch {
         // Error shown via refresh
       }
     },
-    [sessionId, transport, session, loadDirectory, provider],
+    [sessionId, transport, session, loadDirectory, provider, notifyHiddenSuccess],
   );
 
   // ─── Delete ──────────────────────────────────────────────────────────────
@@ -606,11 +623,12 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
     const newPath = `${parentPath}/${newName}`;
     try {
       await explorerInvoke(transport, "rename", sessionId, { oldPath: entry.id, newPath });
+      notifyHiddenSuccess(newName, "Renamed to");
       if (session) void loadDirectory(session.currentPath);
     } catch (err) {
       console.error("Rename failed:", err);
     }
-  }, [sessionId, transport, session, loadDirectory]);
+  }, [sessionId, transport, session, loadDirectory, notifyHiddenSuccess]);
 
   // ─── Change permissions (chmod) ─────────────────────────────────────────────
 
@@ -757,6 +775,11 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
     [session?.entries],
   );
 
+  const { visibleEntries, hiddenCount } = useMemo(
+    () => filterExplorerEntries(explorerEntries, showHiddenFiles),
+    [explorerEntries, showHiddenFiles],
+  );
+
   // ─── Guard ────────────────────────────────────────────────────────────────
 
   if (!session) return null;
@@ -764,6 +787,9 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
   return (
     <div className="flex flex-col h-full overflow-hidden relative">
       <ExplorerToolbar
+        showHiddenFiles={showHiddenFiles}
+        visibilityReady={visibilityReady}
+        onToggleHiddenFiles={toggleHiddenFiles}
         provider={provider}
         currentPath={session.currentPath}
         segments={segments}
@@ -791,35 +817,41 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         </div>
       )}
 
-      <ExplorerFileTable
-        provider={provider}
-        entries={explorerEntries}
-        sortBy={session.sortBy}
-        sortAsc={session.sortAsc}
-        onSortChange={(sortBy, sortAsc) => setSort(sessionId, sortBy, sortAsc)}
-        clipboard={explorerClipboard}
-        onSetClipboard={handleSetClipboard}
-        onNavigate={(path) => void loadDirectory(path)}
-        onDownload={(entry) => void handleDownload(entry)}
-        onDownloadMany={(entries) => void handleDownloadMany(entries)}
-        onDelete={handleDelete}
-        onRename={handleRename}
-        onEditInEditor={handleEditInEditor}
-        onApplyPermissions={handleApplyPermissions}
-        creatingFile={creatingFile}
-        onCreateFile={(name) => void handleCreateFile(name)}
-        onCancelCreateFile={() => setCreatingFile(false)}
-        creatingFolder={creatingFolder}
-        onCreateFolder={(name) => void handleCreateFolder(name)}
-        onCancelCreateFolder={() => setCreatingFolder(false)}
-        onPaste={() => void handlePaste()}
-        onMoveEntries={handleMoveEntries}
-        onCopyEntries={handleCopyEntries}
-        onDragOut={transport === "sftp" ? handleDragOut : undefined}
-        currentPath={session.currentPath}
-        loading={session.loading}
-        busy={busy}
-      />
+      {!visibilityReady ? (
+        <div role="status" className="flex-1 p-4 text-text-muted">Loading Explorer settings…</div>
+      ) : (
+        <ExplorerFileTable
+          provider={provider}
+          entries={visibleEntries}
+          hiddenCount={hiddenCount}
+          onShowHiddenFiles={() => setShowHiddenFilesOverride(sessionId, true)}
+          sortBy={session.sortBy}
+          sortAsc={session.sortAsc}
+          onSortChange={(sortBy, sortAsc) => setSort(sessionId, sortBy, sortAsc)}
+          clipboard={explorerClipboard}
+          onSetClipboard={handleSetClipboard}
+          onNavigate={(path) => void loadDirectory(path)}
+          onDownload={(entry) => void handleDownload(entry)}
+          onDownloadMany={(entries) => void handleDownloadMany(entries)}
+          onDelete={handleDelete}
+          onRename={handleRename}
+          onEditInEditor={handleEditInEditor}
+          onApplyPermissions={handleApplyPermissions}
+          creatingFile={creatingFile}
+          onCreateFile={(name) => void handleCreateFile(name)}
+          onCancelCreateFile={() => setCreatingFile(false)}
+          creatingFolder={creatingFolder}
+          onCreateFolder={(name) => void handleCreateFolder(name)}
+          onCancelCreateFolder={() => setCreatingFolder(false)}
+          onPaste={() => void handlePaste()}
+          onMoveEntries={handleMoveEntries}
+          onCopyEntries={handleCopyEntries}
+          onDragOut={transport === "sftp" ? handleDragOut : undefined}
+          currentPath={session.currentPath}
+          loading={session.loading}
+          busy={busy}
+        />
+      )}
 
       {isDragOver && (
         <ExplorerDropZone

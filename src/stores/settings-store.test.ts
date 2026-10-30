@@ -166,3 +166,27 @@ describe("settings-store — interface monospace font", () => {
     expect(useSettingsStore.getState().interfaceMonoFont).toBe(DEFAULT_MONO);
   });
 });
+
+describe("settings-store — hidden files", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    useSettingsStore.setState({ explorerShowHiddenFiles: true, loaded: false });
+  });
+
+  it("saves and reloads the default", async () => {
+    invoke.mockResolvedValue(undefined);
+    useSettingsStore.getState().setExplorerShowHiddenFiles(false);
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("save_setting", { key: "explorer_show_hidden_files", value: "false" }));
+    useSettingsStore.setState({ explorerShowHiddenFiles: true });
+    invoke.mockResolvedValue([["explorer_show_hidden_files", "false"], ["editors_seeded", "true"]]);
+    await useSettingsStore.getState().loadSettings();
+    expect(useSettingsStore.getState()).toMatchObject({ explorerShowHiddenFiles: false, loaded: true });
+  });
+
+  it.each([undefined, "invalid", "0", "TRUE", "true"])("defaults to showing for missing/invalid values (%s)", async (value) => {
+    useSettingsStore.setState({ explorerShowHiddenFiles: false });
+    invoke.mockResolvedValue([...(value === undefined ? [] : [["explorer_show_hidden_files", value]]), ["editors_seeded", "true"]]);
+    await useSettingsStore.getState().loadSettings();
+    expect(useSettingsStore.getState().explorerShowHiddenFiles).toBe(true);
+  });
+});

@@ -9,6 +9,8 @@ import {
   Home,
   Loader2,
   Shield,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import type { FileSystemProvider } from "../../types/explorer";
 
@@ -31,6 +33,9 @@ interface ExplorerToolbarProps {
    *  button is shown next to the file-upload button (mirrors New file/New
    *  folder). Transports without recursive upload can leave it undefined. */
   onUploadFolder?: () => void;
+  showHiddenFiles?: boolean;
+  visibilityReady?: boolean;
+  onToggleHiddenFiles?: () => void;
   busy?: boolean;
   sudoMode?: boolean;
   sudoBusy?: boolean;
@@ -93,6 +98,9 @@ export const ExplorerToolbar = memo(function ExplorerToolbar({
   onNavigate,
   onUpload,
   onUploadFolder,
+  showHiddenFiles,
+  visibilityReady = true,
+  onToggleHiddenFiles,
   busy,
   sudoMode,
   sudoBusy,
@@ -305,6 +313,20 @@ export const ExplorerToolbar = memo(function ExplorerToolbar({
           className={ICON_BTN_CLASS}
         >
           <FolderPlus size={15} strokeWidth={1.8} aria-hidden="true" />
+        </button>
+      )}
+
+      {onToggleHiddenFiles && (
+        <button
+          data-testid="explorer-hidden-files-toggle"
+          onClick={onToggleHiddenFiles}
+          disabled={!visibilityReady}
+          title={showHiddenFiles ? "Hide hidden files" : "Show hidden files"}
+          aria-label={showHiddenFiles ? "Hide hidden files" : "Show hidden files"}
+          aria-pressed={!!showHiddenFiles}
+          className={showHiddenFiles ? `${ICON_BTN_CLASS} text-accent bg-accent/15` : ICON_BTN_CLASS}
+        >
+          {showHiddenFiles ? <Eye size={15} strokeWidth={1.8} aria-hidden="true" /> : <EyeOff size={15} strokeWidth={1.8} aria-hidden="true" />}
         </button>
       )}
 

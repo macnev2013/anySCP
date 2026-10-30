@@ -2,6 +2,7 @@
 
 import { expect } from "chai";
 import { relaunchApp, resetApp } from "../helpers/reset.js";
+import { waitForPersistedSetting } from "../helpers/settings.js";
 
 async function gotoSettings(): Promise<void> {
     const nav = await $("[aria-label='Settings']");
@@ -27,17 +28,25 @@ describe("settings persistence", () => {
         await (await $("[data-testid='s-fontsize']")).waitForDisplayed({ timeout: 10_000 });
         await browser.execute((val) => {
             const node = document.querySelector("[data-testid='s-fontsize']") as HTMLInputElement | null;
-            if (!node) return;
+            if (!node) throw new Error("Font size slider not found");
             const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), "value")?.set;
             setter?.call(node, val);
             node.dispatchEvent(new Event("input", { bubbles: true }));
             node.dispatchEvent(new Event("change", { bubbles: true }));
         }, "18");
 
+        // The store persists asynchronously; restarting immediately can kill
+        // the app before the IPC write reaches SQLite.
+        await waitForPersistedSetting("terminal_font_size", "18");
         await relaunchApp();
         await gotoSettings();
 
+        // The settings page can render defaults before startup hydration ends.
         const after = await $("[data-testid='s-fontsize']");
+        await browser.waitUntil(async () => (await after.getValue()) === "18", {
+            timeout: 10_000,
+            timeoutMsg: "Font size did not reload as 18 after restart",
+        });
         expect(await after.getValue()).to.equal("18");
     });
 });
