@@ -7,11 +7,7 @@ pub mod wire;
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-
-use crate::ssh::handler::SshClientHandler;
 
 // ─── Error ───────────────────────────────────────────────────────────────────
 
@@ -31,6 +27,8 @@ pub enum ScpError {
     RemoteIoError(String),
     #[error("Local I/O error: {0}")]
     LocalIoError(String),
+    #[error("SCP file size {size} exceeds limit {limit}")]
+    SizeLimitExceeded { size: u64, limit: u64 },
     #[error("Transfer cancelled")]
     TransferCancelled,
     #[allow(dead_code)]
@@ -61,6 +59,7 @@ impl Serialize for ScpError {
             ScpError::CommandFailed { .. } => "command_failed",
             ScpError::RemoteIoError(_) => "remote_io_error",
             ScpError::LocalIoError(_) => "local_io_error",
+            ScpError::SizeLimitExceeded { .. } => "size_limit_exceeded",
             ScpError::TransferCancelled => "transfer_cancelled",
             ScpError::PermissionDenied(_) => "permission_denied",
             ScpError::NotFound(_) => "not_found",
@@ -179,7 +178,7 @@ pub struct ScpSessionWrapper {
     /// future teardown coordination even though transfers only need the handle.
     #[allow(dead_code)]
     pub ssh_session_id: String,
-    pub ssh_handle: Arc<Mutex<russh::client::Handle<SshClientHandler>>>,
+    pub ssh_handle: crate::ssh::handle::SharedHandle,
     /// Remote userland, detected once at open — decides which listing/stat
     /// commands to issue.
     pub flavor: listing::Flavor,

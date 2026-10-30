@@ -3,7 +3,7 @@ use russh::client::Handle;
 use russh::ChannelMsg;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 
 use super::handler::SshClientHandler;
 
@@ -19,9 +19,8 @@ enum SessionCmd {
 /// eliminating the deadlock that occurs when a Mutex is shared between
 /// the reader (blocking on `wait()`) and the writer (`data()`).
 ///
-/// The underlying `Handle` is stored in an `Arc<Mutex<>>` so that the SFTP
-/// layer can open additional channels on the same connection without taking
-/// ownership and without cloning (which `Handle` does not support).
+/// The authenticated handle is immutable and shared through `Arc`, so opening
+/// a channel never blocks unrelated terminal, metadata or disconnect calls.
 /// Minimal config needed to open additional channels on the same connection.
 #[derive(Clone)]
 pub struct SplitConfig {
@@ -29,7 +28,7 @@ pub struct SplitConfig {
 }
 
 pub struct SshSession {
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: crate::ssh::handle::SharedHandle,
     cmd_tx: mpsc::UnboundedSender<SessionCmd>,
     reader_task: tokio::task::JoinHandle<()>,
     #[allow(dead_code)]
@@ -60,12 +59,10 @@ impl SshSession {
         default_shell: Option<String>,
         startup_command: Option<String>,
     ) -> Result<Self, SshError> {
-        // Wrap the handle immediately so it can be shared with SFTP later.
-        let handle = Arc::new(Mutex::new(handle));
+        // Share the authenticated handle with SFTP without a network-wide mutex.
+        let handle = Arc::new(crate::ssh::handle::ConnectionHandle::new(handle));
 
         let channel = handle
-            .lock()
-            .await
             .channel_open_session()
             .await
             .map_err(|e| SshError::ChannelError(e.to_string()))?;
@@ -181,7 +178,7 @@ impl SshSession {
     /// Used for split panes — avoids re-authentication.
     #[allow(clippy::too_many_arguments)]
     pub async fn open_split_pty(
-        handle: Arc<Mutex<Handle<SshClientHandler>>>,
+        handle: crate::ssh::handle::SharedHandle,
         jump_handles: Arc<Vec<Handle<SshClientHandler>>>,
         session_id: String,
         cols: u32,
@@ -190,8 +187,6 @@ impl SshSession {
         default_shell: Option<String>,
     ) -> Result<Self, SshError> {
         let channel = handle
-            .lock()
-            .await
             .channel_open_session()
             .await
             .map_err(|e| SshError::ChannelError(e.to_string()))?;
@@ -288,9 +283,9 @@ impl SshSession {
         })
     }
 
-    /// Return the shared Handle so the SFTP layer can lock it briefly to open
+    /// Return the immutable shared handle so the SFTP layer can open
     /// its own channel on the same authenticated connection.
-    pub fn ssh_handle(&self) -> Arc<Mutex<Handle<SshClientHandler>>> {
+    pub fn ssh_handle(&self) -> crate::ssh::handle::SharedHandle {
         self.handle.clone()
     }
 

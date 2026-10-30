@@ -6,7 +6,7 @@ export interface ExplorerEntry {
   name: string;
   /** Unique identifier (SFTP: absolute path, S3: object key) */
   id: string;
-  entryType: "File" | "Directory";
+  entryType: "File" | "Directory" | "Other";
   size: number;
   /** Unix timestamp in seconds */
   modified: number | null;

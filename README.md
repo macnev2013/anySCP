@@ -96,6 +96,16 @@ AnySCP is a free, open-source desktop application that combines an SSH terminal,
 - Transfer progress tracking with speed and ETA
 - Switch between multiple buckets within a single connection
 
+### macOS Quick Look
+
+Select one regular file in the active Explorer and press **Space**, or right-click it and choose **Quick Look**. This works with SFTP, SCP fallback, and S3. Press Space or Esc again to cancel preparation or close the native panel; its close button also works. Changing selection, directory, bucket, or tab releases the old preview.
+
+Files are downloaded in full into private temporary staging, preserving their filenames and extensions. Files may be **up to 100 MiB** (104,857,600 bytes, inclusive), and preparation must finish within **60 seconds**. Downloads lasting over 300 ms show progress and a cancel button. Previewing does not start an editor save watcher or upload changes to the remote file.
+
+Completed downloads can be reused within the current app run after fresh remote metadata and local-file checks. Each window retains at most 32 files / 512 MiB, with least-recently-used eviction. Closing the panel preserves completed files; session or bucket invalidation, window destruction, and app exit clear the relevant cache. No cache is restored across app restarts. Reuse relies on remote timestamps; SSH cannot detect a same-size rewrite that preserves mtime. macOS Quick Look may maintain its own system caches.
+
+Content support comes from macOS Quick Look and enabled preview extensions. Unsupported, empty, or damaged files may show an icon or file information. S3 previews require a strong ETag; objects that change during preparation are rejected. Quick Look controls appear only on macOS; Windows and Linux retain their existing keyboard behavior.
+
 ### 🔗 Server & Connection Management
 
 - Save SSH hosts and S3 connections with labels, colors, environment tags, and notes

@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertCircle } from "lucide-react";
+import { useQuickLook } from "../../hooks/use-quick-look";
+import { QuickLookProgress } from "../explorer/QuickLookProgress";
 import { useSftpStore } from "../../stores/sftp-store";
 import { useTabStore } from "../../stores/tab-store";
 import type { SftpEntry } from "../../types";
@@ -42,6 +44,9 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
   const swapSession = useSftpStore((s) => s.swapSession);
   const replaceTabId = useTabStore((s) => s.replaceTabId);
   const isRoot = useSftpStore((s) => s.sessions.get(sessionId)?.username === "root");
+
+  const quickLook = useQuickLook(isActive && !!session, `${transport}\0${sessionId}\0${session?.currentPath ?? ""}`);
+  const invalidatePreview = quickLook.invalidate;
 
   const provider = useMemo(() => createSftpProvider(sessionId), [sessionId]);
 
@@ -246,6 +251,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
 
   const loadDirectory = useCallback(
     async (path: string) => {
+      invalidatePreview();
       setLoading(sessionId, true);
       try {
         const entries = await explorerInvoke<SftpEntry[]>(transport, "list_dir", sessionId, { path });
@@ -254,7 +260,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         setError(sessionId, errorMessage(err, "Failed to list directory"));
       }
     },
-    [sessionId, transport, setLoading, setEntries, setError],
+    [sessionId, transport, setLoading, setEntries, setError, invalidatePreview],
   );
 
   // ─── Sudo toggle (SFTP only) ──────────────────────────────────────────────
@@ -305,6 +311,10 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
   // fall back to the server home dir, then root.
   useEffect(() => {
     (async () => {
+      // Disable refresh/create while home resolution is still pending. A
+      // premature refresh of the initial "/" placeholder can otherwise win
+      // the home-listing race and leave the browser in the wrong directory.
+      setLoading(sessionId, true);
       const sessionState = useSftpStore.getState().sessions.get(sessionId);
       const preserved = sessionState?.currentPath;
       if (preserved && preserved !== "/") {
@@ -791,7 +801,12 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         </div>
       )}
 
+      <QuickLookProgress state={quickLook.progress} onCancel={quickLook.close} />
       <ExplorerFileTable
+        onQuickLook={quickLook.supported ? (entry, restore) => quickLook.toggle(entry, { transport, sessionId, path: entry.id }, restore) : undefined}
+        onQuickLookClose={quickLook.close}
+        onQuickLookSelectionChange={quickLook.selectionChanged}
+        quickLookActive={quickLook.hasPreview}
         provider={provider}
         entries={explorerEntries}
         sortBy={session.sortBy}

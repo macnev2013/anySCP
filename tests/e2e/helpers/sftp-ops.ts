@@ -1,10 +1,11 @@
 // SFTP explorer interactions — built on the testids added to
 // ExplorerToolbar and ExplorerFileTable.
 
-/** Wait until the explorer toolbar is rendered (refresh button visible). */
+/** Wait until the Explorer has resolved its initial directory and is ready. */
 export async function waitForExplorer(timeoutMs = 30_000): Promise<void> {
     const refresh = await $("[data-testid='explorer-refresh']");
     await refresh.waitForDisplayed({ timeout: timeoutMs });
+    await refresh.waitForClickable({ timeout: timeoutMs });
 }
 
 /** Find a directory entry by its display name. Waits up to timeoutMs. */

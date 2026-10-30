@@ -95,6 +95,51 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      - name: Real Quick Look transport adapters (synthetic loopback fixtures)
+        run: tests/quicklook/run-adapters.sh
+
+
+  native:
+    name: Native compile (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Check native platform and examples
+        working-directory: src-tauri
+        run: cargo check --all-targets --locked
+      - name: Clippy on macOS (including native bridge)
+        if: runner.os == 'macOS'
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Rust tests on macOS
+        if: runner.os == 'macOS'
+        working-directory: src-tauri
+        run: cargo test --locked
+      - name: Build linked macOS app without release signing
+        if: runner.os == 'macOS'
+        run: >-
+          pnpm tauri build --debug --bundles app
+          --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
   # Build the runner image ONCE per CI run and warm a cross-run GitHub Actions
   # layer cache. Without this, every e2e shard would rebuild the image from
   # scratch — including the multi-minute `cargo install tauri-driver` compile —

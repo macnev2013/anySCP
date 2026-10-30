@@ -14,13 +14,11 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
-use russh::client::Handle;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{mpsc, Mutex, Semaphore};
+use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
-use crate::ssh::handler::SshClientHandler;
 use crate::transfer_common::{
     apply_concurrency, eta_secs, record_finished, record_progress, FinishedStatus, ProgressFields,
 };
@@ -782,7 +780,7 @@ fn mark_file_done(jobs: &Arc<DashMap<String, TransferJobState>>, job_id: &str) {
 
 // ─── Runners ───────────────────────────────────────────────────────────────────
 
-type Handle_ = Arc<Mutex<Handle<SshClientHandler>>>;
+type Handle_ = crate::ssh::handle::SharedHandle;
 
 async fn run_upload_file(
     jobs: &Arc<DashMap<String, TransferJobState>>,

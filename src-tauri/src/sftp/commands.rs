@@ -106,30 +106,76 @@ pub async fn sftp_open(
         .get_handle(&session_id)
         .map_err(|e| SftpError::SshSessionNotFound(e.to_string()))?;
 
-    // 2. Lock only long enough to open the channel, then release immediately.
-    let channel = {
-        let handle = handle_arc.lock().await;
-        handle
-            .channel_open_session()
-            .await
-            .map_err(|e| SftpError::ChannelError(e.to_string()))?
-    };
+    let sftp = open_sftp_session(handle_arc, use_sudo.unwrap_or(false)).await?;
+
+    // 5. Store and return a fresh ID.
+    let sftp_id = uuid::Uuid::new_v4().to_string();
+    sftp_manager.insert_session(
+        sftp_id.clone(),
+        SftpSessionWrapper {
+            sftp: Arc::new(tokio::sync::Mutex::new(sftp)),
+            ssh_session_id: session_id,
+            use_sudo: use_sudo.unwrap_or(false),
+        },
+    );
+
+    let sudo = use_sudo.unwrap_or(false);
+    tracing::info!(sftp_session_id = %sftp_id, sudo, "SFTP session opened");
+    crate::telemetry::capture("sftp_opened", serde_json::json!({ "sudo": sudo }));
+    Ok(sftp_id)
+}
+
+/// Open an independent subsystem on the existing SSH transport. Preview tasks
+/// use their own channel so cancellation never tears down Explorer's session.
+pub(crate) async fn open_sftp_session(
+    handle_arc: crate::ssh::handle::SharedHandle,
+    use_sudo: bool,
+) -> Result<russh_sftp::client::SftpSession, SftpError> {
+    let channel = open_sftp_channel(handle_arc, use_sudo, None).await?;
+
+    // 4. Hand the channel's byte-stream to the russh-sftp client (10 s default
+    //    init timeout). Do NOT raise this: russh's request_subsystem above
+    //    returns *before* the server's accept/reject reply, so on a host
+    //    without the SFTP subsystem (e.g. SCP-only) this init is what fails —
+    //    a longer timeout just delays the frontend's SFTP→SCP fallback by that
+    //    much (a 30 s value broke the SCP-fallback e2e specs).
+    let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
+        .await
+        .map_err(|e| SftpError::ProtocolError(e.to_string()))?;
+
+    Ok(sftp)
+}
+
+/// Return the initialized protocol channel separately for scoped preview I/O.
+pub(crate) async fn open_sftp_channel(
+    handle_arc: crate::ssh::handle::SharedHandle,
+    use_sudo: bool,
+    scope: Option<&crate::ssh::channel_scope::ChannelScope>,
+) -> Result<russh::Channel<russh::client::Msg>, SftpError> {
+    let channel = if let Some(scope) = scope {
+        scope.open(handle_arc.clone()).await
+    } else {
+        handle_arc.channel_open_session().await
+    }
+    .map_err(|e| SftpError::ChannelError(e.to_string()))?;
+
+    let channel = crate::ssh::channel_scope::ChannelGuard::new(channel, scope);
 
     // 3. Request the SFTP subsystem, or (sudo) preflight + exec sudo sftp-server.
-    if use_sudo.unwrap_or(false) {
+    if use_sudo {
         // Preflight on a throwaway channel: confirm the user actually has
         // *passwordless* sudo before committing the SFTP channel. Without this,
         // a host that prompts for a password leaves the SFTP init blocked until
         // the timeout — russh-sftp does not cancel the pending init when the
         // channel hits EOF — so we'd hang ~30 s instead of failing cleanly.
         // `sudo -n true` exits non-zero immediately when a password is required.
-        let mut check = {
-            let handle = handle_arc.lock().await;
-            handle
-                .channel_open_session()
-                .await
-                .map_err(|e| SftpError::ChannelError(e.to_string()))?
-        };
+        let check = if let Some(scope) = scope {
+            scope.open(handle_arc.clone()).await
+        } else {
+            handle_arc.channel_open_session().await
+        }
+        .map_err(|e| SftpError::ChannelError(e.to_string()))?;
+        let mut check = crate::ssh::channel_scope::ChannelGuard::new(check, scope);
         check
             .exec(true, "sudo -n true")
             .await
@@ -176,39 +222,18 @@ pub async fn sftp_open(
             .map_err(|e| SftpError::ChannelError(e.to_string()))?;
     }
 
-    // 4. Hand the channel's byte-stream to the russh-sftp client (10 s default
-    //    init timeout). Do NOT raise this: russh's request_subsystem above
-    //    returns *before* the server's accept/reject reply, so on a host
-    //    without the SFTP subsystem (e.g. SCP-only) this init is what fails —
-    //    a longer timeout just delays the frontend's SFTP→SCP fallback by that
-    //    much (a 30 s value broke the SCP-fallback e2e specs).
-    let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
-        .await
-        .map_err(|e| SftpError::ProtocolError(e.to_string()))?;
-
-    // 5. Store and return a fresh ID.
-    let sftp_id = uuid::Uuid::new_v4().to_string();
-    sftp_manager.insert_session(
-        sftp_id.clone(),
-        SftpSessionWrapper {
-            sftp: Arc::new(tokio::sync::Mutex::new(sftp)),
-            ssh_session_id: session_id,
-        },
-    );
-
-    let sudo = use_sudo.unwrap_or(false);
-    tracing::info!(sftp_session_id = %sftp_id, sudo, "SFTP session opened");
-    crate::telemetry::capture("sftp_opened", serde_json::json!({ "sudo": sudo }));
-    Ok(sftp_id)
+    Ok(channel.into_channel())
 }
 
 /// Close and remove an SFTP session.
 #[tauri::command]
-#[instrument(skip(sftp_manager), fields(sftp_session_id = %sftp_session_id))]
+#[instrument(skip(sftp_manager, quicklook), fields(sftp_session_id = %sftp_session_id))]
 pub async fn sftp_close(
     sftp_session_id: String,
     sftp_manager: State<'_, Arc<SftpManager>>,
+    quicklook: State<'_, Arc<crate::quicklook::QuickLookManager>>,
 ) -> Result<(), SftpError> {
+    quicklook.close_session(&sftp_session_id);
     // Grab the Arc before removing from the map.
     let sftp_arc = {
         let session_ref = sftp_manager.get_session(&sftp_session_id)?;

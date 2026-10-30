@@ -28,7 +28,7 @@ type EstablishFuture<'a> =
 /// A bare (PTY-less) SSH connection used by the SFTP layer.
 struct BareConn {
     /// The authenticated target handle, shared with the SFTP layer.
-    handle: Arc<tokio::sync::Mutex<client::Handle<SshClientHandler>>>,
+    handle: crate::ssh::handle::SharedHandle,
     /// When the target is reached through a ProxyJump chain, the jump-host
     /// handles (one per hop) are stored here so the tunnel underneath stays
     /// open. They are never locked — merely keeping them alive prevents russh
@@ -215,7 +215,7 @@ impl SshManager {
         self.bare_handles.insert(
             sid.clone(),
             BareConn {
-                handle: Arc::new(tokio::sync::Mutex::new(handle)),
+                handle: Arc::new(crate::ssh::handle::ConnectionHandle::new(handle)),
                 _jump_handles: jump_handles,
             },
         );
@@ -369,13 +369,12 @@ impl SshManager {
     /// Return the shared Handle for an active session.  Used by the SFTP layer
     /// to open an independent SFTP channel on the same connection.
     ///
-    /// The caller must lock the handle only long enough to call
-    /// `channel_open_session()`, then drop the guard.
+    /// All post-authentication handle operations use shared references. A slow
+    /// channel confirmation must not serialize unrelated SSH operations.
     pub fn get_handle(
         &self,
         session_id: &str,
-    ) -> Result<std::sync::Arc<tokio::sync::Mutex<russh::client::Handle<SshClientHandler>>>, SshError>
-    {
+    ) -> Result<crate::ssh::handle::SharedHandle, SshError> {
         // Check PTY sessions first, then bare handles (SFTP-only)
         if let Some(entry) = self.sessions.get(session_id) {
             return Ok(entry.value().ssh_handle());
@@ -470,8 +469,6 @@ impl SshManager {
             // (and any ProxyJump tunnel beneath it) even if the server is gone.
             let _ = bare
                 .handle
-                .lock()
-                .await
                 .disconnect(russh::Disconnect::ByApplication, "", "en")
                 .await;
         } else {

@@ -5,7 +5,7 @@ export function toExplorerEntry(e: SftpEntry): ExplorerEntry {
   return {
     name: e.name,
     id: e.path,
-    entryType: e.entry_type === "Directory" ? "Directory" : "File",
+    entryType: e.entry_type === "Directory" ? "Directory" : e.entry_type === "File" ? "File" : "Other",
     size: e.size,
     modified: e.modified,
     permissionsDisplay: e.permissions_display,

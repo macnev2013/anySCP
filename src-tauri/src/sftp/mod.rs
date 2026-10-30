@@ -162,6 +162,7 @@ pub struct TransferInfo {
 // ─── Manager ─────────────────────────────────────────────────────────────────
 
 pub struct SftpSessionWrapper {
+    pub use_sudo: bool,
     pub sftp: Arc<Mutex<russh_sftp::client::SftpSession>>,
     #[allow(dead_code)]
     pub ssh_session_id: String,

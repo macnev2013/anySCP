@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 
 // ── Tauri module mocks ───────────────────────────────────────────────────────
 // ExplorerView imports `invoke` at module level and lazily imports the dialog
@@ -49,6 +49,28 @@ describe("ExplorerView — upload button", () => {
     // Fresh store between tests.
     useSftpStore.setState({ sessions: new Map(), activeSftpSessionId: null, clipboard: null });
     seedSession();
+  });
+
+  it("keeps refresh disabled until the initial home directory has resolved", async () => {
+    useSftpStore.getState().openSession(SESSION_ID, "ssh-1", "Test host", "user");
+    let resolveHome!: (path: string) => void;
+    const home = new Promise<string>((resolve) => { resolveHome = resolve; });
+    invoke.mockImplementation(async (command: unknown) => {
+      if (command === "sftp_home_dir") return home;
+      if (command === "quicklook_capabilities") return { supported: false };
+      return [];
+    });
+    render(<ExplorerView sessionId={SESSION_ID} />);
+    const refresh = screen.getByTestId("explorer-refresh");
+    expect(refresh).toBeDisabled();
+    fireEvent.click(refresh);
+    expect(invoke.mock.calls.some((call) => call[0] === "sftp_list_dir")).toBe(false);
+    await act(async () => { resolveHome(CURRENT_PATH); });
+    await waitFor(() => expect(refresh).toBeEnabled());
+    expect(useSftpStore.getState().sessions.get(SESSION_ID)?.currentPath).toBe(CURRENT_PATH);
+    expect(invoke.mock.calls.filter((call) => call[0] === "sftp_list_dir")).toEqual([
+      ["sftp_list_dir", { sftpSessionId: SESSION_ID, path: CURRENT_PATH }],
+    ]);
   });
 
   it("opens the native file picker and enqueues the selected files (issue #69)", async () => {

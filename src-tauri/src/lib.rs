@@ -4,6 +4,7 @@ mod db;
 mod editors;
 mod import;
 mod portforward;
+mod quicklook;
 mod s3;
 mod scp;
 mod sftp;
@@ -24,7 +25,7 @@ use sftp::transfer_manager::TransferManager;
 use sftp::SftpManager;
 use ssh::manager::SshManager;
 use std::sync::Arc;
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Listener, Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// Whether this is a real release build — i.e. a packaged binary that can
 /// safely self-update via the updater plugin.
@@ -195,9 +196,29 @@ pub fn run() {
             app.manage(s3_manager);
             app.manage(s3_transfer_manager);
 
+            app.manage(Arc::new(quicklook::QuickLookManager::new(
+                &app.path().app_cache_dir()?,
+            )?));
+
+            let quicklook_app = app.handle().clone();
+            app.listen("ssh:status", move |event| {
+                if let Ok(status) = serde_json::from_str::<types::events::SshStatusPayload>(event.payload()) {
+                    if matches!(status.status, types::session::ConnectionStatus::Disconnecting | types::session::ConnectionStatus::Disconnected | types::session::ConnectionStatus::Error(_)) {
+                        quicklook_app.state::<Arc<quicklook::QuickLookManager>>().close_ssh_session(&status.session_id);
+                    }
+                }
+            });
+
             telemetry::init();
 
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                if let Some(manager) = window.try_state::<Arc<quicklook::QuickLookManager>>() {
+                    manager.close_window(window.label());
+                }
+            }
         })
         .manage(SshManager::new())
         .invoke_handler(tauri::generate_handler![
@@ -355,11 +376,36 @@ pub fn run() {
             snippets::commands::list_snippet_folders,
             snippets::commands::delete_snippet_folder,
             snippets::commands::snippet_execute,
+            quicklook::commands::quicklook_capabilities,
+            quicklook::commands::quicklook_open,
+            quicklook::commands::quicklook_close,
+            quicklook::commands::quicklook_state,
             // Build info
             is_release_build,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if matches!(&event, tauri::RunEvent::Exit) {
+                // Also detach on the bounded-shutdown fallback before TLS
+                // releases the panel's unretained delegate/data source.
+                quicklook::macos::close(None);
+            }
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                let manager = app.state::<Arc<quicklook::QuickLookManager>>().inner().clone();
+                if manager.begin_shutdown() {
+                    api.prevent_exit();
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if tokio::time::timeout(std::time::Duration::from_secs(5), manager.wait_for_cleanup()).await.is_err() {
+                            tracing::warn!("Quick Look shutdown cleanup timed out; stale staging will be retried at startup");
+                        }
+                        app.exit(code.unwrap_or(0));
+                    });
+                }
+            }
+        });
 }
 
 #[cfg(test)]

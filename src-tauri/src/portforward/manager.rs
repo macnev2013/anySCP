@@ -8,7 +8,6 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-use crate::ssh::handler::SshClientHandler;
 use crate::types::SshError;
 
 use super::{TunnelState, TunnelStatus};
@@ -38,7 +37,7 @@ impl PortForwardManager {
     pub async fn start_tunnel(
         &self,
         rule_id: String,
-        handle: Arc<tokio::sync::Mutex<russh::client::Handle<SshClientHandler>>>,
+        handle: crate::ssh::handle::SharedHandle,
         bind_address: String,
         local_port: u32,
         remote_host: String,
@@ -206,7 +205,7 @@ impl PortForwardManager {
 /// Proxy data bidirectionally between a local TCP connection and an SSH direct-tcpip channel.
 async fn proxy_connection(
     mut tcp_stream: tokio::net::TcpStream,
-    handle: Arc<tokio::sync::Mutex<russh::client::Handle<SshClientHandler>>>,
+    handle: crate::ssh::handle::SharedHandle,
     remote_host: &str,
     remote_port: u32,
     originator_address: &str,
@@ -215,7 +214,7 @@ async fn proxy_connection(
 ) -> Result<(), SshError> {
     // Open a direct-tcpip channel
     let channel = {
-        let h = handle.lock().await;
+        let h = handle;
         h.channel_open_direct_tcpip(
             remote_host,
             remote_port,

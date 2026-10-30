@@ -7,13 +7,7 @@
 //! Each call opens a new channel on the existing SSH connection. The
 //! channel is short-lived: open, exec, drain, close.
 
-use std::sync::Arc;
-use tokio::sync::Mutex;
-
-use russh::client::Handle;
 use russh::ChannelMsg;
-
-use crate::ssh::handler::SshClientHandler;
 
 use super::listing::{self, Flavor};
 use super::{shell_quote, ScpEntry, ScpError};
@@ -21,19 +15,29 @@ use super::{shell_quote, ScpEntry, ScpError};
 // Re-export so callers keep using `exec::StatInfo` / `exec::TreeEntry`.
 pub use super::listing::{StatInfo, TreeEntry};
 
-type SshHandle = Arc<Mutex<Handle<SshClientHandler>>>;
+type SshHandle = crate::ssh::handle::SharedHandle;
 
 /// Run `command` on the remote. Returns `(stdout, stderr, exit_code)`.
 pub async fn ssh_exec(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: crate::ssh::handle::SharedHandle,
     command: &str,
 ) -> Result<(Vec<u8>, Vec<u8>, i32), ScpError> {
-    let mut channel = {
-        let h = handle.lock().await;
-        h.channel_open_session()
-            .await
-            .map_err(|e| ScpError::ChannelError(e.to_string()))?
-    };
+    ssh_exec_scoped(handle, command, None).await
+}
+
+async fn ssh_exec_scoped(
+    handle: SshHandle,
+    command: &str,
+    scope: Option<&crate::ssh::channel_scope::ChannelScope>,
+) -> Result<(Vec<u8>, Vec<u8>, i32), ScpError> {
+    let channel = if let Some(scope) = scope {
+        scope.open(handle).await
+    } else {
+        handle.channel_open_session().await
+    }
+    .map_err(|e| ScpError::ChannelError(e.to_string()))?;
+
+    let mut channel = crate::ssh::channel_scope::ChannelGuard::new(channel, scope);
 
     channel
         .exec(true, command.as_bytes())
@@ -47,6 +51,11 @@ pub async fn ssh_exec(
     while let Some(msg) = channel.wait().await {
         if fold_exec_msg(msg, &mut stdout, &mut stderr, &mut exit_code) {
             break;
+        }
+        if scope.is_some() && stdout.len().saturating_add(stderr.len()) > 64 * 1024 {
+            return Err(ScpError::ProtocolError(
+                "preview metadata output exceeded 64 KiB".into(),
+            ));
         }
     }
 
@@ -86,7 +95,7 @@ fn fold_exec_msg(
 /// Run `command` and require exit code 0. Returns stdout. Errors include
 /// the captured stderr for diagnosis.
 pub async fn ssh_exec_ok(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: crate::ssh::handle::SharedHandle,
     command: &str,
 ) -> Result<Vec<u8>, ScpError> {
     let (stdout, stderr, exit) = ssh_exec(handle, command).await?;
@@ -102,7 +111,7 @@ pub async fn ssh_exec_ok(
 
 /// As [`ssh_exec_ok`] but expects UTF-8 stdout. Trims the trailing newline.
 pub async fn ssh_exec_str(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: crate::ssh::handle::SharedHandle,
     command: &str,
 ) -> Result<String, ScpError> {
     let stdout = ssh_exec_ok(handle, command).await?;
@@ -117,7 +126,7 @@ pub async fn ssh_exec_str(
 // ─── Filesystem ops ──────────────────────────────────────────────────────────
 
 /// Resolve the remote home directory by echoing `$HOME`.
-pub async fn home_dir(handle: Arc<Mutex<Handle<SshClientHandler>>>) -> Result<String, ScpError> {
+pub async fn home_dir(handle: crate::ssh::handle::SharedHandle) -> Result<String, ScpError> {
     let out = ssh_exec_str(handle, r#"printf '%s' "$HOME""#).await?;
     if out.is_empty() {
         return Err(ScpError::RemoteIoError("$HOME is empty".into()));
@@ -129,7 +138,7 @@ pub async fn home_dir(handle: Arc<Mutex<Handle<SshClientHandler>>>) -> Result<St
 /// the path bar to normalise user input; not yet wired into a command.
 #[allow(dead_code)]
 pub async fn realpath(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: crate::ssh::handle::SharedHandle,
     path: &str,
 ) -> Result<String, ScpError> {
     // -m is GNU-only and tolerates non-existent components. Fall back to
@@ -142,20 +151,14 @@ pub async fn realpath(
 }
 
 /// `mkdir -p` on the remote.
-pub async fn mkdir_p(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
-    path: &str,
-) -> Result<(), ScpError> {
+pub async fn mkdir_p(handle: crate::ssh::handle::SharedHandle, path: &str) -> Result<(), ScpError> {
     let cmd = format!("mkdir -p -- {}", shell_quote(path));
     ssh_exec_ok(handle, &cmd).await?;
     Ok(())
 }
 
 /// `touch` a file (also creates parent dirs if needed via `mkdir -p`).
-pub async fn touch(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
-    path: &str,
-) -> Result<(), ScpError> {
+pub async fn touch(handle: crate::ssh::handle::SharedHandle, path: &str) -> Result<(), ScpError> {
     // Resolve parent. If the path has no slash, no parent is needed.
     let parent = std::path::Path::new(path).parent().and_then(|p| {
         let s = p.to_string_lossy();
@@ -179,7 +182,7 @@ pub async fn touch(
 
 /// Remove a file (`rm`) or directory (`rm -rf`).
 pub async fn remove(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: crate::ssh::handle::SharedHandle,
     path: &str,
     is_dir: bool,
 ) -> Result<(), ScpError> {
@@ -194,7 +197,7 @@ pub async fn remove(
 
 /// `mv src dst`.
 pub async fn rename(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: crate::ssh::handle::SharedHandle,
     src: &str,
     dst: &str,
 ) -> Result<(), ScpError> {
@@ -206,7 +209,7 @@ pub async fn rename(
 /// `cp -r src dst` (no overwrite of existing destination — `cp` itself
 /// handles that with the same semantics as for files).
 pub async fn copy(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: crate::ssh::handle::SharedHandle,
     src: &str,
     dst: &str,
 ) -> Result<(), ScpError> {
@@ -222,7 +225,7 @@ pub async fn copy(
 /// `chmod <octal> <path>`. `mode` is the octal permission value as a plain
 /// number; only the lower 12 bits are applied (masked to `0o7777`).
 pub async fn chmod(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: crate::ssh::handle::SharedHandle,
     path: &str,
     mode: u32,
 ) -> Result<(), ScpError> {
@@ -237,7 +240,7 @@ pub async fn chmod(
 /// means full success. A non-zero exit that produced *no* diagnostics is a hard
 /// failure (see [`interpret_recursive_chmod`]).
 pub async fn chmod_recursive(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: crate::ssh::handle::SharedHandle,
     path: &str,
     mode: u32,
 ) -> Result<Vec<String>, ScpError> {
@@ -298,6 +301,15 @@ pub async fn stat(
     flavor: Flavor,
     path: &str,
 ) -> Result<Option<StatInfo>, ScpError> {
+    stat_scoped(handle, flavor, path, None).await
+}
+
+pub(crate) async fn stat_scoped(
+    handle: SshHandle,
+    flavor: Flavor,
+    path: &str,
+    scope: Option<&crate::ssh::channel_scope::ChannelScope>,
+) -> Result<Option<StatInfo>, ScpError> {
     let cmd = match flavor {
         Flavor::Gnu | Flavor::Busybox => format!(
             "stat -c '{fmt}' -- {p} 2>/dev/null",
@@ -311,15 +323,15 @@ pub async fn stat(
         ),
         // No usable `stat` applet — derive from `ls -lad`.
         Flavor::Posix => {
-            return stat_ls(handle, path).await;
+            return stat_ls(handle, path, scope).await;
         }
     };
-    let (stdout, _, exit) = ssh_exec(handle.clone(), &cmd).await?;
+    let (stdout, _, exit) = ssh_exec_scoped(handle.clone(), &cmd, scope).await?;
     if exit != 0 {
         // The flavor-specific `stat` failed. It may genuinely not exist, but on
         // a misdetected host the command itself is unsupported — confirm with
         // the portable `ls` path before reporting "not found".
-        return stat_ls(handle, path).await;
+        return stat_ls(handle, path, scope).await;
     }
     match flavor {
         Flavor::Gnu | Flavor::Busybox => listing::parse_statc_single(&stdout),
@@ -331,19 +343,23 @@ pub async fn stat(
 /// Stat a single path via `ls -lad` (universal fallback). Returns `None` when
 /// the path doesn't exist (empty stdout); a parse of any other failure is
 /// surfaced as an error by the parser.
-async fn stat_ls(handle: SshHandle, path: &str) -> Result<Option<StatInfo>, ScpError> {
+async fn stat_ls(
+    handle: SshHandle,
+    path: &str,
+    scope: Option<&crate::ssh::channel_scope::ChannelScope>,
+) -> Result<Option<StatInfo>, ScpError> {
     let cmd = format!(
         "{args} {p} 2>/dev/null",
         args = listing::LS_STAT_ARGS,
         p = shell_quote(path)
     );
-    let (stdout, _, _exit) = ssh_exec(handle, &cmd).await?;
+    let (stdout, _, _exit) = ssh_exec_scoped(handle, &cmd, scope).await?;
     listing::parse_ls_single(&stdout)
 }
 
 /// Whether a remote path exists. Used by deduplicate_name for copy/move.
 pub async fn exists(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: crate::ssh::handle::SharedHandle,
     path: &str,
 ) -> Result<bool, ScpError> {
     // `test -e` exits 0 if path exists, 1 otherwise. Any other exit is a
@@ -548,7 +564,7 @@ pub async fn dir_stats(
 /// Pick a name in `target_dir` that doesn't collide. Same semantics as the
 /// SFTP equivalent: appends ` (1)`, ` (2)`, ... before the file extension.
 pub async fn deduplicate_name(
-    handle: Arc<Mutex<Handle<SshClientHandler>>>,
+    handle: crate::ssh::handle::SharedHandle,
     target_dir: &str,
     name: &str,
 ) -> Result<String, ScpError> {

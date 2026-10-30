@@ -80,11 +80,13 @@ pub async fn scp_open(
 /// Forget an SCP session. (No remote teardown — SCP is connectionless on top
 /// of the shared SSH session, which is closed separately.)
 #[tauri::command]
-#[instrument(skip(scp_manager), fields(scp_session_id = %scp_session_id))]
+#[instrument(skip(scp_manager, quicklook), fields(scp_session_id = %scp_session_id))]
 pub async fn scp_close(
     scp_session_id: String,
     scp_manager: State<'_, Arc<ScpManager>>,
+    quicklook: State<'_, Arc<crate::quicklook::QuickLookManager>>,
 ) -> Result<(), ScpError> {
+    quicklook.close_session(&scp_session_id);
     scp_manager.remove_session(&scp_session_id);
     tracing::info!(scp_session_id = %scp_session_id, "SCP session closed");
     crate::telemetry::capture("scp_closed", serde_json::json!({}));
@@ -93,8 +95,7 @@ pub async fn scp_close(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-type SshHandle =
-    Arc<tokio::sync::Mutex<russh::client::Handle<crate::ssh::handler::SshClientHandler>>>;
+type SshHandle = crate::ssh::handle::SharedHandle;
 
 /// Resolve the SSH handle behind an SCP session id.
 fn handle_for(scp_manager: &Arc<ScpManager>, scp_session_id: &str) -> Result<SshHandle, ScpError> {

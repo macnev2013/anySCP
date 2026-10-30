@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Folder, RefreshCw, AlertCircle } from "lucide-react";
+import { useQuickLook } from "../../hooks/use-quick-look";
+import { QuickLookProgress } from "../explorer/QuickLookProgress";
 import { useS3Store } from "../../stores/s3-store";
 import type { S3BucketInfo, S3ListResult } from "../../types";
 import type { ExplorerEntry } from "../../types/explorer";
@@ -27,6 +29,9 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
   const setSort = useS3Store((s) => s.setSort);
   const clipboard = useS3Store((s) => s.clipboard);
   const setClipboard = useS3Store((s) => s.setClipboard);
+
+  const quickLook = useQuickLook(isActive && !!session, `s3\0${sessionId}\0${session?.currentBucket ?? ""}\0${session?.currentPrefix ?? ""}`);
+  const invalidatePreview = quickLook.invalidate;
 
   const provider = useMemo(
     () => createS3Provider(sessionId, session?.currentBucket ?? ""),
@@ -129,6 +134,7 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
   }, [sessionId, setLoading, setBuckets, setError]);
 
   const loadObjects = useCallback(async (prefix: string) => {
+    invalidatePreview();
     setLoading(sessionId, true);
     try {
       const { invoke } = await import("@tauri-apps/api/core");
@@ -143,7 +149,7 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
         ? String((err as { message: string }).message) : "Failed to list objects";
       setError(sessionId, msg);
     }
-  }, [sessionId, setLoading, setEntries, setError]);
+  }, [sessionId, setLoading, setEntries, setError, invalidatePreview]);
 
   // Fetch the next page of the current prefix. Listings come back a page
   // (1000 keys) at a time so huge prefixes open instantly instead of the app
@@ -169,6 +175,7 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
   }, [sessionId, setLoading, appendEntries, setError]);
 
   const selectBucket = useCallback(async (bucketName: string) => {
+    invalidatePreview();
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("s3_switch_bucket", { s3SessionId: sessionId, bucketName });
@@ -179,7 +186,7 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
         ? String((err as { message: string }).message) : "Failed to switch bucket";
       setError(sessionId, msg);
     }
-  }, [sessionId, setCurrentBucket, loadObjects, setError]);
+  }, [sessionId, setCurrentBucket, loadObjects, setError, invalidatePreview]);
 
   useEffect(() => {
     // If a bucket was already selected (e.g. set by the card-click flow that
@@ -469,7 +476,12 @@ export function S3Browser({ sessionId, isActive = true }: S3BrowserProps) {
         </div>
       )}
 
+      <QuickLookProgress state={quickLook.progress} onCancel={quickLook.close} />
       <ExplorerFileTable
+        onQuickLook={quickLook.supported ? (entry, restore) => quickLook.toggle(entry, { transport: "s3", sessionId, bucketName: session.currentBucket ?? "", key: entry.id }, restore) : undefined}
+        onQuickLookClose={quickLook.close}
+        onQuickLookSelectionChange={quickLook.selectionChanged}
+        quickLookActive={quickLook.hasPreview}
         provider={provider}
         entries={explorerEntries}
         sortBy={session.sortBy}
