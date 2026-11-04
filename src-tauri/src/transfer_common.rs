@@ -16,6 +16,43 @@ const SPEED_WINDOW: Duration = Duration::from_millis(500);
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
+/// Access and modification times of a transfer's source, in whole seconds
+/// since the Unix epoch — the resolution both SFTP v3 and the scp `T` record
+/// carry. Copied onto the destination so a transfer keeps the original dates
+/// instead of stamping the file with the time of the copy (#160).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileTimes {
+    pub mtime: u64,
+    pub atime: u64,
+}
+
+impl FileTimes {
+    /// Times of a local file. `None` when the platform can't report the
+    /// modification time or it predates the epoch; a missing access time
+    /// falls back to the modification time.
+    pub fn from_local(meta: &std::fs::Metadata) -> Option<Self> {
+        let secs = |t: std::time::SystemTime| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_secs())
+        };
+        let mtime = secs(meta.modified().ok()?)?;
+        let atime = meta.accessed().ok().and_then(secs).unwrap_or(mtime);
+        Some(Self { mtime, atime })
+    }
+
+    /// Stamp an open local file with these times. Call it after the last
+    /// write: any later write moves the modification time again.
+    pub fn apply_to(&self, file: &std::fs::File) -> std::io::Result<()> {
+        let at = |s: u64| std::time::UNIX_EPOCH + Duration::from_secs(s);
+        file.set_times(
+            std::fs::FileTimes::new()
+                .set_modified(at(self.mtime))
+                .set_accessed(at(self.atime)),
+        )
+    }
+}
+
 pub fn eta_secs(speed_bps: u64, total_bytes: u64, bytes_transferred: u64) -> Option<u64> {
     if speed_bps > 0 && total_bytes > bytes_transferred {
         Some((total_bytes - bytes_transferred) / speed_bps)
@@ -258,5 +295,25 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("record_finished deadlocked on same-shard eviction");
         assert_eq!(len, MAX_FINISHED_HISTORY);
+    }
+
+    #[test]
+    fn file_times_round_trip_through_a_local_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, b"x").unwrap();
+
+        // 2001-09-09T01:46:40Z / 2020-09-13T12:26:40Z — clearly not "now".
+        let want = FileTimes {
+            mtime: 1_000_000_000,
+            atime: 1_600_000_000,
+        };
+        let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        want.apply_to(&f).unwrap();
+        drop(f);
+
+        let got = FileTimes::from_local(&std::fs::metadata(&path).unwrap()).unwrap();
+        assert_eq!(got.mtime, want.mtime);
+        assert_eq!(got.atime, want.atime);
     }
 }

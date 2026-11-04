@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::ssh::handler::SshClientHandler;
+use crate::transfer_common::FileTimes;
 
 use super::wire::{self, ScpMsg};
 use super::{shell_quote, ScpError};
@@ -44,6 +45,7 @@ where
     })?;
     let size = meta.len();
     let mode = local_mode(&meta);
+    let times = FileTimes::from_local(&meta);
 
     let name = remote_path
         .rsplit('/')
@@ -73,6 +75,14 @@ where
 
     // Handshake: wait for the sink to signal readiness.
     wire::read_ack(&mut stream).await?;
+
+    // A T record ahead of the header makes the sink stamp the file with the
+    // source's times instead of the time of the copy (#160). The sink applies
+    // it without `-p`, which would also force the exact source mode.
+    if let Some(FileTimes { mtime, atime }) = times {
+        wire::write_msg(&mut stream, &ScpMsg::Time { mtime, atime }).await?;
+        wire::read_ack(&mut stream).await?;
+    }
 
     // Send the file header, wait for ack.
     wire::write_msg(&mut stream, &ScpMsg::File { mode, size, name }).await?;
@@ -122,8 +132,9 @@ where
             .await
             .map_err(|e| ScpError::ChannelError(e.to_string()))?
     };
-    // `-f` = "from" (send). `-p` would also send timestamps; we skip it.
-    let cmd = format!("scp -f -- {}", shell_quote(remote_path));
+    // `-f` = "from" (send). `-p` makes the source send a T record with the
+    // file's times so the copy keeps them (#160).
+    let cmd = format!("scp -p -f -- {}", shell_quote(remote_path));
     channel
         .exec(true, cmd.as_bytes())
         .await
@@ -134,11 +145,16 @@ where
     // Kick off the source by acking.
     wire::write_ack(&mut stream).await?;
 
-    // Read records until we hit the file header. A `-p`-less source may still
-    // emit a T record on some servers; skip any T records.
+    // Read records until we hit the file header, keeping the times from the
+    // T record that precedes it. Every record, T included, must be acked
+    // before the source sends the next one.
+    let mut times = None;
     let (mode, size) = loop {
         match wire::read_msg(&mut stream).await? {
-            Some(ScpMsg::Time { .. }) => continue,
+            Some(ScpMsg::Time { mtime, atime }) => {
+                times = Some(FileTimes { mtime, atime });
+                wire::write_ack(&mut stream).await?;
+            }
             Some(ScpMsg::File { mode, size, .. }) => break (mode, size),
             Some(ScpMsg::Dir { .. }) | Some(ScpMsg::EndDir) => {
                 return Err(ScpError::ProtocolError(
@@ -186,6 +202,14 @@ where
     // Read the source's trailing status byte, then ack it.
     wire::read_ack(&mut stream).await?;
     wire::write_ack(&mut stream).await?;
+
+    // After the last write, or the write would move the mtime again.
+    if let Some(times) = times {
+        let local_file = local_file.into_std().await;
+        if let Err(e) = times.apply_to(&local_file) {
+            tracing::warn!(path = %local_path.display(), error = %e, "cannot preserve modification time");
+        }
+    }
 
     let _ = stream.shutdown().await;
     Ok(())

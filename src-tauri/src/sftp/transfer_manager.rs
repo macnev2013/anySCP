@@ -13,7 +13,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::transfer_common::{
-    apply_concurrency, eta_secs, record_finished, record_progress, FinishedStatus, ProgressFields,
+    apply_concurrency, eta_secs, record_finished, record_progress, FileTimes, FinishedStatus,
+    ProgressFields,
 };
 
 use super::{
@@ -1104,10 +1105,11 @@ async fn run_upload_file(
     cancel_token: &CancellationToken,
     app_handle: &AppHandle,
 ) -> Result<(), SftpError> {
-    let file_size = tokio::fs::metadata(local_path)
-        .await
-        .map_err(|e| SftpError::LocalIoError(format!("Cannot read {}: {e}", local_path.display())))?
-        .len();
+    let local_meta = tokio::fs::metadata(local_path).await.map_err(|e| {
+        SftpError::LocalIoError(format!("Cannot read {}: {e}", local_path.display()))
+    })?;
+    let file_size = local_meta.len();
+    let source_times = FileTimes::from_local(&local_meta);
 
     let regions = plan_upload_regions(file_size);
 
@@ -1196,8 +1198,35 @@ async fn run_upload_file(
         return Err(e);
     }
 
+    // Every region handle is closed, so no later write can move the mtime.
+    // Best-effort: some servers refuse SETSTAT, and the bytes are already safe.
+    if let Some(times) = source_times {
+        let sftp = sftp_arc.lock().await;
+        if let Err(e) = sftp.set_metadata(remote_path, times_attrs(times)).await {
+            tracing::warn!(remote_path, error = %e, "cannot preserve modification time");
+        }
+    }
+
     mark_file_done(jobs, job_id, app_handle);
     Ok(())
+}
+
+/// SETSTAT attributes that change only the access and modification times.
+fn times_attrs(times: FileTimes) -> russh_sftp::protocol::FileAttributes {
+    // SFTP v3 times are u32; saturate rather than wrap for dates past 2106.
+    let clamp = |s: u64| u32::try_from(s).unwrap_or(u32::MAX);
+    russh_sftp::protocol::FileAttributes {
+        mtime: Some(clamp(times.mtime)),
+        atime: Some(clamp(times.atime)),
+        ..russh_sftp::protocol::FileAttributes::empty()
+    }
+}
+
+/// Times of a remote file, when the server reported a modification time.
+fn remote_times(attrs: &russh_sftp::protocol::FileAttributes) -> Option<FileTimes> {
+    let mtime = u64::from(attrs.mtime?);
+    let atime = attrs.atime.map(u64::from).unwrap_or(mtime);
+    Some(FileTimes { mtime, atime })
 }
 
 /// Upload bytes `[start, end)` of the local file through its own remote
@@ -1415,6 +1444,15 @@ async fn run_download_file(
             .await
             .map_err(|e| SftpError::RemoteIoError(e.to_string()))?
     };
+    // fstat the open handle: for a symlink this is the target's times, which
+    // is what the downloaded bytes are. A failure only loses the timestamp.
+    let source_times = match remote_file.metadata().await {
+        Ok(attrs) => remote_times(&attrs),
+        Err(e) => {
+            tracing::warn!(remote_path, error = %e, "cannot read modification time");
+            None
+        }
+    };
 
     // Ensure local parent directory exists.
     if let Some(parent) = local_path.parent() {
@@ -1455,6 +1493,13 @@ async fn run_download_file(
         .flush()
         .await
         .map_err(|e| SftpError::LocalIoError(e.to_string()))?;
+
+    if let Some(times) = source_times {
+        let local_file = local_file.into_std().await;
+        if let Err(e) = times.apply_to(&local_file) {
+            tracing::warn!(path = %local_path.display(), error = %e, "cannot preserve modification time");
+        }
+    }
 
     remote_file
         .shutdown()
@@ -2071,6 +2116,52 @@ mod tests {
         assert_eq!(
             classify_resolved("/d/fifo", &attrs(S_IFIFO, 0), None),
             RemoteChild::Skip
+        );
+    }
+
+    #[test]
+    fn times_attrs_set_only_access_and_modification_times() {
+        let a = times_attrs(FileTimes {
+            mtime: 1_000_000_000,
+            atime: 1_600_000_000,
+        });
+        assert_eq!(a.mtime, Some(1_000_000_000));
+        assert_eq!(a.atime, Some(1_600_000_000));
+        assert_eq!(
+            (a.size, a.permissions, a.uid, a.gid),
+            (None, None, None, None)
+        );
+    }
+
+    #[test]
+    fn times_attrs_saturate_past_the_sftp_v3_range() {
+        let a = times_attrs(FileTimes {
+            mtime: u64::MAX,
+            atime: 5,
+        });
+        assert_eq!(a.mtime, Some(u32::MAX));
+        assert_eq!(a.atime, Some(5));
+    }
+
+    #[test]
+    fn remote_times_need_an_mtime_and_default_atime_to_it() {
+        assert_eq!(remote_times(&attrs(0o100644, 1)), None);
+        let mut a = attrs(0o100644, 1);
+        a.mtime = Some(42);
+        assert_eq!(
+            remote_times(&a),
+            Some(FileTimes {
+                mtime: 42,
+                atime: 42
+            })
+        );
+        a.atime = Some(7);
+        assert_eq!(
+            remote_times(&a),
+            Some(FileTimes {
+                mtime: 42,
+                atime: 7
+            })
         );
     }
 }
