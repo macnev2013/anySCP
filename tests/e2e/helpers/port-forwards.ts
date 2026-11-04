@@ -20,6 +20,8 @@ export interface RuleForm {
     hostId: string;
     localPort: number;
     remotePort: number;
+    /** Destination host as seen from the SSH server; the dialog defaults to localhost. */
+    remoteHost?: string;
 }
 
 /** Fill the rule dialog and save. */
@@ -42,6 +44,19 @@ export async function fillRuleAndSave(rule: RuleForm): Promise<void> {
     const rp = await $("[data-testid='rule-remote-port']");
     await rp.click();
     await rp.setValue(String(rule.remotePort));
+
+    if (rule.remoteHost !== undefined) {
+        const rh = await $("[data-testid='rule-remote-host']");
+        // Below the fold of the scrollable dialog at the e2e window size; scroll
+        // via the DOM — WebKitWebDriver rejects the Actions-API scroll.
+        await browser.execute(
+            (el: HTMLElement) => el.scrollIntoView({ block: "center" }),
+            rh as unknown as HTMLElement,
+        );
+        await rh.click();
+        await rh.clearValue();
+        await rh.setValue(rule.remoteHost);
+    }
 
     const save = await $("[data-testid='rule-dialog-save']");
     await save.waitForClickable({ timeout: 5_000 });

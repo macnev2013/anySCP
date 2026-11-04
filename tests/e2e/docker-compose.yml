@@ -213,15 +213,18 @@ services:
       start_period: 5s
 
   # ─── S3-compatible storage (MinIO) ──────────────────────────────────────────
-  # Pulled from Quay, not Docker Hub: MinIO deleted the `minio/minio` and
-  # `minio/mc` Docker Hub repositories, so `docker compose pull` failed with
-  # "pull access denied ... repository does not exist" and every E2E shard died
+  # Pulled from Bitnami's frozen `bitnamilegacy` namespace. MinIO deleted its
+  # Docker Hub repositories and later made the quay.io ones private (pulls of
+  # quay.io/minio/* now fail with 401 Unauthorized), and every E2E shard died
   # before running a test. Pinned to a release rather than `latest` — a floating
   # tag is what let an upstream change break CI on every branch at once.
+  # Bitnami images run as a non-root user with their own entrypoint, so the
+  # `minio` binary is invoked directly with a data dir that user can write.
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
     container_name: anyscp-e2e-minio
-    command: server /data --console-address ":9001"
+    entrypoint: ["minio"]
+    command: ["server", "/tmp/data", "--console-address", ":9001"]
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -230,8 +233,11 @@ services:
   # One-shot bucket seed — creates the test bucket and uploads two objects
   # so the S3 explorer specs have something to render.
   minio-seed:
-    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: bitnamilegacy/minio-client:2025.7.21-debian-12-r3
     container_name: anyscp-e2e-minio-seed
+    environment:
+      # The non-root Bitnami user can't write mc's default config dir.
+      MC_CONFIG_DIR: /tmp/.mc
     depends_on:
       minio:
         condition: service_started
@@ -247,6 +253,17 @@ services:
         mc mb --ignore-existing m/anyscp-test >/dev/null
         echo "hello from minio" | mc pipe m/anyscp-test/hello.txt >/dev/null
         echo "{\"k\": 1}"        | mc pipe m/anyscp-test/data.json >/dev/null
+        # Separate bucket holding more keys than one listing page (1000), so
+        # the S3 explorer must page it (issue #137). Kept apart from
+        # anyscp-test so specs counting that bucket's entries are unaffected.
+        mc mb --ignore-existing m/anyscp-large >/dev/null
+        mkdir -p /tmp/large
+        i=1
+        while [ "$$i" -le 1005 ]; do
+          echo "$$i" > "/tmp/large/obj-$$(printf '%04d' "$$i").txt"
+          i=$$((i + 1))
+        done
+        mc cp --recursive --quiet /tmp/large/ m/anyscp-large/ >/dev/null
         echo "minio seeded"
 
   # One-shot keygen — produces the keypair shared by sshd-key (authorized key)
@@ -330,6 +347,7 @@ services:
       # MinIO sidecar — S3-compatible target seeded by minio-seed.
       MINIO_ENDPOINT: http://minio:9000
       MINIO_BUCKET: anyscp-test
+      MINIO_LARGE_BUCKET: anyscp-large
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
       # Don't ship test-run noise to PostHog. Read by src-tauri/src/telemetry.rs;

@@ -78,6 +78,56 @@ export async function sftpEnqueueUpload(
     );
 }
 
+export async function sftpEnqueueDownload(
+    sessionId: string,
+    remotePaths: string[],
+    localDir: string,
+): Promise<string[]> {
+    return await browser.execute(
+        async (sid: string, rps: string[], ld: string) => {
+            const fn = (window as unknown as {
+                __e2eSftpEnqueueDownload?: (s: string, r: string[], l: string) => Promise<string[]>;
+            }).__e2eSftpEnqueueDownload;
+            if (!fn) throw new Error("__e2eSftpEnqueueDownload not registered");
+            return await fn(sid, rps, ld);
+        },
+        sessionId,
+        remotePaths,
+        localDir,
+    );
+}
+
+/** Final status of a queued SFTP transfer: "Completed", "Cancelled", or
+ *  "Failed: <message>". Waits until the transfer leaves Queued/InProgress. */
+export async function waitForSftpTransferResult(
+    transferId: string,
+    timeoutMs = 30_000,
+): Promise<string> {
+    let result = "";
+    await browser.waitUntil(
+        async () => {
+            const transfers = (await browser.execute(async () => {
+                const fn = (window as unknown as {
+                    __e2eSftpListTransfers?: () => Promise<unknown[]>;
+                }).__e2eSftpListTransfers;
+                if (!fn) throw new Error("__e2eSftpListTransfers not registered");
+                return await fn();
+            })) as { transfer_id: string; status: string | { Failed: string } }[];
+            const t = transfers.find((x) => x.transfer_id === transferId);
+            if (!t) return false;
+            if (typeof t.status === "object") {
+                result = `Failed: ${t.status.Failed}`;
+                return true;
+            }
+            if (t.status === "Queued" || t.status === "InProgress") return false;
+            result = t.status;
+            return true;
+        },
+        { timeout: timeoutMs, timeoutMsg: `transfer ${transferId} never finished` },
+    );
+    return result;
+}
+
 export async function sftpCopy(
     sessionId: string,
     sourcePaths: string[],

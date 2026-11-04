@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { S3Connection } from "../types";
+import type { S3Connection, S3Entry } from "../types";
 import { useS3Store } from "./s3-store";
 
 // The store reaches the backend via a dynamic `import("@tauri-apps/api/core")`,
@@ -74,5 +74,37 @@ describe("s3-store reorderConnections", () => {
 
     // Order rolled back to the pre-drag state.
     expect(useS3Store.getState().connections).toEqual([a, b, c]);
+  });
+});
+
+function makeEntry(name: string): S3Entry {
+  return { name, key: name, entry_type: "File", size: 0, last_modified: null, storage_class: null };
+}
+
+describe("s3-store paged listings", () => {
+  beforeEach(() => {
+    useS3Store.setState({ sessions: new Map() });
+    useS3Store.getState().openSession("s1", "test");
+  });
+
+  it("appends a further page and advances the token", () => {
+    const store = useS3Store.getState();
+    store.setEntries("s1", "logs/", [makeEntry("a")], "tok-1");
+    store.appendEntries("s1", "logs/", [makeEntry("b")], null);
+
+    const session = useS3Store.getState().sessions.get("s1")!;
+    expect(session.entries.map((e) => e.name)).toEqual(["a", "b"]);
+    expect(session.nextToken).toBeNull();
+  });
+
+  it("drops a page that arrives after navigating to another prefix", () => {
+    const store = useS3Store.getState();
+    store.setEntries("s1", "logs/", [makeEntry("a")], "tok-1");
+    store.setEntries("s1", "other/", [makeEntry("x")]);
+    store.appendEntries("s1", "logs/", [makeEntry("b")], "tok-2");
+
+    const session = useS3Store.getState().sessions.get("s1")!;
+    expect(session.entries.map((e) => e.name)).toEqual(["x"]);
+    expect(session.nextToken).toBeNull();
   });
 });

@@ -479,6 +479,9 @@ pub async fn s3_switch_bucket(
 
 // ─── Object operations ───────────────────────────────────────────────────────
 
+/// Keys (objects + common prefixes) per `s3_list_objects` call — the S3 maximum.
+const LIST_PAGE_SIZE: usize = 1000;
+
 #[tauri::command]
 #[instrument(skip(s3_manager))]
 pub async fn s3_list_objects(
@@ -489,17 +492,21 @@ pub async fn s3_list_objects(
 ) -> Result<S3ListResult, S3Error> {
     let bucket = s3_manager.get_bucket(&s3_session_id)?;
 
-    let results = if let Some(_token) = continuation_token {
-        bucket
-            .list(prefix.clone(), Some("/".to_string()))
-            .await
-            .map_err(|e| S3Error::OperationError(format!("List objects failed: {e}")))?
-    } else {
-        bucket
-            .list(prefix.clone(), Some("/".to_string()))
-            .await
-            .map_err(|e| S3Error::OperationError(format!("List objects failed: {e}")))?
-    };
+    // Fetch a single page. `Bucket::list` follows every continuation token
+    // before returning, so a prefix with hundreds of thousands of keys meant
+    // hundreds of sequential requests and a UI stuck on the spinner. The
+    // frontend pages through the rest on demand with the returned token.
+    let (page, _status) = bucket
+        .list_page(
+            prefix.clone(),
+            Some("/".to_string()),
+            continuation_token,
+            None,
+            Some(LIST_PAGE_SIZE),
+        )
+        .await
+        .map_err(|e| S3Error::OperationError(format!("List objects failed: {e}")))?;
+    let results = [page];
 
     let mut entries = Vec::new();
 
