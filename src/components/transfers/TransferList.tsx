@@ -4,6 +4,8 @@ import { TransferRow } from "./TransferRow";
 interface TransferListProps {
   list: TransferEvent[];
   onCancel: (id: string) => void;
+  onPause: (id: string) => void;
+  onResume: (id: string) => void;
   onRetry: (id: string) => void;
   onDismiss: (id: string) => void;
   /** Caps height and scrolls internally (the popover). Omit on the full page,
@@ -11,7 +13,15 @@ interface TransferListProps {
   maxHeight?: string;
 }
 
-export function TransferList({ list, onCancel, onRetry, onDismiss, maxHeight }: TransferListProps) {
+export function TransferList({
+  list,
+  onCancel,
+  onPause,
+  onResume,
+  onRetry,
+  onDismiss,
+  maxHeight,
+}: TransferListProps) {
   if (list.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-10 gap-2">
@@ -35,6 +45,8 @@ export function TransferList({ list, onCancel, onRetry, onDismiss, maxHeight }: 
           key={t.transfer_id}
           transfer={t}
           onCancel={onCancel}
+          onPause={onPause}
+          onResume={onResume}
           onRetry={onRetry}
           onDismiss={onDismiss}
         />

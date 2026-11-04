@@ -98,7 +98,7 @@ async fn delete_dir_recursive(
 pub async fn sftp_open(
     session_id: String,
     use_sudo: Option<bool>,
-    ssh_manager: State<'_, SshManager>,
+    ssh_manager: State<'_, Arc<SshManager>>,
     sftp_manager: State<'_, Arc<SftpManager>>,
 ) -> Result<String, SftpError> {
     // 1. Obtain the shared Handle from the live SSH session.
@@ -106,85 +106,11 @@ pub async fn sftp_open(
         .get_handle(&session_id)
         .map_err(|e| SftpError::SshSessionNotFound(e.to_string()))?;
 
-    // 2. Lock only long enough to open the channel, then release immediately.
-    let channel = {
-        let handle = handle_arc.lock().await;
-        handle
-            .channel_open_session()
-            .await
-            .map_err(|e| SftpError::ChannelError(e.to_string()))?
-    };
-
-    // 3. Request the SFTP subsystem, or (sudo) preflight + exec sudo sftp-server.
-    if use_sudo.unwrap_or(false) {
-        // Preflight on a throwaway channel: confirm the user actually has
-        // *passwordless* sudo before committing the SFTP channel. Without this,
-        // a host that prompts for a password leaves the SFTP init blocked until
-        // the timeout — russh-sftp does not cancel the pending init when the
-        // channel hits EOF — so we'd hang ~30 s instead of failing cleanly.
-        // `sudo -n true` exits non-zero immediately when a password is required.
-        let mut check = {
-            let handle = handle_arc.lock().await;
-            handle
-                .channel_open_session()
-                .await
-                .map_err(|e| SftpError::ChannelError(e.to_string()))?
-        };
-        check
-            .exec(true, "sudo -n true")
-            .await
-            .map_err(|e| SftpError::ChannelError(e.to_string()))?;
-        // Read until the channel closes. NB: the server often sends `Eof`
-        // BEFORE the `exit-status` request, so we must NOT break on `Eof` or
-        // we'd miss the status and treat a passwordless host as a failure.
-        let mut sudo_exit = None;
-        while let Some(msg) = check.wait().await {
-            match msg {
-                russh::ChannelMsg::ExitStatus { exit_status } => sudo_exit = Some(exit_status),
-                russh::ChannelMsg::Close => break,
-                _ => {}
-            }
-        }
-        if sudo_exit != Some(0) {
-            return Err(SftpError::PermissionDenied(
-                "passwordless sudo is required to browse as root, but it is not configured \
-                 for this user"
-                    .to_string(),
-            ));
-        }
-
-        // Passwordless sudo confirmed — exec sudo sftp-server on the real
-        // channel. `-n` keeps it non-interactive; the shell loop probes
-        // sftp-server on $PATH first (portable `command -v`, not the non-POSIX
-        // `which`) then the known per-distro install paths, so this works on
-        // Debian/Ubuntu, RHEL/Fedora, Alpine and Arch.
-        channel
-            .exec(
-                true,
-                "sudo -n /bin/sh -c 'for p in \"$(command -v sftp-server 2>/dev/null)\" \
-                 /usr/lib/openssh/sftp-server /usr/libexec/openssh/sftp-server \
-                 /usr/lib/ssh/sftp-server /usr/libexec/sftp-server; do \
-                 [ -x \"$p\" ] && exec \"$p\"; done; \
-                 echo \"sftp-server: not found\" >&2; exit 127'",
-            )
-            .await
-            .map_err(|e| SftpError::ChannelError(e.to_string()))?;
-    } else {
-        channel
-            .request_subsystem(true, "sftp")
-            .await
-            .map_err(|e| SftpError::ChannelError(e.to_string()))?;
-    }
-
-    // 4. Hand the channel's byte-stream to the russh-sftp client (10 s default
-    //    init timeout). Do NOT raise this: russh's request_subsystem above
-    //    returns *before* the server's accept/reject reply, so on a host
-    //    without the SFTP subsystem (e.g. SCP-only) this init is what fails —
-    //    a longer timeout just delays the frontend's SFTP→SCP fallback by that
-    //    much (a 30 s value broke the SCP-fallback e2e specs).
-    let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
-        .await
-        .map_err(|e| SftpError::ProtocolError(e.to_string()))?;
+    let sudo = use_sudo.unwrap_or(false);
+    let host_config = ssh_manager
+        .host_config(&session_id)
+        .map_err(|e| SftpError::SshSessionNotFound(e.to_string()))?;
+    let sftp = super::connection::open_sftp_session(&handle_arc, sudo).await?;
 
     // 5. Store and return a fresh ID.
     let sftp_id = uuid::Uuid::new_v4().to_string();
@@ -193,10 +119,13 @@ pub async fn sftp_open(
         SftpSessionWrapper {
             sftp: Arc::new(tokio::sync::Mutex::new(sftp)),
             ssh_session_id: session_id,
+            host_config,
+            use_sudo: sudo,
+            generation: 0,
+            reconnect_lock: Arc::new(tokio::sync::Mutex::new(())),
         },
     );
 
-    let sudo = use_sudo.unwrap_or(false);
     tracing::info!(sftp_session_id = %sftp_id, sudo, "SFTP session opened");
     crate::telemetry::capture("sftp_opened", serde_json::json!({ "sudo": sudo }));
     Ok(sftp_id)
@@ -204,15 +133,16 @@ pub async fn sftp_open(
 
 /// Close and remove an SFTP session.
 #[tauri::command]
-#[instrument(skip(sftp_manager), fields(sftp_session_id = %sftp_session_id))]
+#[instrument(skip(sftp_manager, ssh_manager), fields(sftp_session_id = %sftp_session_id))]
 pub async fn sftp_close(
     sftp_session_id: String,
     sftp_manager: State<'_, Arc<SftpManager>>,
+    ssh_manager: State<'_, Arc<SshManager>>,
 ) -> Result<(), SftpError> {
     // Grab the Arc before removing from the map.
-    let sftp_arc = {
+    let (sftp_arc, ssh_session_id) = {
         let session_ref = sftp_manager.get_session(&sftp_session_id)?;
-        session_ref.sftp.clone()
+        (session_ref.sftp.clone(), session_ref.ssh_session_id.clone())
     };
 
     sftp_manager.remove_session(&sftp_session_id);
@@ -220,6 +150,8 @@ pub async fn sftp_close(
     // Best-effort close — ignore errors (server may have already terminated).
     let sftp = sftp_arc.lock().await;
     let _ = sftp.close().await;
+    drop(sftp);
+    ssh_manager.remove_bare(&ssh_session_id);
 
     tracing::info!(sftp_session_id = %sftp_session_id, "SFTP session closed");
     crate::telemetry::capture("sftp_closed", serde_json::json!({}));
@@ -1872,7 +1804,7 @@ pub async fn sftp_enqueue_download(
     result
 }
 
-/// Re-queue a failed or cancelled transfer, resetting its progress counters.
+/// Retry a failed transfer. Single files keep their checkpoint; directories restart.
 #[tauri::command]
 #[instrument(skip(transfer_manager), fields(transfer_id = %transfer_id))]
 pub async fn sftp_retry_transfer(
@@ -1881,6 +1813,38 @@ pub async fn sftp_retry_transfer(
 ) -> Result<String, SftpError> {
     transfer_manager.retry(&transfer_id)?;
     Ok(transfer_id)
+}
+
+/// Pause an in-progress single-file transfer after its current chunk.
+#[tauri::command]
+#[instrument(skip(transfer_manager), fields(transfer_id = %transfer_id))]
+pub async fn sftp_pause_transfer(
+    transfer_id: String,
+    transfer_manager: State<'_, Arc<TransferManager>>,
+) -> Result<String, SftpError> {
+    transfer_manager.pause(&transfer_id)?;
+    Ok(transfer_id)
+}
+
+/// Resume a paused or failed single-file transfer from its checkpoint.
+#[tauri::command]
+#[instrument(skip(transfer_manager), fields(transfer_id = %transfer_id))]
+pub async fn sftp_resume_transfer(
+    transfer_id: String,
+    transfer_manager: State<'_, Arc<TransferManager>>,
+) -> Result<String, SftpError> {
+    transfer_manager.resume(&transfer_id)?;
+    Ok(transfer_id)
+}
+
+/// Remove a settled transfer and any retained partial file.
+#[tauri::command]
+#[instrument(skip(transfer_manager), fields(transfer_id = %transfer_id))]
+pub async fn sftp_discard_transfer(
+    transfer_id: String,
+    transfer_manager: State<'_, Arc<TransferManager>>,
+) -> Result<(), SftpError> {
+    transfer_manager.discard(&transfer_id).await
 }
 
 /// Return a snapshot of all known transfers (queued, in-progress, and finished).
@@ -1892,14 +1856,13 @@ pub async fn sftp_list_transfers(
     Ok(transfer_manager.list_all())
 }
 
-/// Remove all completed, failed, and cancelled transfers from the registry.
+/// Clear settled transfers that do not retain a resumable checkpoint.
 #[tauri::command]
 #[instrument(skip(transfer_manager))]
 pub async fn sftp_clear_finished_transfers(
     transfer_manager: State<'_, Arc<TransferManager>>,
 ) -> Result<(), SftpError> {
-    transfer_manager.clear_finished();
-    Ok(())
+    transfer_manager.clear_finished().await
 }
 
 /// Adjust the maximum number of transfers that run concurrently.

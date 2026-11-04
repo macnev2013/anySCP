@@ -149,6 +149,7 @@ pub struct TransferEvent {
     pub files_total: u32,
     pub speed_bps: u64,
     pub eta_secs: Option<u64>,
+    pub resume_supported: bool,
     pub created_at: u64,
 }
 
@@ -166,6 +167,7 @@ pub struct TransferInfo {
     pub files_total: u32,
     pub speed_bps: u64,
     pub eta_secs: Option<u64>,
+    pub resume_supported: bool,
     pub created_at: u64,
 }
 

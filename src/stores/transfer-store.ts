@@ -12,6 +12,13 @@ function isFinished(status: TransferStatusValue): boolean {
   return false;
 }
 
+function retainsCheckpoint(transfer: TransferEvent): boolean {
+  if (!transfer.resume_supported) return false;
+  return transfer.status === "Cancelled" || (
+    typeof transfer.status === "object" && "Failed" in transfer.status
+  );
+}
+
 function trimFinished(
   transfers: Map<string, TransferEvent>,
   order: string[],
@@ -63,7 +70,10 @@ export const useTransferStore = create<TransferState>((set) => ({
       next.set(event.transfer_id, event);
 
       if (!isFinished(event.status)) {
-        return { transfers: next };
+        return {
+          transfers: next,
+          finished_order: state.finished_order.filter((id) => id !== event.transfer_id),
+        };
       }
       // A transfer can emit more than one terminal event (e.g. a cancel that
       // races the worker) — never let it occupy two history slots.
@@ -89,11 +99,15 @@ export const useTransferStore = create<TransferState>((set) => ({
     set((state) => {
       const next = new Map<string, TransferEvent>();
       for (const [id, transfer] of state.transfers) {
-        if (!isFinished(transfer.status)) {
+        if (!isFinished(transfer.status) || retainsCheckpoint(transfer)) {
           next.set(id, transfer);
         }
       }
-      return { transfers: next, finished_order: [] };
+      const retained = new Set(next.keys());
+      return {
+        transfers: next,
+        finished_order: state.finished_order.filter((id) => retained.has(id)),
+      };
     }),
 
   hydrate: (items) =>

@@ -35,7 +35,7 @@ use super::{
 #[instrument(skip(ssh_manager, scp_manager), fields(ssh_session_id = %session_id))]
 pub async fn scp_open(
     session_id: String,
-    ssh_manager: State<'_, SshManager>,
+    ssh_manager: State<'_, Arc<SshManager>>,
     scp_manager: State<'_, Arc<ScpManager>>,
 ) -> Result<String, ScpError> {
     let handle = ssh_manager

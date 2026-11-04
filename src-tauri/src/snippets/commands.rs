@@ -148,7 +148,7 @@ pub async fn snippet_execute(
     session_id: String,
     resolved_command: String,
     snippet_id: Option<String>,
-    ssh: State<'_, SshManager>,
+    ssh: State<'_, Arc<SshManager>>,
     db: State<'_, Arc<HostDb>>,
 ) -> Result<(), SshError> {
     // 1. Write the command followed by a newline to the PTY.

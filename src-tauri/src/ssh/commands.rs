@@ -34,7 +34,7 @@ const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 pub async fn ssh_connect(
     host_config: HostConfig,
     attempt_id: Option<String>,
-    state: State<'_, SshManager>,
+    state: State<'_, Arc<SshManager>>,
     app_handle: AppHandle,
 ) -> Result<SessionId, SshError> {
     state.connect(host_config, app_handle, attempt_id).await
@@ -47,7 +47,7 @@ pub async fn ssh_connect(
 #[tauri::command]
 pub async fn ssh_cancel_connect(
     attempt_id: String,
-    state: State<'_, SshManager>,
+    state: State<'_, Arc<SshManager>>,
 ) -> Result<bool, SshError> {
     Ok(state.cancel_connect(&attempt_id))
 }
@@ -55,7 +55,7 @@ pub async fn ssh_cancel_connect(
 #[tauri::command]
 pub async fn ssh_disconnect(
     session_id: String,
-    state: State<'_, SshManager>,
+    state: State<'_, Arc<SshManager>>,
     app_handle: AppHandle,
 ) -> Result<(), SshError> {
     let result = state.disconnect(&session_id, app_handle).await;
@@ -69,7 +69,7 @@ pub async fn ssh_disconnect(
 pub async fn ssh_send_input(
     session_id: String,
     data: Vec<u8>,
-    state: State<'_, SshManager>,
+    state: State<'_, Arc<SshManager>>,
 ) -> Result<(), SshError> {
     state.send_input(&session_id, &data).await
 }
@@ -79,7 +79,7 @@ pub async fn ssh_resize_pty(
     session_id: String,
     cols: u32,
     rows: u32,
-    state: State<'_, SshManager>,
+    state: State<'_, Arc<SshManager>>,
 ) -> Result<(), SshError> {
     state.resize_pty(&session_id, cols, rows).await
 }
@@ -89,7 +89,7 @@ pub async fn ssh_resize_pty(
 #[tauri::command]
 pub async fn ssh_split_session(
     source_session_id: String,
-    state: State<'_, SshManager>,
+    state: State<'_, Arc<SshManager>>,
     app_handle: AppHandle,
 ) -> Result<SessionId, SshError> {
     let result = state.split_session(&source_session_id, app_handle).await;
@@ -536,7 +536,7 @@ mod tests {
 pub async fn connect_saved_host(
     host_id: String,
     attempt_id: Option<String>,
-    state: State<'_, SshManager>,
+    state: State<'_, Arc<SshManager>>,
     db: State<'_, Arc<HostDb>>,
     app_handle: AppHandle,
 ) -> Result<SessionId, SshError> {
@@ -666,7 +666,7 @@ fn build_host_config_blocking(
 pub async fn connect_saved_host_no_pty(
     host_id: String,
     attempt_id: Option<String>,
-    state: State<'_, SshManager>,
+    state: State<'_, Arc<SshManager>>,
     db: State<'_, Arc<HostDb>>,
 ) -> Result<SessionId, SshError> {
     let db_clone = Arc::clone(&db);

@@ -34,6 +34,8 @@ struct BareConn {
     /// open. They are never locked — merely keeping them alive prevents russh
     /// from tearing down the tunnel.
     _jump_handles: Vec<client::Handle<SshClientHandler>>,
+    /// Full configuration retained so file-transfer sessions can reconnect.
+    config: HostConfig,
 }
 
 /// Manages all active SSH sessions. Stored as Tauri managed state.
@@ -147,8 +149,7 @@ impl SshManager {
                 80,
                 24,
                 app_handle,
-                config.default_shell.clone(),
-                config.startup_command.clone(),
+                config,
             )
             .await
         };
@@ -217,6 +218,7 @@ impl SshManager {
             BareConn {
                 handle: Arc::new(tokio::sync::Mutex::new(handle)),
                 _jump_handles: jump_handles,
+                config,
             },
         );
 
@@ -386,6 +388,23 @@ impl SshManager {
         Err(SshError::SessionNotFound(session_id.to_string()))
     }
 
+    /// Return the full connection configuration retained for this session.
+    pub fn host_config(&self, session_id: &str) -> Result<HostConfig, SshError> {
+        if let Some(entry) = self.sessions.get(session_id) {
+            return Ok(entry.value().host_config());
+        }
+        if let Some(entry) = self.bare_handles.get(session_id) {
+            return Ok(entry.value().config.clone());
+        }
+        Err(SshError::SessionNotFound(session_id.to_string()))
+    }
+
+    /// Retire a bare connection owned by an explorer session. A terminal-backed
+    /// session with the same ID lives in the other map and is left untouched.
+    pub fn remove_bare(&self, session_id: &str) {
+        self.bare_handles.remove(session_id);
+    }
+
     /// Open a new PTY channel on the same connection as an existing session.
     /// Returns the new session ID.
     pub async fn split_session(
@@ -419,7 +438,7 @@ impl SshManager {
             80,
             24,
             app_handle,
-            host_config.default_shell,
+            host_config,
         )
         .await?;
 

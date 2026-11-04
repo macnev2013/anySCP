@@ -2,12 +2,24 @@ import { useTransfers } from "../../hooks/use-transfers";
 import { TransferList } from "./TransferList";
 
 export function TransfersPage() {
-  const { list, activeCount, queuedCount, finishedCount, onCancel, onRetry, onDismiss, onClearFinished } =
-    useTransfers();
+  const {
+    list,
+    activeCount,
+    queuedCount,
+    pausedCount,
+    finishedCount,
+    onCancel,
+    onPause,
+    onResume,
+    onRetry,
+    onDismiss,
+    onClearFinished,
+  } = useTransfers();
 
   const summaryParts: string[] = [];
   if (activeCount > 0) summaryParts.push(`${activeCount} active`);
   if (queuedCount > 0) summaryParts.push(`${queuedCount} queued`);
+  if (pausedCount > 0) summaryParts.push(`${pausedCount} paused`);
   if (finishedCount > 0) summaryParts.push(`${finishedCount} done`);
 
   return (
@@ -39,7 +51,14 @@ export function TransfersPage() {
         </div>
 
         <div className="rounded-lg border border-border/60 overflow-hidden">
-          <TransferList list={list} onCancel={onCancel} onRetry={onRetry} onDismiss={onDismiss} />
+          <TransferList
+            list={list}
+            onCancel={onCancel}
+            onPause={onPause}
+            onResume={onResume}
+            onRetry={onRetry}
+            onDismiss={onDismiss}
+          />
         </div>
       </div>
     </div>
