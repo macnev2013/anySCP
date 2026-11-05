@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Braces } from "lucide-react";
+import { Braces, X } from "lucide-react";
 import type { Snippet, SnippetFolder, SnippetVariable } from "../../types";
 import { extractVariables, parseVariables } from "../../utils/snippet-resolve";
 import { CustomSelect } from "../shared/CustomSelect";
@@ -14,7 +14,15 @@ interface SnippetEditModalProps {
   onClose: () => void;
   onSave: (snippet: Snippet) => Promise<void>;
   onSaveAndExecute: (snippet: Snippet) => Promise<void>;
+  /**
+   * Create a folder from the folder picker and resolve to its id. When
+   * omitted, the picker offers no "New folder" entry.
+   */
+  onCreateFolder?: (name: string) => Promise<string>;
 }
+
+/** Picker value for the "New folder…" entry; never a real folder id. */
+const NEW_FOLDER_VALUE = "__new_folder__";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -171,11 +179,16 @@ export function SnippetEditModal({
   onClose,
   onSave,
   onSaveAndExecute: _onSaveAndExecute,
+  onCreateFolder,
 }: SnippetEditModalProps) {
   const [form, setForm] = useState<Snippet>(blankSnippet());
   const [variableMeta, setVariableMeta] = useState<SnippetVariable[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Inline "new folder" input that replaces the folder picker (#150).
+  const [newFolderName, setNewFolderName] = useState<string | null>(null);
+  const [folderError, setFolderError] = useState<string | null>(null);
+  const [creatingFolder, setCreatingFolder] = useState(false);
 
   const nameRef = useRef<HTMLInputElement>(null);
   const isEdit = !!initial;
@@ -206,6 +219,9 @@ export function SnippetEditModal({
       syncVariables(base.command, parsed);
       setError(null);
       setSaving(false);
+      setNewFolderName(null);
+      setFolderError(null);
+      setCreatingFolder(false);
       requestAnimationFrame(() => nameRef.current?.focus());
     }
   }, [open, initial, syncVariables]);
@@ -213,6 +229,35 @@ export function SnippetEditModal({
   const handleCommandChange = (cmd: string) => {
     setForm((f) => ({ ...f, command: cmd }));
     syncVariables(cmd, variableMeta);
+  };
+
+  const cancelNewFolder = () => {
+    setNewFolderName(null);
+    setFolderError(null);
+  };
+
+  const submitNewFolder = async () => {
+    if (!onCreateFolder || newFolderName === null || creatingFolder) return;
+    const name = newFolderName.trim();
+    if (!name) { setFolderError("Folder name is required"); return; }
+    // Picking an existing name selects that folder instead of adding a twin.
+    const existing = folders.find((f) => f.name.toLowerCase() === name.toLowerCase());
+    if (existing) {
+      setForm((f) => ({ ...f, folder_id: existing.id }));
+      cancelNewFolder();
+      return;
+    }
+    setCreatingFolder(true);
+    setFolderError(null);
+    try {
+      const id = await onCreateFolder(name);
+      setForm((f) => ({ ...f, folder_id: id }));
+      setNewFolderName(null);
+    } catch (err: unknown) {
+      setFolderError(extractError(err, "Failed to create folder"));
+    } finally {
+      setCreatingFolder(false);
+    }
   };
 
   const buildSnippet = (): Snippet => ({
@@ -338,19 +383,85 @@ export function SnippetEditModal({
             {/* Folder */}
             <div>
               <label className={labelClass}>Folder</label>
-              <CustomSelect
-                value={form.folder_id ?? ""}
-                onChange={(v) => setForm((f) => ({ ...f, folder_id: v || null }))}
-                disabled={saving}
-                placeholder="No folder"
-                options={[
-                  { value: "", label: "No folder" },
-                  ...folders.map((folder) => ({
-                    value: folder.id,
-                    label: folder.name,
-                  })),
-                ]}
-              />
+              {newFolderName === null ? (
+                <CustomSelect
+                  value={form.folder_id ?? ""}
+                  onChange={(v) => {
+                    if (v === NEW_FOLDER_VALUE) {
+                      setNewFolderName("");
+                      setFolderError(null);
+                    } else {
+                      setForm((f) => ({ ...f, folder_id: v || null }));
+                    }
+                  }}
+                  disabled={saving}
+                  placeholder="No folder"
+                  data-testid="snippet-modal-folder"
+                  aria-label="Folder"
+                  options={[
+                    { value: "", label: "No folder" },
+                    ...folders.map((folder) => ({
+                      value: folder.id,
+                      label: folder.name,
+                    })),
+                    ...(onCreateFolder
+                      ? [{ value: NEW_FOLDER_VALUE, label: "+ New folder…" }]
+                      : []),
+                  ]}
+                />
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    autoFocus
+                    type="text"
+                    data-testid="snippet-modal-new-folder-name"
+                    aria-label="New folder name"
+                    value={newFolderName}
+                    onChange={(e) => {
+                      setNewFolderName(e.target.value);
+                      setFolderError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      // Enter must not submit the snippet form, and Escape
+                      // must not reach ModalShell and close the whole dialog.
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void submitNewFolder();
+                      } else if (e.key === "Escape") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        cancelNewFolder();
+                      }
+                    }}
+                    placeholder="Folder name"
+                    disabled={saving || creatingFolder}
+                    className={inputClass}
+                  />
+                  <button
+                    type="button"
+                    data-testid="snippet-modal-new-folder-add"
+                    onClick={() => void submitNewFolder()}
+                    disabled={saving || creatingFolder || !newFolderName.trim()}
+                    className={BTN_PRIMARY + " shrink-0"}
+                  >
+                    {creatingFolder ? "Adding…" : "Add"}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Cancel new folder"
+                    onClick={cancelNewFolder}
+                    disabled={creatingFolder}
+                    className={BTN_GHOST + " shrink-0"}
+                  >
+                    <X size={14} strokeWidth={2} aria-hidden="true" />
+                  </button>
+                </div>
+              )}
+              {folderError && (
+                <p className="mt-1 text-[11px] text-status-error" role="alert">
+                  {folderError}
+                </p>
+              )}
             </div>
 
             {/* Tags */}

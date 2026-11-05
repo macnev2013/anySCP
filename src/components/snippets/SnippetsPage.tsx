@@ -14,7 +14,7 @@ import { extractVariables } from "../../utils/snippet-resolve";
 import { SnippetCard } from "./SnippetCard";
 import { SnippetFolderCard } from "./SnippetFolderCard";
 import { SnippetEditModal } from "./SnippetEditModal";
-import { SnippetFolderModal } from "./SnippetFolderModal";
+import { SnippetFolderModal, FOLDER_COLORS } from "./SnippetFolderModal";
 import { VariableDialog } from "./VariableDialog";
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -186,11 +186,13 @@ export function SnippetsPage() {
     [saveSnippet],
   );
 
-  const handleCreateFolder = useCallback(
-    async (data: { name: string; color: string }) => {
+  /** Save a new top-level folder and return its id. */
+  const createFolder = useCallback(
+    async (data: { name: string; color: string }): Promise<string> => {
       const now = new Date().toISOString();
+      const id = crypto.randomUUID();
       await saveFolder({
-        id: crypto.randomUUID(),
+        id,
         name: data.name,
         parent_id: null,
         color: data.color,
@@ -199,9 +201,25 @@ export function SnippetsPage() {
         created_at: now,
         updated_at: now,
       });
-      setFolderModalOpen(false);
+      return id;
     },
     [saveFolder, folders.length],
+  );
+
+  const handleCreateFolder = useCallback(
+    async (data: { name: string; color: string }) => {
+      await createFolder(data);
+      setFolderModalOpen(false);
+    },
+    [createFolder],
+  );
+
+  // From the snippet dialog's folder picker (#150): there is no colour picker
+  // there, so cycle through the palette to keep new folders distinguishable.
+  const handleCreateFolderFromSnippet = useCallback(
+    (name: string) =>
+      createFolder({ name, color: FOLDER_COLORS[folders.length % FOLDER_COLORS.length] }),
+    [createFolder, folders.length],
   );
 
   const handleDeleteFolder = useCallback(
@@ -394,6 +412,7 @@ export function SnippetsPage() {
         onClose={() => setEditingSnippet(null)}
         onSave={(s) => handleSaveSnippet(s)}
         onSaveAndExecute={(s) => handleSaveAndExecute(s)}
+        onCreateFolder={handleCreateFolderFromSnippet}
       />
 
       {/* Folder create modal */}
