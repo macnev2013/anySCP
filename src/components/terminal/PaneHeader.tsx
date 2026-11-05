@@ -1,4 +1,6 @@
-import { Columns2, Rows2, Maximize2, Minimize2, X } from "lucide-react";
+import { useState } from "react";
+import { Columns2, Rows2, Maximize2, Minimize2, X, FolderOpen, Loader2 } from "lucide-react";
+import { openExplorerFromTerminal } from "../../lib/open-explorer-from-terminal";
 import { useSessionStore } from "../../stores/session-store";
 import { useTabStore } from "../../stores/tab-store";
 
@@ -18,6 +20,7 @@ export function PaneHeader({ sessionId, tabId }: PaneHeaderProps) {
     const tab = s.tabs.get(tabId);
     return tab ? tab.layout.type === "split" : false;
   });
+  const [openingExplorer, setOpeningExplorer] = useState(false);
 
   if (!session) return null;
 
@@ -65,6 +68,12 @@ export function PaneHeader({ sessionId, tabId }: PaneHeaderProps) {
     })();
   };
 
+  const handleOpenExplorer = () => {
+    if (openingExplorer) return;
+    setOpeningExplorer(true);
+    void openExplorerFromTerminal(sessionId).finally(() => setOpeningExplorer(false));
+  };
+
   const handleZoom = () => {
     useSessionStore.getState().toggleZoom(sessionId);
   };
@@ -103,6 +112,20 @@ export function PaneHeader({ sessionId, tabId }: PaneHeaderProps) {
           isActive ? "opacity-60 group-hover/pane:opacity-100" : "opacity-0 group-hover/pane:opacity-100",
         ].join(" ")}
       >
+        {/* Open the file explorer in the shell's current directory (#149) */}
+        {status === "Connected" && (
+          <button type="button" onClick={handleOpenExplorer} className={btnClass}
+            disabled={openingExplorer}
+            data-testid={`pane-open-explorer-${sessionId}`}
+            aria-label="Open file explorer here" title="Open file explorer in this directory">
+            {openingExplorer ? (
+              <Loader2 size={13} strokeWidth={1.8} className="animate-spin" aria-hidden="true" />
+            ) : (
+              <FolderOpen size={13} strokeWidth={1.8} aria-hidden="true" />
+            )}
+          </button>
+        )}
+
         {/* Split horizontal */}
         <button type="button" onClick={() => handleSplit("horizontal")} className={btnClass}
           aria-label="Split right" title="Split right (⌘D)">

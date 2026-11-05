@@ -427,6 +427,30 @@ impl SshManager {
         Ok(new_id)
     }
 
+    /// Working directory of a terminal pane's shell on the server, or `None`
+    /// when it can't be determined (non-Linux server, shell gone, …).
+    pub async fn shell_cwd(&self, session_id: &str) -> Result<Option<String>, SshError> {
+        let handle = self
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| SshError::SessionNotFound(session_id.to_string()))?
+            .value()
+            .ssh_handle();
+        // Panes sharing this connection, in the order their shells started.
+        let mut panes: Vec<(std::time::Instant, String)> = self
+            .sessions
+            .iter()
+            .filter(|e| Arc::ptr_eq(&e.value().ssh_handle(), &handle))
+            .map(|e| (e.value().opened_at(), e.key().clone()))
+            .collect();
+        panes.sort();
+        let index = panes
+            .iter()
+            .position(|(_, id)| id == session_id)
+            .ok_or_else(|| SshError::SessionNotFound(session_id.to_string()))?;
+        super::cwd::shell_cwd(handle, index, panes.len()).await
+    }
+
     /// Send bytes to a session's PTY channel.
     pub async fn send_input(&self, session_id: &str, data: &[u8]) -> Result<(), SshError> {
         let entry = self
