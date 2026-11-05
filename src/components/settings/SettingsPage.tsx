@@ -558,6 +558,8 @@ function TerminalSettings() {
   const setFontSize = useSettingsStore((s) => s.setTerminalFontSize);
   const setCursorStyle = useSettingsStore((s) => s.setTerminalCursorStyle);
   const setCursorBlink = useSettingsStore((s) => s.setTerminalCursorBlink);
+  const splitInCwd = useSettingsStore((s) => s.terminalSplitInCwd);
+  const setSplitInCwd = useSettingsStore((s) => s.setTerminalSplitInCwd);
   const setLineHeight = useSettingsStore((s) => s.setTerminalLineHeight);
   const setScrollback = useSettingsStore((s) => s.setTerminalScrollback);
   const fontFamily = useSettingsStore((s) => s.terminalFontFamily);
@@ -629,6 +631,18 @@ function TerminalSettings() {
             <p className={DESC_CLASS}>Animate the cursor</p>
           </div>
           <Toggle id="s-blink" checked={cursorBlink} onChange={setCursorBlink} />
+        </SettingRow>
+      </SettingsGroup>
+
+      <SettingsGroup label="Split Panes">
+        <SettingRow>
+          <div>
+            <label htmlFor="s-split-cwd" className={LABEL_CLASS}>Open in Current Directory</label>
+            <p className={DESC_CLASS}>
+              Start new split panes in the directory of the pane being split, instead of the home directory
+            </p>
+          </div>
+          <Toggle id="s-split-cwd" checked={splitInCwd} onChange={setSplitInCwd} />
         </SettingRow>
       </SettingsGroup>
 

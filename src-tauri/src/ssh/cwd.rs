@@ -161,9 +161,34 @@ pub async fn shell_cwd(
     ))
 }
 
+/// Command that starts a split pane's shell in `dir` (#148). It runs through
+/// the user's login shell, so it sticks to syntax that sh, bash, zsh, fish and
+/// csh all accept, then replaces itself with the shell the pane would have
+/// had anyway: the host's configured default shell, or a login `$SHELL`.
+pub fn start_in_dir_command(dir: &str, default_shell: Option<&str>) -> String {
+    let shell = default_shell.unwrap_or("\"$SHELL\" -l");
+    format!("cd {}; exec {}", crate::scp::shell_quote(dir), shell)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_in_dir_execs_a_login_shell() {
+        assert_eq!(
+            start_in_dir_command("/app/files/05f5", None),
+            r#"cd '/app/files/05f5'; exec "$SHELL" -l"#
+        );
+    }
+
+    #[test]
+    fn start_in_dir_quotes_the_path_and_keeps_the_default_shell() {
+        assert_eq!(
+            start_in_dir_command("/srv/it's $HOME", Some("/bin/zsh")),
+            r"cd '/srv/it'\''s $HOME'; exec /bin/zsh"
+        );
+    }
 
     const OUT: &str = "5200 812 /app/logs/05f54a66\n4100 790 /home/me\n6000 900 \n";
 

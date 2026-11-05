@@ -391,8 +391,17 @@ impl SshManager {
     pub async fn split_session(
         &self,
         source_session_id: &str,
+        in_cwd: bool,
         app_handle: AppHandle,
     ) -> Result<SessionId, SshError> {
+        // Best effort: if the source shell's directory can't be read, the new
+        // pane opens in the home directory as before.
+        let start_dir = if in_cwd {
+            self.shell_cwd(source_session_id).await.ok().flatten()
+        } else {
+            None
+        };
+
         // Get the shared handle, host config, and the ProxyJump tunnel chain from
         // the source session. The jump handles are shared (Arc) so the tunnel
         // stays open as long as the parent OR any split pane is alive — closing
@@ -420,6 +429,7 @@ impl SshManager {
             24,
             app_handle,
             host_config.default_shell,
+            start_dir,
         )
         .await?;
 

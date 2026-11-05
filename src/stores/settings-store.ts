@@ -42,6 +42,8 @@ interface SettingsState {
   terminalCursorBlink: boolean;
   terminalLineHeight: number;
   terminalScrollback: number;
+  /** Open new split panes in the source pane's directory instead of home (#148). */
+  terminalSplitInCwd: boolean;
 
   // Terminal clipboard
   terminalCopyOnSelect: boolean;
@@ -74,6 +76,7 @@ interface SettingsState {
   setTerminalCursorBlink: (blink: boolean) => void;
   setTerminalLineHeight: (height: number) => void;
   setTerminalScrollback: (lines: number) => void;
+  setTerminalSplitInCwd: (enabled: boolean) => void;
   setTerminalCopyOnSelect: (enabled: boolean) => void;
   setTerminalPasteButton: (button: PasteButton) => void;
   setExplorerDoubleClickAction: (action: DoubleClickAction) => void;
@@ -100,6 +103,7 @@ const DEFAULTS = {
   terminalCursorBlink: true,
   terminalLineHeight: 1.2,
   terminalScrollback: 5000,
+  terminalSplitInCwd: false,
   terminalCopyOnSelect: false,
   terminalPasteButton: "none" as PasteButton,
   explorerDoubleClickAction: "download" as DoubleClickAction,
@@ -274,6 +278,11 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     persist("terminal_cursor_style", style);
   },
 
+  setTerminalSplitInCwd: (enabled) => {
+    set({ terminalSplitInCwd: enabled });
+    persist("terminal_split_in_cwd", String(enabled));
+  },
+
   setTerminalCursorBlink: (blink) => {
     set({ terminalCursorBlink: blink });
     persist("terminal_cursor_blink", String(blink));
@@ -368,6 +377,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           case "terminal_font_family": updates.terminalFontFamily = value || DEFAULTS.terminalFontFamily; break;
           case "terminal_cursor_style": updates.terminalCursorStyle = (value as CursorStyle) || DEFAULTS.terminalCursorStyle; break;
           case "terminal_cursor_blink": updates.terminalCursorBlink = value !== "false"; break;
+          case "terminal_split_in_cwd": updates.terminalSplitInCwd = value === "true"; break;
           case "terminal_line_height": updates.terminalLineHeight = Number(value) || DEFAULTS.terminalLineHeight; break;
           case "terminal_scrollback": updates.terminalScrollback = Number(value) || DEFAULTS.terminalScrollback; break;
           case "terminal_copy_on_select": updates.terminalCopyOnSelect = value === "true"; break;
