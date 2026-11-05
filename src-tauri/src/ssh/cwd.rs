@@ -83,7 +83,10 @@ fn parse(out: &str) -> Vec<ShellInfo> {
             let mut parts = line.splitn(3, ' ');
             let start = parts.next()?.parse().ok()?;
             let pid = parts.next()?.parse().ok()?;
-            let cwd = parts.next().filter(|d| d.starts_with('/')).map(str::to_string);
+            let cwd = parts
+                .next()
+                .filter(|d| d.starts_with('/'))
+                .map(str::to_string);
             Some(ShellInfo { start, pid, cwd })
         })
         .collect();
@@ -151,7 +154,11 @@ pub async fn shell_cwd(
     if exit_code.unwrap_or(0) != 0 {
         return Ok(None);
     }
-    Ok(pick(&parse(&String::from_utf8_lossy(&stdout)), index, panes))
+    Ok(pick(
+        &parse(&String::from_utf8_lossy(&stdout)),
+        index,
+        panes,
+    ))
 }
 
 #[cfg(test)]
@@ -163,7 +170,10 @@ mod tests {
     #[test]
     fn parses_and_sorts_by_start_time() {
         let shells = parse(OUT);
-        assert_eq!(shells.iter().map(|s| s.pid).collect::<Vec<_>>(), [790, 812, 900]);
+        assert_eq!(
+            shells.iter().map(|s| s.pid).collect::<Vec<_>>(),
+            [790, 812, 900]
+        );
         assert_eq!(shells[1].cwd.as_deref(), Some("/app/logs/05f54a66"));
         assert_eq!(shells[2].cwd, None);
     }
