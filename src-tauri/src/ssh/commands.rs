@@ -86,17 +86,31 @@ pub async fn ssh_resize_pty(
 
 /// Open a new PTY channel on an existing SSH connection (for split panes).
 /// Returns a new session ID backed by a new channel on the same connection.
+/// With `in_cwd`, the new shell starts in the source pane's directory (#148).
 #[tauri::command]
 pub async fn ssh_split_session(
     source_session_id: String,
+    in_cwd: Option<bool>,
     state: State<'_, SshManager>,
     app_handle: AppHandle,
 ) -> Result<SessionId, SshError> {
-    let result = state.split_session(&source_session_id, app_handle).await;
+    let result = state
+        .split_session(&source_session_id, in_cwd.unwrap_or(false), app_handle)
+        .await;
     if result.is_ok() {
         crate::telemetry::capture("ssh_split_pane", serde_json::json!({}));
     }
     result
+}
+
+/// Working directory of a terminal pane's shell, for opening the file
+/// explorer there (#149). `None` when the server can't tell us.
+#[tauri::command]
+pub async fn ssh_shell_cwd(
+    session_id: String,
+    state: State<'_, SshManager>,
+) -> Result<Option<String>, SshError> {
+    state.shell_cwd(&session_id).await
 }
 
 /// Scan `~/.ssh/` for private key files and return metadata for each one.

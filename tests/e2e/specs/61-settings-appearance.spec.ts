@@ -2,7 +2,7 @@
 // active-section memory all persist (or behave) as expected.
 
 import { expect } from "chai";
-import { relaunchApp, resetApp } from "../helpers/reset.js";
+import { relaunchApp, resetApp, waitForSavedSetting } from "../helpers/reset.js";
 
 async function openSettings(): Promise<void> {
     const nav = await $("[aria-label='Settings']");
@@ -49,6 +49,7 @@ describe("settings appearance", () => {
             { timeout: 5_000, timeoutMsg: "accent swatch did not become selected" },
         );
 
+        await waitForSavedSetting("app_accent_hue", "70");
         await relaunchApp();
         await openSettings();
 
@@ -66,6 +67,7 @@ describe("settings appearance", () => {
             { timeout: 5_000, timeoutMsg: "interface font was not applied" },
         );
 
+        await waitForSavedSetting("app_interface_font", "system-ui, sans-serif");
         await relaunchApp();
         await openSettings();
 
@@ -82,6 +84,7 @@ describe("settings appearance", () => {
             { timeout: 5_000, timeoutMsg: "terminal font was not applied" },
         );
 
+        await waitForSavedSetting("terminal_font_family", "monospace");
         await relaunchApp();
         await openSettings();
         await openSection("terminal");

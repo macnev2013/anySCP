@@ -33,3 +33,34 @@ export async function resetApp(): Promise<void> {
 export async function relaunchApp(): Promise<void> {
     await browser.reloadSession();
 }
+
+/**
+ * Wait until the backend has `key` saved as `value`. The settings store
+ * saves fire-and-forget, so call this before {@link relaunchApp} — a restart
+ * that beats the write reads back the old value.
+ */
+export async function waitForSavedSetting(key: string, value: string): Promise<void> {
+    let last: string | null = null;
+    try {
+        await browser.waitUntil(
+            async () => {
+                last = await browser.executeAsync(
+                    (k: string, done: (v: string | null) => void) => {
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        (window as any).__TAURI_INTERNALS__
+                            .invoke("load_all_settings")
+                            .then((rows: [string, string][]) =>
+                                done(rows.find(([name]) => name === k)?.[1] ?? null),
+                            )
+                            .catch(() => done(null));
+                    },
+                    key,
+                );
+                return last === value;
+            },
+            { timeout: 10_000 },
+        );
+    } catch {
+        throw new Error(`setting '${key}' was never saved as '${value}' (last: '${last}')`);
+    }
+}

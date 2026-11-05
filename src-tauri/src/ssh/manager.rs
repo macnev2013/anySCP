@@ -391,8 +391,17 @@ impl SshManager {
     pub async fn split_session(
         &self,
         source_session_id: &str,
+        in_cwd: bool,
         app_handle: AppHandle,
     ) -> Result<SessionId, SshError> {
+        // Best effort: if the source shell's directory can't be read, the new
+        // pane opens in the home directory as before.
+        let start_dir = if in_cwd {
+            self.shell_cwd(source_session_id).await.ok().flatten()
+        } else {
+            None
+        };
+
         // Get the shared handle, host config, and the ProxyJump tunnel chain from
         // the source session. The jump handles are shared (Arc) so the tunnel
         // stays open as long as the parent OR any split pane is alive — closing
@@ -420,11 +429,36 @@ impl SshManager {
             24,
             app_handle,
             host_config.default_shell,
+            start_dir,
         )
         .await?;
 
         self.sessions.insert(sid, session);
         Ok(new_id)
+    }
+
+    /// Working directory of a terminal pane's shell on the server, or `None`
+    /// when it can't be determined (non-Linux server, shell gone, …).
+    pub async fn shell_cwd(&self, session_id: &str) -> Result<Option<String>, SshError> {
+        let handle = self
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| SshError::SessionNotFound(session_id.to_string()))?
+            .value()
+            .ssh_handle();
+        // Panes sharing this connection, in the order their shells started.
+        let mut panes: Vec<(std::time::Instant, String)> = self
+            .sessions
+            .iter()
+            .filter(|e| Arc::ptr_eq(&e.value().ssh_handle(), &handle))
+            .map(|e| (e.value().opened_at(), e.key().clone()))
+            .collect();
+        panes.sort();
+        let index = panes
+            .iter()
+            .position(|(_, id)| id == session_id)
+            .ok_or_else(|| SshError::SessionNotFound(session_id.to_string()))?;
+        super::cwd::shell_cwd(handle, index, panes.len()).await
     }
 
     /// Send bytes to a session's PTY channel.

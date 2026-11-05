@@ -1,4 +1,8 @@
-import { Columns2, Rows2, Maximize2, Minimize2, X } from "lucide-react";
+import { useState } from "react";
+import { Columns2, Rows2, Maximize2, Minimize2, X, FolderOpen, Loader2, FolderInput } from "lucide-react";
+import { openExplorerFromTerminal } from "../../lib/open-explorer-from-terminal";
+import { splitTerminalPane } from "../../lib/split-pane";
+import { useSettingsStore } from "../../stores/settings-store";
 import { useSessionStore } from "../../stores/session-store";
 import { useTabStore } from "../../stores/tab-store";
 
@@ -18,6 +22,8 @@ export function PaneHeader({ sessionId, tabId }: PaneHeaderProps) {
     const tab = s.tabs.get(tabId);
     return tab ? tab.layout.type === "split" : false;
   });
+  const [openingExplorer, setOpeningExplorer] = useState(false);
+  const splitInCwd = useSettingsStore((s) => s.terminalSplitInCwd);
 
   if (!session) return null;
 
@@ -29,17 +35,7 @@ export function PaneHeader({ sessionId, tabId }: PaneHeaderProps) {
                                 "bg-status-disconnected";
 
   const handleSplit = (direction: "horizontal" | "vertical") => {
-    void (async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const newId = await invoke<string>("ssh_split_session", {
-          sourceSessionId: sessionId,
-        });
-        useSessionStore.getState().splitPane(direction, sessionId, newId);
-      } catch (err) {
-        console.error("Split failed:", err);
-      }
-    })();
+    void splitTerminalPane(direction, sessionId);
   };
 
   const handleClose = () => {
@@ -63,6 +59,12 @@ export function PaneHeader({ sessionId, tabId }: PaneHeaderProps) {
         useTabStore.getState().removeTab(tabId);
       }
     })();
+  };
+
+  const handleOpenExplorer = () => {
+    if (openingExplorer) return;
+    setOpeningExplorer(true);
+    void openExplorerFromTerminal(sessionId).finally(() => setOpeningExplorer(false));
   };
 
   const handleZoom = () => {
@@ -103,6 +105,40 @@ export function PaneHeader({ sessionId, tabId }: PaneHeaderProps) {
           isActive ? "opacity-60 group-hover/pane:opacity-100" : "opacity-0 group-hover/pane:opacity-100",
         ].join(" ")}
       >
+        {/* Open the file explorer in the shell's current directory (#149) */}
+        {status === "Connected" && (
+          <button type="button" onClick={handleOpenExplorer} className={btnClass}
+            disabled={openingExplorer}
+            data-testid={`pane-open-explorer-${sessionId}`}
+            aria-label="Open file explorer here" title="Open file explorer in this directory">
+            {openingExplorer ? (
+              <Loader2 size={13} strokeWidth={1.8} className="animate-spin" aria-hidden="true" />
+            ) : (
+              <FolderOpen size={13} strokeWidth={1.8} aria-hidden="true" />
+            )}
+          </button>
+        )}
+
+        {/* Where new splits land: this pane's directory or home (#148) */}
+        <button
+          type="button"
+          onClick={() => useSettingsStore.getState().setTerminalSplitInCwd(!splitInCwd)}
+          className={[
+            "inline-flex items-center justify-center w-5 h-5 rounded transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            splitInCwd
+              ? "text-accent hover:text-accent-hover hover:bg-accent/10"
+              : "text-text-muted hover:text-text-primary hover:bg-bg-muted",
+          ].join(" ")}
+          data-testid={`pane-split-cwd-${sessionId}`}
+          aria-pressed={splitInCwd}
+          aria-label="New splits open in this directory"
+          title={splitInCwd
+            ? "New splits open in this pane's directory (click for home directory)"
+            : "New splits open in the home directory (click for this pane's directory)"}
+        >
+          <FolderInput size={13} strokeWidth={1.8} aria-hidden="true" />
+        </button>
+
         {/* Split horizontal */}
         <button type="button" onClick={() => handleSplit("horizontal")} className={btnClass}
           aria-label="Split right" title="Split right (⌘D)">

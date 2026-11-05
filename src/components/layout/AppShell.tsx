@@ -26,6 +26,7 @@ import { TransfersPage } from "../transfers";
 import { usePortForwardEvents } from "../../hooks/use-port-forward-events";
 import { UpdateDialog } from "../updater/UpdateDialog";
 import { Toaster } from "../shared/Toaster";
+import { splitTerminalPane } from "../../lib/split-pane";
 
 export function AppShell() {
   const themeMode = useSettingsStore((s) => s.themeMode);
@@ -185,19 +186,7 @@ export function AppShell() {
         action: () => {
           const { activeSessionId } = useSessionStore.getState();
           if (!activeSessionId) return;
-          void (async () => {
-            try {
-              const { invoke } = await import("@tauri-apps/api/core");
-              const newId = await invoke<string>("ssh_split_session", {
-                sourceSessionId: activeSessionId,
-              });
-              useSessionStore
-                .getState()
-                .splitPane("horizontal", activeSessionId, newId);
-            } catch (err) {
-              console.error("Split failed:", err);
-            }
-          })();
+          void splitTerminalPane("horizontal", activeSessionId);
         },
         when: () =>
           useTabStore
@@ -212,19 +201,7 @@ export function AppShell() {
         action: () => {
           const { activeSessionId } = useSessionStore.getState();
           if (!activeSessionId) return;
-          void (async () => {
-            try {
-              const { invoke } = await import("@tauri-apps/api/core");
-              const newId = await invoke<string>("ssh_split_session", {
-                sourceSessionId: activeSessionId,
-              });
-              useSessionStore
-                .getState()
-                .splitPane("vertical", activeSessionId, newId);
-            } catch (err) {
-              console.error("Split failed:", err);
-            }
-          })();
+          void splitTerminalPane("vertical", activeSessionId);
         },
         when: () =>
           useTabStore
