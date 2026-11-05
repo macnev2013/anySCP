@@ -49,6 +49,7 @@ export function SnippetFolderCard({
         onClick={() => onSelect(folder.id)}
         onContextMenu={handleContextMenu}
         title={folder.name}
+        data-folder-name={folder.name}
         aria-pressed={isSelected}
         className={[
           "group relative flex flex-col gap-2.5 p-3.5 rounded-xl text-left",

@@ -1,7 +1,7 @@
 // Settings persistence: change a setting, restart the app, verify it persists.
 
 import { expect } from "chai";
-import { relaunchApp, resetApp } from "../helpers/reset.js";
+import { relaunchApp, resetApp, waitForSavedSetting } from "../helpers/reset.js";
 
 async function gotoSettings(): Promise<void> {
     const nav = await $("[aria-label='Settings']");
@@ -34,6 +34,7 @@ describe("settings persistence", () => {
             node.dispatchEvent(new Event("change", { bubbles: true }));
         }, "18");
 
+        await waitForSavedSetting("terminal_font_size", "18");
         await relaunchApp();
         await gotoSettings();
 
