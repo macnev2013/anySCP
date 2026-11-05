@@ -34,6 +34,23 @@ describe("settings persistence", () => {
             node.dispatchEvent(new Event("change", { bubbles: true }));
         }, "18");
 
+        // The store saves settings fire-and-forget; relaunching before that
+        // write lands loses it. Wait until the backend has it on disk.
+        await browser.waitUntil(
+            async () =>
+                (await browser.executeAsync((done: (v: string | null) => void) => {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const internals = (window as any).__TAURI_INTERNALS__;
+                    internals
+                        .invoke("load_all_settings")
+                        .then((rows: [string, string][]) =>
+                            done(rows.find(([k]) => k === "terminal_font_size")?.[1] ?? null),
+                        )
+                        .catch(() => done(null));
+                })) === "18",
+            { timeout: 10_000, timeoutMsg: "font size was never saved to the backend" },
+        );
+
         await relaunchApp();
         await gotoSettings();
 
