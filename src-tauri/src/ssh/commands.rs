@@ -99,6 +99,16 @@ pub async fn ssh_split_session(
     result
 }
 
+/// Working directory of a terminal pane's shell, for opening the file
+/// explorer there (#149). `None` when the server can't tell us.
+#[tauri::command]
+pub async fn ssh_shell_cwd(
+    session_id: String,
+    state: State<'_, SshManager>,
+) -> Result<Option<String>, SshError> {
+    state.shell_cwd(&session_id).await
+}
+
 /// Scan `~/.ssh/` for private key files and return metadata for each one.
 #[tauri::command]
 pub async fn list_ssh_keys() -> Result<Vec<SshKeyInfo>, SshError> {

@@ -43,6 +43,9 @@ pub struct SshSession {
     /// the tunnel down. Empty for a direct (non-tunnelled) connection.
     #[allow(dead_code)]
     jump_handles: Arc<Vec<Handle<SshClientHandler>>>,
+    /// When this pane's PTY channel opened. Orders the panes sharing one
+    /// connection so each can be matched to its shell on the server.
+    opened_at: std::time::Instant,
 }
 
 impl SshSession {
@@ -173,6 +176,7 @@ impl SshSession {
             reader_task,
             session_id,
             split_config: SplitConfig { default_shell },
+            opened_at: std::time::Instant::now(),
             jump_handles,
         })
     }
@@ -282,6 +286,7 @@ impl SshSession {
             reader_task,
             session_id,
             split_config: SplitConfig { default_shell },
+            opened_at: std::time::Instant::now(),
             // Share the parent's ProxyJump tunnel chain so it stays alive for as
             // long as this split pane lives, independent of the parent session.
             jump_handles,
@@ -296,6 +301,10 @@ impl SshSession {
 
     /// Return the shared ProxyJump tunnel chain so a split pane can keep the same
     /// tunnel alive for its own lifetime. Empty for a direct connection.
+    pub fn opened_at(&self) -> std::time::Instant {
+        self.opened_at
+    }
+
     pub fn jump_handles(&self) -> Arc<Vec<Handle<SshClientHandler>>> {
         self.jump_handles.clone()
     }
