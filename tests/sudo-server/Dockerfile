@@ -12,3 +12,7 @@ FROM lscr.io/linuxserver/openssh-server:latest
 
 COPY enable-nopasswd-sudo.sh /custom-cont-init.d/enable-nopasswd-sudo.sh
 RUN chmod +x /custom-cont-init.d/enable-nopasswd-sudo.sh
+
+# `zip`, so the explorer's Compress action (#133) is tested producing a .zip
+# here; sshd-pass has no zip and exercises the tar.gz fallback.
+RUN apk add --no-cache zip
