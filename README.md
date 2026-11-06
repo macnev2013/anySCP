@@ -152,7 +152,7 @@ AnySCP is a free, open-source desktop application that combines an SSH terminal,
    - **Linux**: `.deb` or `.AppImage`
 3. Install and launch
 
-> **macOS note**: If you see "app is damaged", run: `xattr -cr /Applications/anyscp.app`
+> **macOS note**: The app and `.dmg` are signed and notarized by Apple. If an older release's `.dmg` is reported as "damaged", run: `xattr -d com.apple.quarantine ~/Downloads/anySCP_*.dmg`
 
 ### Updating
 
@@ -272,7 +272,7 @@ Please open an issue first to discuss what you'd like to change.
 
 ### macOS
 
-- **"App is damaged"**: Run `xattr -cr /Applications/anyscp.app`
+- **"anySCP_….dmg is damaged"** (releases before notarized DMGs): Run `xattr -d com.apple.quarantine ~/Downloads/anySCP_*.dmg`, then open it again
 
 ## 📄 License
 
