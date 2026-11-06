@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod commands;
 pub mod exec;
 pub mod listing;

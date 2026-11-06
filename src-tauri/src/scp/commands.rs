@@ -214,6 +214,26 @@ pub async fn scp_chmod(
     result
 }
 
+/// Compress entries of `dir` into one archive in `dir` (#133).
+#[tauri::command]
+#[instrument(skip(scp_manager, names), fields(scp_session_id = %scp_session_id, dir = %dir, count = names.len()))]
+pub async fn scp_compress(
+    scp_session_id: String,
+    dir: String,
+    names: Vec<String>,
+    scp_manager: State<'_, Arc<ScpManager>>,
+) -> Result<super::archive::ArchiveInfo, ScpError> {
+    let handle = handle_for(&scp_manager, &scp_session_id)?;
+    let info = super::archive::compress(handle, &dir, &names)
+        .await
+        .map_err(ScpError::RemoteError)?;
+    crate::telemetry::capture(
+        "scp_compress",
+        serde_json::json!({ "format": info.format, "count": names.len() }),
+    );
+    Ok(info)
+}
+
 /// Recursively chmod a directory tree via `chmod -R`. Per-file errors are
 /// collected from stderr rather than aborting. The remote `chmod -R` doesn't
 /// report a success count, so `applied` is left at 0 (the frontend treats an

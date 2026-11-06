@@ -25,6 +25,7 @@ import {
   Info,
   Link2,
   AlertTriangle,
+  FileArchive,
 } from "lucide-react";
 import { ModalShell, BTN_GHOST, BTN_DANGER } from "../shared/ModalShell";
 import type {
@@ -61,6 +62,8 @@ interface ExplorerFileTableProps {
   /** Download a multi-entry selection at once (into a chosen folder). Absent
    *  for providers without a batch-download path. */
   onDownloadMany?: (entries: ExplorerEntry[]) => void;
+  /** Pack entries into one archive on the server (#133). SFTP/SCP only. */
+  onCompress?: (entries: ExplorerEntry[]) => void;
   onDelete: (entries: ExplorerEntry[]) => Promise<void>;
   onRename?: (entry: ExplorerEntry, newName: string) => Promise<void>;
   onEditInEditor?: (entry: ExplorerEntry, editor?: EditorConfig) => void;
@@ -344,6 +347,7 @@ export function ExplorerFileTable({
   onNavigate,
   onDownload,
   onDownloadMany,
+  onCompress,
   onDelete,
   onRename,
   onEditInEditor,
@@ -812,6 +816,13 @@ export function ExplorerFileTable({
           onClick: () => onDownloadMany(selectedEntries),
         });
       }
+      if (onCompress) {
+        items.push({
+          label: `Compress ${count} items`,
+          icon: FileArchive,
+          onClick: () => onCompress(selectedEntries),
+        });
+      }
       if (caps.canCopyPaste) {
         items.push({
           label: `Copy ${count} items`,
@@ -896,6 +907,14 @@ export function ExplorerFileTable({
           onClick: () => onDownload(entry),
         });
       }
+    }
+
+    if (onCompress) {
+      items.push({
+        label: "Compress",
+        icon: FileArchive,
+        onClick: () => onCompress([entry]),
+      });
     }
 
     if (caps.canPresignUrl && entry.entryType === "File") {

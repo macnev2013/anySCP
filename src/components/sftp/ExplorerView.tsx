@@ -12,6 +12,7 @@ import { explorerInvoke, transferEventName, type Transport } from "../../lib/exp
 import { openInEditorWithProgress } from "../../lib/open-in-editor";
 import { conflictingNames } from "../../lib/drop-conflicts";
 import { toast } from "../../stores/toast-store";
+import { compressEntries } from "../../lib/compress-entries";
 import type { EditorConfig } from "../../stores/settings-store";
 
 interface ExplorerViewProps {
@@ -635,6 +636,14 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
     return result;
   }, [sessionId, transport, session, loadDirectory]);
 
+  // ─── Compress (#133) ───────────────────────────────────────────────────────
+
+  const handleCompress = useCallback(async (entries: ExplorerEntry[]) => {
+    const dir = session?.currentPath;
+    if (dir === undefined) return;
+    await compressEntries(transport, sessionId, dir, entries, () => loadDirectory(dir));
+  }, [sessionId, transport, session, loadDirectory]);
+
   // ─── Edit in external editor ───────────────────────────────────────────────
 
   const handleEditInEditor = useCallback((entry: ExplorerEntry, editor?: EditorConfig) => {
@@ -802,6 +811,7 @@ export function ExplorerView({ sessionId, transport = "sftp", isActive = true }:
         onNavigate={(path) => void loadDirectory(path)}
         onDownload={(entry) => void handleDownload(entry)}
         onDownloadMany={(entries) => void handleDownloadMany(entries)}
+        onCompress={(entries) => void handleCompress(entries)}
         onDelete={handleDelete}
         onRename={handleRename}
         onEditInEditor={handleEditInEditor}

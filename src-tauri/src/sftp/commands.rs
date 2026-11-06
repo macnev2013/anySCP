@@ -485,6 +485,35 @@ pub async fn sftp_chmod(
     }
 }
 
+/// Compress entries of `dir` into one archive in `dir` (#133). SFTP has no
+/// way to run commands, so this uses an exec channel on the SFTP session's
+/// SSH connection.
+#[tauri::command]
+#[instrument(skip(sftp_manager, ssh_manager, names), fields(sftp_session_id = %sftp_session_id, dir = %dir, count = names.len()))]
+pub async fn sftp_compress(
+    sftp_session_id: String,
+    dir: String,
+    names: Vec<String>,
+    sftp_manager: State<'_, Arc<SftpManager>>,
+    ssh_manager: State<'_, SshManager>,
+) -> Result<crate::scp::archive::ArchiveInfo, SftpError> {
+    let ssh_session_id = sftp_manager
+        .get_session(&sftp_session_id)?
+        .ssh_session_id
+        .clone();
+    let handle = ssh_manager
+        .get_handle(&ssh_session_id)
+        .map_err(|e| SftpError::SshSessionNotFound(e.to_string()))?;
+    let info = crate::scp::archive::compress(handle, &dir, &names)
+        .await
+        .map_err(SftpError::RemoteIoError)?;
+    crate::telemetry::capture(
+        "sftp_compress",
+        serde_json::json!({ "format": info.format, "count": names.len() }),
+    );
+    Ok(info)
+}
+
 /// Build the `setstat` attributes for a chmod: ONLY the permission bits are
 /// set, every other field stays `None`.
 ///
